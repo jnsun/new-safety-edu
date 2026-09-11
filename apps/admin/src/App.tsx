@@ -24,9 +24,9 @@ const menuItems: NonNullable<MenuProps["items"]> = [
 ].map(([key, label, icon]) => ({ key: key as string, label, icon }));
 
 function Login() {
-  const navigate = useNavigate(); const [busy, setBusy] = useState(false);
+  const navigate = useNavigate(); const qc = useQueryClient(); const [busy, setBusy] = useState(false);
   async function submit(values: { username: string; password: string }) {
-    setBusy(true); try { await api("/api/auth/login", json("POST", values)); navigate("/"); } catch (error) { message.error((error as Error).message); } finally { setBusy(false); }
+    setBusy(true); try { await api("/api/auth/login", json("POST", values)); qc.setQueryData(["me"], await api<Principal>("/api/auth/me")); navigate("/"); } catch (error) { message.error((error as Error).message); } finally { setBusy(false); }
   }
   return <div className="login-shell"><Card className="login-card"><Typography.Title level={2}>安全培训教育平台</Typography.Title><Typography.Paragraph type="secondary">物化院有限公司 · 管理后台</Typography.Paragraph>
     <Form layout="vertical" onFinish={submit}><Form.Item label="用户名" name="username" rules={[{ required: true }]}><Input autoComplete="username" /></Form.Item>
