@@ -1,4 +1,4 @@
-# 物化院有限公司安全培训教育平台 V0.1
+# 安全培训教育平台 V0.1
 
 全新单仓库 MVP：Fastify API、React 管理后台、PostgreSQL/Prisma 与原生微信小程序。客户端只通过 API 访问业务数据。
 
