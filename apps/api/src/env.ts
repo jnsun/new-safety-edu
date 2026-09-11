@@ -13,7 +13,9 @@ const schema = z.object({
   WECHAT_APP_ID: z.string().optional(),
   WECHAT_APP_SECRET: z.string().optional(),
   WECHAT_SUBSCRIBE_TEMPLATE_TASK: z.string().optional(),
-  WECHAT_SUBSCRIBE_TEMPLATE_DUE: z.string().optional()
+  WECHAT_SUBSCRIBE_TEMPLATE_DUE: z.string().optional(),
+  WECHAT_SUBSCRIBE_FIELD_TITLE: z.string().default("thing1"),
+  WECHAT_SUBSCRIBE_FIELD_BODY: z.string().default("thing2")
 });
 
 export type Env = z.infer<typeof schema>;

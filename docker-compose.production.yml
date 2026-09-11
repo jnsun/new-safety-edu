@@ -25,11 +25,11 @@ services:
     build:
       context: ./app
       target: api
-    image: safety-training-api:day2
+    image: safety-training-api:v0.1.0
     restart: unless-stopped
     env_file: .env.production
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3000
       UPLOAD_ROOT: /app/var/uploads
     volumes:
@@ -48,10 +48,14 @@ services:
     build:
       context: ./app
       target: web
-    image: safety-training-web:day2
+    image: safety-training-web:v0.1.0
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.production.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       api:
         condition: service_healthy

@@ -81,6 +81,13 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     return reply.code(204).send();
   });
 
+  app.post("/api/auth/change-password", authenticated, async (request, reply) => {
+    const principal = principalOf(request); const input = z.object({ currentPassword: z.string().min(8).max(200), newPassword: z.string().min(12).max(200) }).refine((value) => value.currentPassword !== value.newPassword, { message: "新密码不能与当前密码相同", path: ["newPassword"] }).parse(request.body);
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: principal.accountId } }); if (!account.passwordHash || !await argon2.verify(account.passwordHash, input.currentPassword)) throw Object.assign(new Error("当前密码错误"), { statusCode: 401, code: "INVALID_CURRENT_PASSWORD" });
+    await prisma.$transaction([prisma.account.update({ where: { id: principal.accountId }, data: { passwordHash: await argon2.hash(input.newPassword), sessionVersion: { increment: 1 } } }), prisma.refreshSession.updateMany({ where: { accountId: principal.accountId, revokedAt: null }, data: { revokedAt: new Date() } })]);
+    await auditCritical(principal.accountId, "account.password_change", "account", principal.accountId, undefined, "var/audit-fallback.ndjson"); reply.clearCookie("safety_session", { path: "/" }); return reply.code(204).send();
+  });
+
   app.get("/api/auth/me", authenticated, async (request) => ({ data: principalOf(request) }));
   app.post("/api/auth/refresh", async (request) => ({ data: await rotateRefreshToken(z.object({ refreshToken: z.string().min(20) }).parse(request.body).refreshToken, deps.env) }));
 

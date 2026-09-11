@@ -15,7 +15,8 @@ export type Principal = {
 const unauthorized = () => Object.assign(new Error("未登录或会话已失效"), { statusCode: 401, code: "UNAUTHORIZED" });
 
 export async function issueAccessToken(accountId: string, env: Env): Promise<string> {
-  return new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setSubject(accountId).setIssuedAt().setExpirationTime("15m")
+  const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { sessionVersion: true } });
+  return new SignJWT({ ver: account.sessionVersion }).setProtectedHeader({ alg: "HS256" }).setSubject(accountId).setIssuedAt().setExpirationTime("15m")
     .sign(new TextEncoder().encode(env.JWT_SECRET));
 }
 
@@ -32,11 +33,11 @@ export function authHandlers(env: Env) {
       const bearer = request.headers.authorization?.startsWith("Bearer ") ? request.headers.authorization.slice(7) : undefined;
       const token = bearer ?? request.cookies.safety_session;
       if (!token) throw unauthorized();
-      let accountId: string;
+      let accountId: string; let sessionVersion = -1;
       try {
         const result = await jwtVerify(token, new TextEncoder().encode(env.JWT_SECRET));
         if (!result.payload.sub) throw unauthorized();
-        accountId = result.payload.sub;
+        accountId = result.payload.sub; sessionVersion = typeof result.payload.ver === "number" ? result.payload.ver : -1;
       } catch {
         throw unauthorized();
       }
@@ -44,7 +45,7 @@ export function authHandlers(env: Env) {
         where: { id: accountId },
         include: { roles: { where: { active: true }, select: { role: true, scopeType: true, scopeId: true } } }
       });
-      if (!account || account.status !== "active") throw unauthorized();
+      if (!account || account.status !== "active" || account.sessionVersion !== sessionVersion) throw unauthorized();
       request.principal = { accountId: account.id, personId: account.personId, roles: account.roles };
     },
     async requireManager(request: FastifyRequest, _reply: FastifyReply) {

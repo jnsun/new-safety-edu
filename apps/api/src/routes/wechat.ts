@@ -55,6 +55,20 @@ async function bindPerson(currentAccountId: string, personId: string) {
 }
 
 export async function registerWechatRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard; requireManager: Guard }) {
+  app.get("/api/wechat/subscription-config", { preHandler: deps.authenticate }, async () => ({ data: {
+    templateIds: [...new Set([deps.env.WECHAT_SUBSCRIBE_TEMPLATE_TASK, deps.env.WECHAT_SUBSCRIBE_TEMPLATE_DUE].filter((value): value is string => Boolean(value)))]
+  } }));
+
+  app.post("/api/wechat/subscription-consent", { preHandler: deps.authenticate }, async (request) => {
+    const statuses = z.record(z.string().min(1).max(100), z.enum(["accept", "reject", "ban"])).parse(z.object({ statuses: z.unknown() }).parse(request.body).statuses);
+    await prisma.userPreference.upsert({
+      where: { accountId_key: { accountId: request.principal!.accountId, key: "wechat.subscriptionConsent" } },
+      create: { accountId: request.principal!.accountId, key: "wechat.subscriptionConsent", value: statuses },
+      update: { value: statuses }
+    });
+    return { data: { saved: true } };
+  });
+
   app.post("/api/wechat/login", async (request) => {
     const code = z.object({ code: z.string().min(1).max(200) }).parse(request.body).code;
     const wx = await wechatSession(code, deps.env);

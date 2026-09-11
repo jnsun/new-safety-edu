@@ -37,6 +37,8 @@ async function main() {
   console.log("DAY4_SMOKE_RECORDS");
   for (const type of ["ledger", "cards", "attendance", "scores", "annual"]) await call(`/api/reports/${type}`, { headers: auth(companyCookie) }); const csvResponse = await fetch(`${base}/api/reports/attendance?format=csv`, { headers: { cookie: companyCookie }, signal: AbortSignal.timeout(10_000) }); assert.equal(csvResponse.status, 200); assert.match(csvResponse.headers.get("content-type") ?? "", /text\/csv/);
   const wx = await call("/api/wechat/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: "dev:day4-smoke" }) }); const bearer = { authorization: `Bearer ${wx.accessToken}`, "content-type": "application/json" }; await call("/api/management/overview", { headers: bearer }, 403); await call(`/api/me/records/${outside.id}`, { headers: bearer }, 404);
+  assert.deepEqual((await call("/api/wechat/subscription-config", { headers: bearer })).templateIds, []); await call("/api/wechat/subscription-consent", { method: "POST", headers: bearer, body: JSON.stringify({ statuses: { "template-test": "reject" } }) });
+  const changedPassword = randomBytes(24).toString("base64url"); const changed = await fetch(`${base}/api/auth/change-password`, { method: "POST", headers: auth(companyCookie), body: JSON.stringify({ currentPassword: password, newPassword: changedPassword }) }); assert.equal(changed.status, 204); await call("/api/auth/me", { headers: auth(companyCookie) }, 401); assert.ok(await login(company.username!, changedPassword));
   assert.ok(await prisma.auditLog.findFirst({ where: { action: "assignment.unlock", objectId: locked.id } })); console.log("DAY4_SMOKE_OK");
 }
 main().finally(() => prisma.$disconnect());

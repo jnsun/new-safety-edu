@@ -149,6 +149,7 @@ model Account {
   username        String?          @unique @db.VarChar(80)
   passwordHash    String?          @map("password_hash")
   status          AccountStatus    @default(active)
+  sessionVersion  Int              @default(0) @map("session_version")
   personId        String?          @unique @map("person_id") @db.Uuid
   person          Person?          @relation(fields: [personId], references: [id])
   roles           RoleAssignment[]

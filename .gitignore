@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .env
+.env.production
+.initial-admin
+*.dump
+*.pem
 *.log
 *.tsbuildinfo
 .DS_Store
