@@ -1,0 +1,5 @@
+.exam-head { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; padding: 24rpx 28rpx; color: #fff; background: #0b5cad; }
+.timer { font-weight: 700; }
+.question { margin-top: 20rpx; }
+.option { display: block; padding: 22rpx 0; border-bottom: 2rpx solid #f0f2f5; }
+.submit { margin-bottom: 50rpx; }

@@ -14,11 +14,12 @@ type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 export async function registerFileRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard; requireManager: Guard }) {
   app.post("/api/files", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!;
-    const kind = z.object({ kind: z.enum(["photo", "courseware", "attachment"]) }).parse(request.query).kind;
-    if (kind !== "photo" && !principal.roles.some(({ role }) => role !== "learner")) forbidden("无权上传该类型文件");
+    const kind = z.object({ kind: z.enum(["photo", "signature", "courseware", "attachment"]) }).parse(request.query).kind;
+    if (!["photo", "signature"].includes(kind) && !principal.roles.some(({ role }) => role !== "learner")) forbidden("无权上传该类型文件");
     const part = await request.file({ limits: { fileSize: kind === "courseware" ? 15 * 1024 * 1024 : 10 * 1024 * 1024, files: 1 } });
     if (!part) throw Object.assign(new Error("请选择文件"), { statusCode: 400, code: "FILE_REQUIRED" });
     if (kind === "photo" && !["image/jpeg", "image/png"].includes(part.mimetype)) throw Object.assign(new Error("照片只支持 JPEG/PNG"), { statusCode: 400, code: "INVALID_MIME" });
+    if (kind === "signature" && part.mimetype !== "image/png") throw Object.assign(new Error("签字只支持 PNG"), { statusCode: 400, code: "INVALID_MIME" });
     if (kind === "courseware" && part.mimetype !== "text/html") throw Object.assign(new Error("HTML 课件只支持单个 .html 文件"), { statusCode: 400, code: "INVALID_MIME" });
     const buffer = await part.toBuffer();
     const key = `${new Date().getUTCFullYear()}/${randomUUID()}`;

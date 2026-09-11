@@ -1,14 +1,19 @@
 const api = require('./utils/api')
 
+function loginCode() {
+  if (wx.getAccountInfoSync().miniProgram.envVersion === 'develop') return Promise.resolve('dev:miniprogram-preview')
+  return wx.login().then(({ code }) => code)
+}
+
 App({
-  globalData: { session: null },
-  async onLaunch() {
+  globalData: { session: null, ready: null },
+  onLaunch() { this.globalData.ready = this.bootstrap() },
+  async bootstrap() {
     try {
-      const { code } = await wx.login()
+      const code = await loginCode()
       const data = await api.publicRequest('/api/wechat/login', 'POST', { code })
       this.globalData.session = data
-      wx.setStorageSync('accessToken', data.accessToken)
-      wx.setStorageSync('refreshToken', data.refreshToken)
+      api.saveSession(data)
       if (data.bindingStatus !== 'bound') wx.reLaunch({ url: '/pages/bind/index' })
     } catch (_) {
       wx.reLaunch({ url: '/pages/login/index' })

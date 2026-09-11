@@ -1,4 +1,4 @@
-const versions = { develop: 'http://localhost:3000', trial: '', release: '' }
+const versions = { develop: 'http://140.143.247.55', trial: '', release: '' }
 
 function getApiBaseUrl() {
   const version = wx.getAccountInfoSync().miniProgram.envVersion || 'develop'

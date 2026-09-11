@@ -1,0 +1,4 @@
+.course { display: flex; justify-content: space-between; align-items: center; gap: 20rpx; padding: 24rpx 0; border-bottom: 2rpx solid #f0f2f5; }
+.course:last-child { border-bottom: 0; }
+.small { display: block; font-size: 24rpx; margin-top: 8rpx; }
+.locked { margin-top: 24rpx; padding: 24rpx; border-radius: 14rpx; color: #b42318; background: #fef3f2; }

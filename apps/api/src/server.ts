@@ -41,7 +41,7 @@ const guards = authHandlers(env);
 await registerDay1Routes(app, { env, ...guards });
 await registerFileRoutes(app, { env, ...guards });
 await registerWechatRoutes(app, { env, ...guards });
-await registerDay2Routes(app, guards);
+await registerDay2Routes(app, { env, ...guards });
 
 app.get("/api/health", async () => {
   await prisma.$queryRaw`SELECT 1`;

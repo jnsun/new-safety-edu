@@ -10,3 +10,12 @@ page { background: #f4f6f8; color: #172b4d; font-size: 30rpx; }
 .field { background: #fff; border: 2rpx solid #d0d5dd; padding: 20rpx; border-radius: 14rpx; margin: 12rpx 0 20rpx; }
 .label { color: #344054; font-weight: 600; }
 .empty { padding: 80rpx 24rpx; text-align: center; color: #667085; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 20rpx; margin: 14rpx 0; }
+.status { display: inline-block; padding: 6rpx 16rpx; border-radius: 999rpx; color: #0b5cad; background: #e8f2ff; font-size: 24rpx; }
+.progress { height: 14rpx; overflow: hidden; border-radius: 999rpx; background: #e4e7ec; margin: 18rpx 0; }
+.progress-bar { height: 100%; background: #12a150; }
+.error { display: block; color: #d92d20; margin-top: 18rpx; }
+.success { color: #07883f; }
+.warning { color: #b54708; }
+.divider { height: 2rpx; background: #eaecf0; margin: 22rpx 0; }
+.dev-label { display: block; margin-top: 32rpx; }
