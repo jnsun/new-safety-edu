@@ -1,0 +1,1 @@
+<view class="page"><view class="hero"><text class="hero-title">安全培训教育平台</text><text>使用微信身份登录后完成培训任务</text></view><view class="card"><text class="title">登录</text><text class="muted">首次进入需要绑定已登记人员档案；未匹配时由管理员审核。</text><button class="primary" loading="{{busy}}" bindtap="login">微信登录</button><text wx:if="{{error}}" class="error">{{error}}</text></view></view>

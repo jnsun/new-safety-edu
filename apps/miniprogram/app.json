@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "pages/todo/index", "pages/records/index", "pages/messages/index", "pages/profile/index",
+    "pages/login/index", "pages/bind/index", "pages/pending/index", "pages/register/index"
+  ],
+  "window": { "navigationBarTitleText": "安全培训", "navigationBarBackgroundColor": "#0b5cad", "navigationBarTextStyle": "white", "backgroundColor": "#f4f6f8" },
+  "tabBar": {
+    "color": "#667085", "selectedColor": "#0b5cad", "backgroundColor": "#ffffff",
+    "list": [
+      { "pagePath": "pages/todo/index", "text": "待办" }, { "pagePath": "pages/records/index", "text": "我的记录" },
+      { "pagePath": "pages/messages/index", "text": "消息" }, { "pagePath": "pages/profile/index", "text": "我的" }
+    ]
+  },
+  "style": "v2", "sitemapLocation": "sitemap.json"
+}

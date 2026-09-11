@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: safety_education
+      POSTGRES_USER: safety
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-development-only-change-me}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safety -d safety_education"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    env_file: .env
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - uploads-data:/app/var/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["full"]
+
+volumes:
+  postgres-data:
+  uploads-data:

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+*.tsbuildinfo
+.DS_Store
+var/uploads/*
+!var/uploads/.gitkeep
+var/audit-fallback.ndjson
+apps/miniprogram/private.config.json
+.artifact-work/

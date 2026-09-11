@@ -1,0 +1,1 @@
+<view class="page"><view class="card"><text class="title">我的</text><text class="muted">账号绑定、资料变更和项目管理入口</text><button class="secondary" bindtap="changeRequest">资料/绑定变更申请</button></view></view>

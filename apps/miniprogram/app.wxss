@@ -1,0 +1,12 @@
+page { background: #f4f6f8; color: #172b4d; font-size: 30rpx; }
+.page { padding: 28rpx; }
+.hero { padding: 36rpx; color: #fff; background: linear-gradient(135deg, #0b5cad, #1383d4); border-radius: 24rpx; margin-bottom: 24rpx; }
+.hero-title { display: block; font-size: 42rpx; font-weight: 700; margin-bottom: 12rpx; }
+.card { background: #fff; border-radius: 20rpx; padding: 28rpx; margin-bottom: 20rpx; box-shadow: 0 6rpx 24rpx rgba(11, 59, 112, .06); }
+.title { display: block; font-size: 34rpx; font-weight: 700; margin-bottom: 12rpx; }
+.muted { color: #667085; }
+.primary { background: #0b5cad !important; color: #fff !important; border-radius: 16rpx; margin-top: 24rpx; }
+.secondary { background: #fff !important; color: #0b5cad !important; border: 2rpx solid #0b5cad; border-radius: 16rpx; margin-top: 18rpx; }
+.field { background: #fff; border: 2rpx solid #d0d5dd; padding: 20rpx; border-radius: 14rpx; margin: 12rpx 0 20rpx; }
+.label { color: #344054; font-weight: 600; }
+.empty { padding: 80rpx 24rpx; text-align: center; color: #667085; }

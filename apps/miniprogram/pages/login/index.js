@@ -1,0 +1,2 @@
+const api = require('../../utils/api')
+Page({ data: { busy: false, error: '' }, async login() { this.setData({ busy: true, error: '' }); try { const { code } = await wx.login(); const data = await api.publicRequest('/api/wechat/login', 'POST', { code }); wx.setStorageSync('accessToken', data.accessToken); wx.setStorageSync('refreshToken', data.refreshToken); wx.reLaunch({ url: data.bindingStatus === 'bound' ? '/pages/todo/index' : '/pages/bind/index' }); } catch (error) { this.setData({ error: error.message }); } finally { this.setData({ busy: false }); } } })

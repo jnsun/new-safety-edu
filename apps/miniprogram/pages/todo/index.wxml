@@ -1,0 +1,1 @@
+<view class="page"><view class="hero"><text class="hero-title">我必须完成的任务</text><text>培训事实与下一步动作会集中显示在这里</text></view><view wx:if="{{!tasks.length}}" class="card empty">当前没有待完成任务</view></view>

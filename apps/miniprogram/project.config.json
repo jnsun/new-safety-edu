@@ -1,0 +1,8 @@
+{
+  "description": "物化院有限公司安全培训教育平台 V0.1",
+  "miniprogramRoot": "./",
+  "compileType": "miniprogram",
+  "appid": "touristappid",
+  "projectname": "wuhuayuan-safety-education",
+  "setting": { "es6": true, "enhance": true, "postcss": true, "minified": true, "urlCheck": true }
+}
