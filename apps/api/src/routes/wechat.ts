@@ -5,7 +5,7 @@ import { prisma } from "../db.js";
 import { encryptNationalId, normalizePhone } from "../crypto.js";
 import { issueSession } from "../auth.js";
 import { audit } from "../audit.js";
-import { canAccessPerson, canAccessProject, forbidden } from "../access.js";
+import { accessibleOrganizationIds, canAccessOrganization, canAccessPerson, canAccessProject, forbidden, isCompanyAdmin, projectScopeIds } from "../access.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -64,6 +64,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       create: { appId, openid: wx.openid, unionid: wx.unionid ?? null, account: { create: { status: "active" } } },
       update: { ...(wx.unionid ? { unionid: wx.unionid } : {}) }, include: { account: true }
     });
+    if (!binding.active) throw Object.assign(new Error("原微信绑定已撤销，请使用新微信重新绑定"), { statusCode: 403, code: "WECHAT_BINDING_REVOKED" });
     const session = await issueSession(binding.accountId, deps.env);
     return { data: { ...session, bindingStatus: binding.account.personId ? "bound" : "unbound" } };
   });
@@ -103,9 +104,9 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
   });
 
   app.get("/api/binding-requests", { preHandler: [deps.authenticate, deps.requireManager] }, async (request) => {
-    const projectIds = request.principal!.roles.filter((r) => r.role === "project_admin" && r.scopeId).map((r) => r.scopeId!);
-    const companyOrOrg = request.principal!.roles.some((r) => r.role === "company_admin" || r.role === "org_admin");
-    const rows = await prisma.changeRequest.findMany({ where: { status: "pending", type: { in: ["binding", "registration"] }, ...(companyOrOrg ? {} : { projectId: { in: projectIds } }) }, orderBy: { createdAt: "asc" } });
+    const principal = request.principal!; const orgIds = new Set(await accessibleOrganizationIds(principal)); const projectIds = new Set(projectScopeIds(principal));
+    const candidates = await prisma.changeRequest.findMany({ where: { status: "pending", type: { in: ["binding", "registration"] } }, orderBy: { createdAt: "asc" } });
+    const rows = isCompanyAdmin(principal) ? candidates : candidates.filter((row) => (row.projectId && projectIds.has(row.projectId)) || (row.type === "registration" && orgIds.has(String((row.payload as Record<string, unknown>).organizationId ?? ""))));
     return { data: rows.map(({ payload, ...row }) => {
       const value = payload as Record<string, unknown>;
       const phone = typeof value.phone === "string" ? `${value.phone.slice(0, 3)}****${value.phone.slice(-4)}` : undefined;
@@ -115,7 +116,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
 
   app.post("/api/binding-requests/:id/approve", { preHandler: [deps.authenticate, deps.requireManager] }, async (request) => {
     const id = z.object({ id: z.string().uuid() }).parse(request.params).id;
-    const personId = z.object({ personId: z.string().uuid().optional() }).parse(request.body).personId;
+    const input = z.object({ personId: z.string().uuid().optional(), note: z.string().trim().max(500).optional() }).parse(request.body); const personId = input.personId;
     const change = await prisma.changeRequest.findUniqueOrThrow({ where: { id } });
     if (change.projectId && !await canAccessProject(request.principal!, change.projectId)) forbidden();
     if (!change.accountId || change.status !== "pending") throw Object.assign(new Error("申请状态不可审批"), { statusCode: 409, code: "REQUEST_NOT_PENDING" });
@@ -128,6 +129,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
         organizationId: z.string().uuid(), photoFileId: z.string().uuid(), nationalIdCipher: z.string().min(1), nationalIdIv: z.string().min(1),
         nationalIdTag: z.string().min(1), nationalIdHash: z.string().length(64), nationalIdLast4: z.string().length(4)
       }).parse(change.payload);
+      if (!await canAccessOrganization(request.principal!, payload.organizationId)) forbidden();
       const [duplicate, organization, photo, project] = await Promise.all([
         prisma.person.findFirst({ where: { phone: payload.phone, status: "active" }, select: { id: true } }),
         prisma.organization.findUnique({ where: { id: payload.organizationId }, select: { type: true } }),
@@ -149,14 +151,14 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
         await tx.account.update({ where: { id: change.accountId! }, data: { personId: person.id, status: "active" } });
         await tx.wechatBinding.updateMany({ where: { accountId: change.accountId!, active: true }, data: { boundAt: new Date() } });
         await tx.roleAssignment.create({ data: { accountId: change.accountId!, role: "learner", scopeType: "person", scopeId: person.id } });
-        await tx.changeRequest.update({ where: { id }, data: { personId: person.id, status: "approved", reviewedBy: request.principal!.accountId, reviewedAt: new Date() } });
+        await tx.changeRequest.update({ where: { id }, data: { personId: person.id, status: "approved", reviewedBy: request.principal!.accountId, reviewedAt: new Date(), reviewNote: input.note ?? null } });
         return { accountId: change.accountId!, personId: person.id };
       });
       targetId = result.accountId; approvedPersonId = result.personId;
     } else {
       if (!personId || !await canAccessPerson(request.principal!, personId)) forbidden();
       targetId = await bindPerson(change.accountId, personId); approvedPersonId = personId;
-      await prisma.changeRequest.update({ where: { id }, data: { personId, status: "approved", reviewedBy: request.principal!.accountId, reviewedAt: new Date() } });
+      await prisma.changeRequest.update({ where: { id }, data: { personId, status: "approved", reviewedBy: request.principal!.accountId, reviewedAt: new Date(), reviewNote: input.note ?? null } });
     }
     audit(request.principal!.accountId, "binding.approve", "change_request", id, { targetAccountId: targetId, personId: approvedPersonId });
     return { data: { status: "approved" } };

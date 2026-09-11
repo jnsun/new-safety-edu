@@ -14,6 +14,7 @@ import { registerDay1Routes } from "./routes/day1.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerWechatRoutes } from "./routes/wechat.js";
 import { registerDay2Routes } from "./routes/day2.js";
+import { generateScheduledReminders, registerDay4Routes } from "./routes/day4.js";
 
 const env = loadEnv();
 const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.code", "body.refreshToken", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
@@ -42,6 +43,7 @@ await registerDay1Routes(app, { env, ...guards });
 await registerFileRoutes(app, { env, ...guards });
 await registerWechatRoutes(app, { env, ...guards });
 await registerDay2Routes(app, { env, ...guards });
+await registerDay4Routes(app, { env, ...guards });
 
 app.get("/api/health", async () => {
   await prisma.$queryRaw`SELECT 1`;
@@ -59,5 +61,9 @@ if (existsSync(adminDist)) {
 const shutdown = async () => { await app.close(); await prisma.$disconnect(); };
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
+
+const reminderTimer = setInterval(() => void generateScheduledReminders(env).catch((error) => app.log.error({ err: error }, "reminder_generation_failed")), 6 * 60 * 60 * 1000);
+reminderTimer.unref();
+void generateScheduledReminders(env).catch((error) => app.log.error({ err: error }, "reminder_generation_failed"));
 
 await app.listen({ port: env.PORT, host: "0.0.0.0" });

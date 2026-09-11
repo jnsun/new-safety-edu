@@ -2,7 +2,8 @@
   "pages": [
     "pages/todo/index", "pages/records/index", "pages/messages/index", "pages/profile/index",
     "pages/login/index", "pages/bind/index", "pages/pending/index", "pages/register/index",
-    "pages/task/index", "pages/courseware/index", "pages/html/index", "pages/exam/index", "pages/signature/index", "pages/record-detail/index"
+    "pages/task/index", "pages/courseware/index", "pages/html/index", "pages/exam/index", "pages/signature/index", "pages/record-detail/index",
+    "pages/management/index", "pages/change-request/index"
   ],
   "window": { "navigationBarTitleText": "安全培训", "navigationBarBackgroundColor": "#0b5cad", "navigationBarTextStyle": "white", "backgroundColor": "#f4f6f8" },
   "tabBar": {

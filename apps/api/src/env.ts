@@ -11,7 +11,9 @@ const schema = z.object({
   UPLOAD_ROOT: z.string().default("var/uploads"),
   UPLOAD_SIGNING_SECRET: z.string().min(32),
   WECHAT_APP_ID: z.string().optional(),
-  WECHAT_APP_SECRET: z.string().optional()
+  WECHAT_APP_SECRET: z.string().optional(),
+  WECHAT_SUBSCRIBE_TEMPLATE_TASK: z.string().optional(),
+  WECHAT_SUBSCRIBE_TEMPLATE_DUE: z.string().optional()
 });
 
 export type Env = z.infer<typeof schema>;

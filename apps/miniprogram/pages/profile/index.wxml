@@ -1,1 +1,1 @@
-<view class="page"><view class="card"><text class="title">我的</text><text class="muted">账号绑定、资料变更和项目管理入口</text><button class="secondary" bindtap="changeRequest">资料/绑定变更申请</button></view></view>
+<view class="page"><view class="card"><text class="title">我的</text><text class="muted">账号绑定、资料变更和培训管理入口</text><button wx:if="{{canManage}}" class="primary" bindtap="manage">培训管理</button><button class="secondary" bindtap="changeRequest">资料/绑定变更申请</button></view></view>

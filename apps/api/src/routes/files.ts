@@ -35,10 +35,11 @@ export async function registerFileRoutes(app: FastifyInstance, deps: { env: Env;
   app.get("/api/files/:id", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!;
     const id = z.object({ id: z.string().uuid() }).parse(request.params).id;
-    const file = await prisma.privateFile.findUnique({ where: { id }, include: { personPhotos: { select: { id: true } } } });
+    const file = await prisma.privateFile.findUnique({ where: { id }, include: { personPhotos: { select: { id: true } }, signatures: { select: { personId: true } } } });
     if (!file) throw Object.assign(new Error("文件不存在"), { statusCode: 404, code: "NOT_FOUND" });
     const photoAllowed = (await Promise.all(file.personPhotos.map((person) => canAccessPerson(principal, person.id)))).some(Boolean);
-    if (file.uploadedBy !== principal.accountId && !isCompanyAdmin(principal) && !photoAllowed) forbidden("无权读取该私有文件");
+    const signatureAllowed = (await Promise.all(file.signatures.map((signature) => canAccessPerson(principal, signature.personId)))).some(Boolean);
+    if (file.uploadedBy !== principal.accountId && !isCompanyAdmin(principal) && !photoAllowed && !signatureAllowed) forbidden("无权读取该私有文件");
     const content = await readFile(resolve(deps.env.UPLOAD_ROOT, file.storageKey));
     reply.header("Content-Type", file.mimeType).header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff")
       .header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(file.originalName)}`);

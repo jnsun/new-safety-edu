@@ -137,6 +137,13 @@ enum ChangeRequestStatus {
   rejected
 }
 
+enum OutboxStatus {
+  pending
+  sent
+  skipped
+  failed
+}
+
 model Account {
   id              String           @id @default(uuid()) @db.Uuid
   username        String?          @unique @db.VarChar(80)
@@ -551,10 +558,12 @@ model ProjectConfirmation {
   assignment   TrainingAssignment @relation(fields: [assignmentId], references: [id])
   confirmedBy  String             @map("confirmed_by") @db.Uuid
   note         String?
+  round        Int                @default(0)
   confirmedAt  DateTime           @default(now()) @map("confirmed_at")
   createdAt    DateTime           @default(now()) @map("created_at")
   updatedAt    DateTime           @updatedAt @map("updated_at")
 
+  @@unique([assignmentId, round])
   @@map("project_confirmations")
 }
 
@@ -566,12 +575,28 @@ model Notification {
   assignment   TrainingAssignment? @relation(fields: [assignmentId], references: [id])
   title        String              @db.VarChar(160)
   body         String
+  dedupeKey    String?             @unique @map("dedupe_key") @db.VarChar(180)
   status       NotificationStatus  @default(unread)
   sentAt       DateTime?           @map("sent_at")
+  outbox       NotificationOutbox?
   createdAt    DateTime            @default(now()) @map("created_at")
   updatedAt    DateTime            @updatedAt @map("updated_at")
 
   @@map("notifications")
+}
+
+model NotificationOutbox {
+  id             String         @id @default(uuid()) @db.Uuid
+  notificationId String         @unique @map("notification_id") @db.Uuid
+  notification   Notification   @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  status         OutboxStatus   @default(pending)
+  attemptCount   Int            @default(0) @map("attempt_count")
+  nextAttemptAt  DateTime?      @map("next_attempt_at")
+  lastError      String?        @map("last_error")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  @@map("notification_outbox")
 }
 
 model ChangeRequest {
@@ -585,6 +610,7 @@ model ChangeRequest {
   payload     Json
   reviewedBy  String?             @map("reviewed_by") @db.Uuid
   reviewedAt  DateTime?           @map("reviewed_at")
+  reviewNote  String?              @map("review_note") @db.VarChar(500)
   createdAt   DateTime            @default(now()) @map("created_at")
   updatedAt   DateTime            @updatedAt @map("updated_at")
 

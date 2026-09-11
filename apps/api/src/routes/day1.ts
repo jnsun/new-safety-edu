@@ -129,7 +129,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const current = await prisma.project.findUniqueOrThrow({ where: { id } });
     if (current.status === "ended") throw Object.assign(new Error("已结束项目为只读"), { statusCode: 409, code: "PROJECT_ENDED" });
     const project = await prisma.project.update({ where: { id }, data: { status } });
-    audit(principal.accountId, "project.status_change", "project", id, { from: current.status, to: status });
+    await auditCritical(principal.accountId, "project.status_change", "project", id, { from: current.status, to: status }, "var/audit-fallback.ndjson");
     return { data: project };
   });
 
@@ -264,9 +264,9 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const member = await prisma.projectMember.findUniqueOrThrow({ where: { id }, include: { project: true } });
     if (!await canAccessProject(principal, member.projectId)) forbidden();
     if (member.project.status !== "active") throw Object.assign(new Error("项目不是 active 状态"), { statusCode: 409, code: "PROJECT_READ_ONLY" });
-    const status = z.object({ status: z.enum(["active", "rejected"]) }).parse(request.body).status;
+    const input = z.object({ status: z.enum(["active", "rejected"]), note: z.string().trim().max(500).optional() }).parse(request.body); const status = input.status;
     const updated = await prisma.projectMember.update({ where: { id }, data: { status, reviewedBy: principal.accountId, reviewedAt: new Date() } });
-    audit(principal.accountId, "project_member.review", "project_member", id, { status });
+    audit(principal.accountId, "project_member.review", "project_member", id, { status, note: input.note });
     if (status === "active") await autoDispatch("project_induction", member.personId, member.projectId);
     return { data: updated };
   });

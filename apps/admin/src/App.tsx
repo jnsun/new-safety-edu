@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  App as AntApp, Button, Card, Col, Form, Input, Layout, Menu, message, Modal, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography, Upload
+  App as AntApp, Button, Card, Form, Input, Layout, Menu, message, Modal, Select, Space, Table, Tabs, Tag, Typography, Upload
 } from "antd";
 import { DashboardOutlined, TeamOutlined, ApartmentOutlined, ReadOutlined, FileDoneOutlined, ScheduleOutlined, LineChartOutlined, SettingOutlined, UploadOutlined } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
 import { CoursewarePage, QuestionsPage, TrainingPage } from "./Day2Pages";
+import { DashboardPage, RecordsPage, ReportsPage } from "./Day4Pages";
 
 type Principal = { accountId: string; personId: string | null; roles: Array<{ role: string; scopeType: string; scopeId: string | null }> };
 type Organization = { id: string; name: string; type: string; parentId: string | null };
@@ -32,17 +33,6 @@ function Login() {
     <Form layout="vertical" onFinish={submit}><Form.Item label="用户名" name="username" rules={[{ required: true }]}><Input autoComplete="username" /></Form.Item>
       <Form.Item label="密码" name="password" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>
       <Button block type="primary" htmlType="submit" loading={busy}>登录</Button></Form></Card></div>;
-}
-
-function Dashboard() {
-  const people = useQuery({ queryKey: ["persons"], queryFn: () => api<Person[]>("/api/persons") });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
-  return <><Typography.Title level={3}>首页</Typography.Title><Row gutter={[16, 16]}>
-    <Col xs={24} sm={12} lg={6}><Card><Statistic title="人员总数" value={people.data?.length ?? 0} /></Card></Col>
-    <Col xs={24} sm={12} lg={6}><Card><Statistic title="在用人员" value={people.data?.filter((p) => p.status === "active").length ?? 0} /></Card></Col>
-    <Col xs={24} sm={12} lg={6}><Card><Statistic title="项目总数" value={projects.data?.length ?? 0} /></Card></Col>
-    <Col xs={24} sm={12} lg={6}><Card><Statistic title="进行中项目" value={projects.data?.filter((p) => p.status === "active").length ?? 0} /></Card></Col>
-  </Row><Card className="section-card"><Typography.Title level={5}>Day 1 演示入口</Typography.Title><Typography.Text>使用“人员与账号”和“组织与项目”完成基础数据与管理员授权。培训统计从 Day 2 的真实任务数据生成。</Typography.Text></Card></>;
 }
 
 function AccountsPanel({ accounts, persons, organizations }: { accounts: Account[]; persons: Person[]; organizations: Organization[] }) {
@@ -104,21 +94,18 @@ function OrganizationProjects() {
   const projectCreate = useMutation({ mutationFn: (v: unknown) => api("/api/projects", json("POST", v)), onSuccess: () => { setProjectOpen(false); void qc.invalidateQueries({ queryKey: ["projects"] }); }, onError: (e) => message.error(e.message) });
   return <><Space className="page-title"><Typography.Title level={3}>组织与项目</Typography.Title><Button onClick={() => setOrgOpen(true)}>新建组织</Button><Button type="primary" onClick={() => setProjectOpen(true)}>新建项目</Button></Space>
     <Tabs items={[{ key: "org", label: "组织", children: <Table rowKey="id" dataSource={organizations.data} columns={[{ title: "名称", dataIndex: "name" }, { title: "类型", dataIndex: "type" }, { title: "上级 ID", dataIndex: "parentId", render: (v: string | null) => v ?? "—" }]} /> },
-      { key: "projects", label: "项目", children: <Table rowKey="id" dataSource={projects.data} columns={[{ title: "项目名称", dataIndex: "name" }, { title: "编号", dataIndex: "code" }, { title: "责任实体", render: (_: unknown, row: Project) => row.responsibleOrganization.name }, { title: "成员数", render: (_: unknown, row: Project) => row._count.members }, { title: "状态", dataIndex: "status" }, { title: "操作", render: (_: unknown, row: Project) => <Button size="small" onClick={() => setMemberProject(row)}>管理成员</Button> }]} /> }]} />
+      { key: "projects", label: "项目", children: <Table rowKey="id" dataSource={projects.data} columns={[{ title: "项目名称", dataIndex: "name" }, { title: "编号", dataIndex: "code" }, { title: "责任实体", render: (_: unknown, row: Project) => row.responsibleOrganization.name }, { title: "成员数", render: (_: unknown, row: Project) => row._count.members }, { title: "状态", dataIndex: "status" }, { title: "操作", render: (_: unknown, row: Project) => <Space><Button size="small" onClick={() => setMemberProject(row)}>管理成员</Button>{row.status !== "ended" && <Button size="small" onClick={async () => { await api(`/api/projects/${row.id}/status`, json("PATCH", { status: row.status === "active" ? "paused" : "active" })); void projects.refetch(); }}>{row.status === "active" ? "暂停" : "恢复"}</Button>}{row.status !== "ended" && <Button danger size="small" onClick={async () => { await api(`/api/projects/${row.id}/status`, json("PATCH", { status: "ended" })); void projects.refetch(); }}>结束</Button>}</Space> }]} /> }]} />
     <Modal title="新建组织" open={orgOpen} footer={null} onCancel={() => setOrgOpen(false)}><Form layout="vertical" onFinish={(v) => orgCreate.mutate(v)}><Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="type" label="类型" rules={[{ required: true }]}><Select options={["company", "business_entity", "department", "contractor"].map((v) => ({ value: v, label: v }))} /></Form.Item><Form.Item name="parentId" label="上级组织"><Select allowClear options={(organizations.data ?? []).map((o) => ({ value: o.id, label: o.name }))} /></Form.Item><Button type="primary" htmlType="submit" loading={orgCreate.isPending}>创建</Button></Form></Modal>
     <Modal title="新建项目" open={projectOpen} footer={null} onCancel={() => setProjectOpen(false)}><Form layout="vertical" onFinish={(v) => projectCreate.mutate(v)}><Form.Item name="name" label="项目名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="code" label="项目编号" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="responsibleOrganizationId" label="管理责任实体" rules={[{ required: true }]}><Select options={(organizations.data ?? []).map((o) => ({ value: o.id, label: o.name }))} /></Form.Item><Button type="primary" htmlType="submit" loading={projectCreate.isPending}>创建</Button></Form></Modal>
-    <Modal title={`${memberProject?.name ?? "项目"} · 成员`} open={!!memberProject} footer={null} onCancel={() => setMemberProject(undefined)}><Form layout="inline" onFinish={async (v) => { await api(`/api/projects/${memberProject!.id}/members`, json("POST", v)); void members.refetch(); void qc.invalidateQueries({ queryKey: ["projects"] }); }}><Form.Item name="personId" rules={[{ required: true }]}><Select style={{ width: 220 }} placeholder="选择人员" options={(people.data ?? []).map((p) => ({ value: p.id, label: p.name }))} /></Form.Item><Button type="primary" htmlType="submit">加入项目</Button></Form><Table style={{ marginTop: 16 }} rowKey="id" pagination={false} dataSource={members.data} columns={[{ title: "姓名", render: (_: unknown, row: { person: Person }) => row.person.name }, { title: "状态", dataIndex: "status" }]} /></Modal></>;
+    <Modal title={`${memberProject?.name ?? "项目"} · 成员`} open={!!memberProject} footer={null} onCancel={() => setMemberProject(undefined)}><Form layout="inline" onFinish={async (v) => { await api(`/api/projects/${memberProject!.id}/members`, json("POST", v)); void members.refetch(); void qc.invalidateQueries({ queryKey: ["projects"] }); }}><Form.Item name="personId" rules={[{ required: true }]}><Select style={{ width: 220 }} placeholder="选择人员" options={(people.data ?? []).map((p) => ({ value: p.id, label: p.name }))} /></Form.Item><Button type="primary" htmlType="submit">加入项目</Button></Form><Table style={{ marginTop: 16 }} rowKey="id" pagination={false} dataSource={members.data} columns={[{ title: "姓名", render: (_: unknown, row: { id: string; status: string; person: Person }) => row.person.name }, { title: "状态", dataIndex: "status" }, { title: "审核", render: (_: unknown, row: { id: string; status: string; person: Person }) => row.status === "pending" ? <Space><Button type="primary" size="small" onClick={async () => { await api(`/api/project-members/${row.id}/review`, json("PATCH", { status: "active" })); void members.refetch(); }}>通过</Button><Button danger size="small" onClick={async () => { await api(`/api/project-members/${row.id}/review`, json("PATCH", { status: "rejected", note: "不符合当前项目关系" })); void members.refetch(); }}>驳回</Button></Space> : null }]} /></Modal></>;
 }
-
-const placeholders: Record<string, string> = { courseware: "课件与模板", questions: "题库与试卷", training: "培训安排", records: "进度与记录", reports: "报表与设置" };
-function Placeholder({ page }: { page: string }) { return <><Typography.Title level={3}>{placeholders[page]}</Typography.Title><Card><Typography.Text type="secondary">该业务能力按连续开发顺序在后续开发日接入；一级菜单固定，不提前复制页面或伪造数据。</Typography.Text></Card></>; }
 
 function Shell({ principal }: { principal: Principal }) {
   const navigate = useNavigate(); const location = useLocation();
   const selected = useMemo(() => location.pathname === "/" ? "/" : `/${location.pathname.split("/")[1]}`, [location.pathname]);
   return <Layout className="app-shell"><Layout.Sider breakpoint="lg" collapsedWidth="0" theme="light"><div className="brand">物化院<br /><small>安全培训教育平台</small></div><Menu mode="inline" selectedKeys={[selected]} items={menuItems} onClick={({ key }) => navigate(key)} /></Layout.Sider>
     <Layout><Layout.Header className="topbar"><span>V0.1 管理后台</span><Space><Tag color="blue">{principal.roles.map((r) => r.role).join(" / ") || "无角色"}</Tag><Button onClick={async () => { await api("/api/auth/logout", { method: "POST" }); navigate("/login"); }}>退出</Button></Space></Layout.Header>
-      <Layout.Content className="content"><Routes><Route path="/" element={<Dashboard />} /><Route path="/people" element={<People />} /><Route path="/organization" element={<OrganizationProjects />} /><Route path="/courseware" element={<CoursewarePage />} /><Route path="/questions" element={<QuestionsPage />} /><Route path="/training" element={<TrainingPage />} />{["records", "reports"].map((page) => <Route key={page} path={`/${page}`} element={<Placeholder page={page} />} />)}<Route path="*" element={<Navigate to="/" replace />} /></Routes></Layout.Content></Layout></Layout>;
+      <Layout.Content className="content"><Routes><Route path="/" element={<DashboardPage />} /><Route path="/people" element={<People />} /><Route path="/organization" element={<OrganizationProjects />} /><Route path="/courseware" element={<CoursewarePage />} /><Route path="/questions" element={<QuestionsPage />} /><Route path="/training" element={<TrainingPage />} /><Route path="/records" element={<RecordsPage />} /><Route path="/reports" element={<ReportsPage />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></Layout.Content></Layout></Layout>;
 }
 
 export default function App() {
