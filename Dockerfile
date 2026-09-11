@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS build
+FROM node:22-bookworm AS build
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
@@ -7,14 +7,18 @@ COPY apps/admin/package.json apps/admin/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 RUN pnpm install --frozen-lockfile
 COPY . .
-RUN pnpm prisma:generate && pnpm build
+RUN pnpm exec prisma generate && pnpm build
 
-FROM node:22-bookworm-slim AS runtime
+FROM nginx:1.27-alpine AS web
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/apps/admin/dist /usr/share/nginx/html
+
+FROM node:22-bookworm AS api
 WORKDIR /app
 ENV NODE_ENV=production
-RUN corepack enable && groupadd -r app && useradd -r -g app app
+RUN groupadd -r app && useradd -r -g app app
 COPY --from=build --chown=app:app /app /app
 RUN mkdir -p /app/var/uploads && chown app:app /app/var/uploads
 USER app
 EXPOSE 3000
-CMD ["pnpm", "--filter", "@safety/api", "start"]
+CMD ["node", "apps/api/dist/server.js"]

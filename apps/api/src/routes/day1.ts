@@ -14,6 +14,7 @@ import { accessibleOrganizationIds, canAccessOrganization, canAccessPerson, canA
 import { decryptNationalId } from "../crypto.js";
 import { createPerson, maskPerson, personSafeSelect, type PersonInput } from "../people.js";
 import { issueAccessToken, issueSession, rotateRefreshToken, type Principal } from "../auth.js";
+import { autoDispatch } from "./day2.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -162,6 +163,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       return updated;
     });
     audit(principal.accountId, "person.status_change", "person", id, { status });
+    if (status === "active" && person.type === "employee") await autoDispatch("three_level", id);
     return { data: maskPerson(person) };
   });
 
@@ -253,6 +255,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     if (!await canAccessPerson(principal, personId)) forbidden();
     const member = await prisma.projectMember.create({ data: { projectId: id, personId, status: "active", reviewedBy: principal.accountId, reviewedAt: new Date() } });
     audit(principal.accountId, "project_member.add", "project_member", member.id);
+    await autoDispatch("project_induction", personId, id);
     return reply.code(201).send({ data: member });
   });
 
@@ -264,6 +267,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const status = z.object({ status: z.enum(["active", "rejected"]) }).parse(request.body).status;
     const updated = await prisma.projectMember.update({ where: { id }, data: { status, reviewedBy: principal.accountId, reviewedAt: new Date() } });
     audit(principal.accountId, "project_member.review", "project_member", id, { status });
+    if (status === "active") await autoDispatch("project_induction", member.personId, member.projectId);
     return { data: updated };
   });
 }

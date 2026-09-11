@@ -1,0 +1,71 @@
+name: safety-training
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?required}
+      APP_DB_NAME: ${APP_DB_NAME:?required}
+      APP_DB_USER: ${APP_DB_USER:?required}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./initdb/10-create-app-db.sh:/docker-entrypoint-initdb.d/10-create-app-db.sh:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build:
+      context: ./app
+      target: api
+    image: safety-training-api:day2
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      UPLOAD_ROOT: /app/var/uploads
+    volumes:
+      - uploads-data:/app/var/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build:
+      context: ./app
+      target: web
+    image: safety-training-web:day2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [backend, edge]
+
+volumes:
+  postgres-data:
+    name: safety-training-postgres-data
+  uploads-data:
+    name: safety-training-uploads-data
+
+networks:
+  backend:
+    name: safety-training-backend
+    internal: true
+  edge:
+    name: safety-training-edge

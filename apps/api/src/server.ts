@@ -13,6 +13,7 @@ import { authHandlers } from "./auth.js";
 import { registerDay1Routes } from "./routes/day1.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerWechatRoutes } from "./routes/wechat.js";
+import { registerDay2Routes } from "./routes/day2.js";
 
 const env = loadEnv();
 const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.code", "body.refreshToken", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
@@ -40,6 +41,7 @@ const guards = authHandlers(env);
 await registerDay1Routes(app, { env, ...guards });
 await registerFileRoutes(app, { env, ...guards });
 await registerWechatRoutes(app, { env, ...guards });
+await registerDay2Routes(app, guards);
 
 app.get("/api/health", async () => {
   await prisma.$queryRaw`SELECT 1`;

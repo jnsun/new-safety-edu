@@ -7,6 +7,7 @@ import {
 import { DashboardOutlined, TeamOutlined, ApartmentOutlined, ReadOutlined, FileDoneOutlined, ScheduleOutlined, LineChartOutlined, SettingOutlined, UploadOutlined } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
+import { CoursewarePage, QuestionsPage, TrainingPage } from "./Day2Pages";
 
 type Principal = { accountId: string; personId: string | null; roles: Array<{ role: string; scopeType: string; scopeId: string | null }> };
 type Organization = { id: string; name: string; type: string; parentId: string | null };
@@ -117,7 +118,7 @@ function Shell({ principal }: { principal: Principal }) {
   const selected = useMemo(() => location.pathname === "/" ? "/" : `/${location.pathname.split("/")[1]}`, [location.pathname]);
   return <Layout className="app-shell"><Layout.Sider breakpoint="lg" collapsedWidth="0" theme="light"><div className="brand">物化院<br /><small>安全培训教育平台</small></div><Menu mode="inline" selectedKeys={[selected]} items={menuItems} onClick={({ key }) => navigate(key)} /></Layout.Sider>
     <Layout><Layout.Header className="topbar"><span>V0.1 管理后台</span><Space><Tag color="blue">{principal.roles.map((r) => r.role).join(" / ") || "无角色"}</Tag><Button onClick={async () => { await api("/api/auth/logout", { method: "POST" }); navigate("/login"); }}>退出</Button></Space></Layout.Header>
-      <Layout.Content className="content"><Routes><Route path="/" element={<Dashboard />} /><Route path="/people" element={<People />} /><Route path="/organization" element={<OrganizationProjects />} />{Object.keys(placeholders).map((page) => <Route key={page} path={`/${page}`} element={<Placeholder page={page} />} />)}<Route path="*" element={<Navigate to="/" replace />} /></Routes></Layout.Content></Layout></Layout>;
+      <Layout.Content className="content"><Routes><Route path="/" element={<Dashboard />} /><Route path="/people" element={<People />} /><Route path="/organization" element={<OrganizationProjects />} /><Route path="/courseware" element={<CoursewarePage />} /><Route path="/questions" element={<QuestionsPage />} /><Route path="/training" element={<TrainingPage />} />{["records", "reports"].map((page) => <Route key={page} path={`/${page}`} element={<Placeholder page={page} />} />)}<Route path="*" element={<Navigate to="/" replace />} /></Routes></Layout.Content></Layout></Layout>;
 }
 
 export default function App() {
