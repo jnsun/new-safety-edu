@@ -1,5 +1,5 @@
-.exam-head { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; padding: 24rpx 28rpx; color: #fff; background: #0b5cad; }
-.timer { font-weight: 700; }
-.question { margin-top: 20rpx; }
-.option { display: block; padding: 22rpx 0; border-bottom: 2rpx solid #f0f2f5; }
+.exam-head { position: sticky; top: 16rpx; z-index: 2; display: flex; justify-content: space-between; padding: 22rpx 28rpx; margin-bottom: 22rpx; color: #1d1d1f; background: rgba(255, 255, 255, .96); border: 1rpx solid rgba(0, 0, 0, .07); border-radius: 999rpx; box-shadow: 0 10rpx 30rpx rgba(0, 0, 0, .08); }
+.timer { color: #0066cc; font-weight: 650; }
+.question { margin-top: 22rpx; }
+.option { display: block; padding: 24rpx 22rpx; margin-top: 14rpx; background: #f5f5f7; border-radius: 18rpx; }
 .submit { margin-bottom: 50rpx; }
