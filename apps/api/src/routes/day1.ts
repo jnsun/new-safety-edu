@@ -171,7 +171,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       return updated;
     });
     audit(principal.accountId, "person.status_change", "person", id, { status });
-    if (status === "active" && person.type === "employee") await autoDispatch("three_level", id);
+    if (status === "active" && person.type === "employee") await autoDispatch("three_level", id, deps.env);
     return { data: maskPerson(person) };
   });
 
@@ -266,7 +266,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     if (!await canAccessPerson(principal, personId)) forbidden();
     const member = await prisma.projectMember.create({ data: { projectId: id, personId, status: "active", reviewedBy: principal.accountId, reviewedAt: new Date() } });
     audit(principal.accountId, "project_member.add", "project_member", member.id);
-    await autoDispatch("project_induction", personId, id);
+    await autoDispatch("project_induction", personId, deps.env, id);
     return reply.code(201).send({ data: member });
   });
 
@@ -278,7 +278,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const input = z.object({ status: z.enum(["active", "rejected"]), note: z.string().trim().max(500).optional() }).parse(request.body); const status = input.status;
     const updated = await prisma.projectMember.update({ where: { id }, data: { status, reviewedBy: principal.accountId, reviewedAt: new Date() } });
     audit(principal.accountId, "project_member.review", "project_member", id, { status, note: input.note });
-    if (status === "active") await autoDispatch("project_induction", member.personId, member.projectId);
+    if (status === "active") await autoDispatch("project_induction", member.personId, deps.env, member.projectId);
     return { data: updated };
   });
 }

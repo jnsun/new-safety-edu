@@ -89,16 +89,24 @@ function learnerAssignment(row: LearnerAssignment) {
   };
 }
 
-async function createAssignments(tx: Prisma.TransactionClient, batchId: string, templateId: string, personIds: string[]) {
-  const items = await tx.trainingTemplateItem.findMany({ where: { templateId }, orderBy: { sortOrder: "asc" } });
+async function createAssignments(tx: Prisma.TransactionClient, batchId: string, templateId: string, personIds: string[], env: Env) {
+  const [batch, items] = await Promise.all([
+    tx.trainingBatch.findUniqueOrThrow({ where: { id: batchId }, select: { name: true } }),
+    tx.trainingTemplateItem.findMany({ where: { templateId }, orderBy: { sortOrder: "asc" } })
+  ]);
   if (!items.length) throw Object.assign(new Error("培训模板没有已发布课件"), { statusCode: 400, code: "EMPTY_TEMPLATE" });
   for (const personId of personIds) {
     const assignment = await tx.trainingAssignment.create({ data: { batchId, personId } });
     await tx.learningProgress.createMany({ data: items.map((item) => ({ assignmentId: assignment.id, coursewareVersionId: item.coursewareVersionId })) });
+    await tx.notification.create({ data: {
+      personId, assignmentId: assignment.id, title: "新的培训任务", body: `${batch.name}已下发，请按时完成。`, dedupeKey: `assignment:${assignment.id}`,
+      outbox: { create: env.WECHAT_APP_ID && env.WECHAT_APP_SECRET && env.WECHAT_SUBSCRIBE_TEMPLATE_TASK
+        ? { status: "pending" } : { status: "skipped", lastError: "微信订阅消息未配置，已保留系统内提醒" } }
+    } });
   }
 }
 
-export async function autoDispatch(type: "three_level" | "project_induction", personId: string, projectId?: string) {
+export async function autoDispatch(type: "three_level" | "project_induction", personId: string, env: Env, projectId?: string) {
   const template = await prisma.trainingTemplate.findFirst({ where: { type, active: true, OR: [
     ...(projectId ? [{ scopeType: "project" as const, scopeId: projectId }] : []), { scopeType: "company" as const, scopeId: null }
   ] }, orderBy: { createdAt: "asc" } });
@@ -109,7 +117,7 @@ export async function autoDispatch(type: "three_level" | "project_induction", pe
     const existing = await tx.trainingBatch.findUnique({ where: { businessKey }, include: { assignments: true } });
     if (existing) return existing;
     const batch = await tx.trainingBatch.create({ data: { businessKey, name: type === "three_level" ? "员工基础三级教育" : "项目入场教育", type, templateId: template.id, paperId: paper.id, projectId: projectId ?? null } });
-    await createAssignments(tx, batch.id, template.id, [personId]);
+    await createAssignments(tx, batch.id, template.id, [personId], env);
     return batch;
   });
 }
@@ -222,7 +230,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const persons = await prisma.person.findMany({ where: { id: { in: [...ids] }, status: "active", ...(input.type === "three_level" ? { type: "employee" as const } : {}) }, select: { id: true } });
     for (const person of persons) if (!await canAccessPerson(principal, person.id)) forbidden();
     if (!persons.length) throw Object.assign(new Error("没有符合条件的在用人员"), { statusCode: 400, code: "NO_TARGETS" });
-    const batch = await prisma.$transaction(async (tx) => { const created = await tx.trainingBatch.create({ data: { businessKey: `manual:${randomUUID()}`, name: input.name, type: input.type, templateId: input.templateId, paperId: input.paperId, projectId: input.projectId ?? null, dueAt: input.dueAt ?? null, durationMin: input.durationMin, passScore: input.passScore, maxAttempts: input.maxAttempts } }); await createAssignments(tx, created.id, input.templateId, persons.map(({ id }) => id)); return created; });
+    const batch = await prisma.$transaction(async (tx) => { const created = await tx.trainingBatch.create({ data: { businessKey: `manual:${randomUUID()}`, name: input.name, type: input.type, templateId: input.templateId, paperId: input.paperId, projectId: input.projectId ?? null, dueAt: input.dueAt ?? null, durationMin: input.durationMin, passScore: input.passScore, maxAttempts: input.maxAttempts } }); await createAssignments(tx, created.id, input.templateId, persons.map(({ id }) => id), deps.env); return created; });
     audit(principal.accountId, "training_batch.dispatch", "training_batch", batch.id, { assignmentCount: persons.length });
     return reply.code(201).send({ data: { ...batch, assignmentCount: persons.length } });
   });
@@ -230,7 +238,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request);
     const employees = await prisma.person.findMany({ where: { type: "employee", status: "active" }, select: { id: true } });
     let created = 0;
-    for (const employee of employees) if (await canAccessPerson(principal, employee.id) && await autoDispatch("three_level", employee.id)) created++;
+    for (const employee of employees) if (await canAccessPerson(principal, employee.id) && await autoDispatch("three_level", employee.id, deps.env)) created++;
     audit(principal.accountId, "training_batch.bootstrap_three_level", "training_batch", undefined, { eligible: employees.length, processed: created });
     return { data: { eligible: employees.length, processed: created } };
   });

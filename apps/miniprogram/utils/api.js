@@ -1,8 +1,10 @@
 const { getApiBaseUrl } = require('../config/env')
 
+const apiUrl = (path) => `${getApiBaseUrl()}${path.replace(/^\/api(?=\/|$)/, '')}`
+
 function rawRequest(path, method, data, token) {
   return new Promise((resolve, reject) => wx.request({
-    url: `${getApiBaseUrl()}${path}`, method, data: data ?? (method === 'GET' ? undefined : {}),
+    url: apiUrl(path), method, data: data ?? (method === 'GET' ? undefined : {}),
     header: { 'content-type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     success(response) {
       if (response.statusCode >= 200 && response.statusCode < 300) resolve(response.data.data)
@@ -30,7 +32,7 @@ const publicRequest = (path, method = 'GET', data) => rawRequest(path, method, d
 
 function upload(filePath, kind) {
   return new Promise((resolve, reject) => wx.uploadFile({
-    url: `${getApiBaseUrl()}/api/files?kind=${kind}`, filePath, name: 'file',
+    url: apiUrl(`/files?kind=${kind}`), filePath, name: 'file',
     header: { Authorization: `Bearer ${wx.getStorageSync('accessToken')}` },
     success(response) {
       const body = JSON.parse(response.data)

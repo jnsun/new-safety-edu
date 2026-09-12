@@ -1,7 +1,6 @@
 const api = require('./utils/api')
 
 function loginCode() {
-  if (wx.getAccountInfoSync().miniProgram.envVersion === 'develop') return Promise.resolve('dev:miniprogram-preview')
   return wx.login().then(({ code }) => code)
 }
 

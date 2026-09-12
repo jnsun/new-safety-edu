@@ -10,6 +10,7 @@
     "dev:admin": "pnpm --filter @safety/admin dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm --filter @safety/contracts build && pnpm -r typecheck",
+    "check:miniprogram": "node scripts/check-miniprogram-production.mjs",
     "prisma:generate": "prisma generate",
     "db:validate": "prisma validate",
     "db:migrate": "prisma migrate dev",
