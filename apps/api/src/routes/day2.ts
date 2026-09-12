@@ -27,6 +27,11 @@ async function assertScope(principal: Principal, scopeType: ScopeType, scopeId?:
   } else forbidden();
 }
 
+async function assertCoursewareFile(principal: Principal, fileId: string) {
+  const file = await prisma.privateFile.findFirst({ where: { id: fileId, kind: "courseware", uploadedBy: principal.accountId }, select: { id: true } });
+  if (!file) forbidden("HTML 课件文件无效");
+}
+
 async function visibleScope(principal: Principal) {
   if (isCompanyAdmin(principal)) return {};
   return { OR: [
@@ -119,6 +124,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const input = scopeSchema.extend({ title: z.string().trim().min(2).max(180), type: z.enum(["rich_text", "single_html"]), richText: z.string().min(1).optional(), fileId: z.string().uuid().optional() }).parse(request.body);
     await assertScope(principal, input.scopeType, input.scopeId);
     if (input.type === "rich_text" ? !input.richText : !input.fileId) throw Object.assign(new Error("课件内容不完整"), { statusCode: 400, code: "CONTENT_REQUIRED" });
+    if (input.fileId) await assertCoursewareFile(principal, input.fileId);
     const content = input.richText ?? input.fileId!;
     const courseware = await prisma.courseware.create({ data: { title: input.title, type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null,
       versions: { create: { version: 1, richText: input.richText ?? null, fileId: input.fileId ?? null, contentHash: createHash("sha256").update(content).digest("hex") } } }, include: { versions: true } });
@@ -132,6 +138,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const input = z.object({ richText: z.string().min(1).optional(), fileId: z.string().uuid().optional() }).parse(request.body);
     const content = input.richText ?? input.fileId;
     if (!content || (courseware.type === "rich_text" ? !input.richText : !input.fileId)) throw Object.assign(new Error("课件内容不完整"), { statusCode: 400, code: "CONTENT_REQUIRED" });
+    if (input.fileId) await assertCoursewareFile(principal, input.fileId);
     const version = await prisma.coursewareVersion.create({ data: { coursewareId: id, version: (courseware.versions[0]?.version ?? 0) + 1, richText: input.richText ?? null, fileId: input.fileId ?? null, contentHash: createHash("sha256").update(content).digest("hex") } });
     audit(principal.accountId, "courseware.version_create", "courseware_version", version.id);
     return reply.code(201).send({ data: version });
@@ -140,6 +147,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
     const version = await prisma.coursewareVersion.findUniqueOrThrow({ where: { id }, include: { courseware: true } });
     await assertScope(principal, version.courseware.scopeType, version.courseware.scopeId);
+    if (version.status === "published") return { data: version };
     const updated = await prisma.coursewareVersion.update({ where: { id }, data: { status: "published", publishedAt: new Date() } });
     await auditCritical(principal.accountId, "courseware.publish", "courseware_version", id, undefined, "var/audit-fallback.ndjson");
     return { data: updated };
@@ -150,8 +158,9 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request);
     const input = scopeSchema.extend({ name: z.string().trim().min(2).max(180), type: z.enum(["three_level", "project_induction", "routine", "change_update"]), coursewareVersionIds: z.array(z.string().uuid()).min(1) }).parse(request.body);
     await assertScope(principal, input.scopeType, input.scopeId);
-    const count = await prisma.coursewareVersion.count({ where: { id: { in: input.coursewareVersionIds }, status: "published" } });
-    if (count !== new Set(input.coursewareVersionIds).size) throw Object.assign(new Error("模板只能引用已发布课件版本"), { statusCode: 400, code: "UNPUBLISHED_COURSEWARE" });
+    const versions = await prisma.coursewareVersion.findMany({ where: { id: { in: input.coursewareVersionIds }, status: "published" }, include: { courseware: true } });
+    if (versions.length !== new Set(input.coursewareVersionIds).size) throw Object.assign(new Error("模板只能引用已发布课件版本"), { statusCode: 400, code: "UNPUBLISHED_COURSEWARE" });
+    for (const version of versions) await assertScope(principal, version.courseware.scopeType, version.courseware.scopeId);
     const template = await prisma.trainingTemplate.create({ data: { name: input.name, type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null, items: { create: [...new Set(input.coursewareVersionIds)].map((coursewareVersionId, sortOrder) => ({ coursewareVersionId, sortOrder })) } }, include: { items: true } });
     audit(principal.accountId, "training_template.create", "training_template", template.id);
     return reply.code(201).send({ data: template });
@@ -201,7 +210,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request);
     const input = z.object({ name: z.string().min(2).max(180), type: z.enum(["three_level", "project_induction", "routine", "change_update"]), templateId: z.string().uuid(), paperId: z.string().uuid(), projectId: z.string().uuid().optional(), dueAt: z.coerce.date().optional(), durationMin: z.number().int().min(1).max(240).default(30), passScore: z.number().min(0).max(100).default(80), maxAttempts: z.number().int().min(1).max(10).default(3), personIds: z.array(z.string().uuid()).default([]), organizationIds: z.array(z.string().uuid()).default([]) }).parse(request.body);
     if (input.type === "project_induction" && !input.projectId) throw Object.assign(new Error("项目入场教育必须绑定项目"), { statusCode: 400, code: "PROJECT_REQUIRED" });
-    if (input.projectId && !await canAccessProject(principal, input.projectId)) forbidden();
+    if (input.projectId) { if (!await canAccessProject(principal, input.projectId)) forbidden(); const project = await prisma.project.findUniqueOrThrow({ where: { id: input.projectId }, select: { status: true } }); if (project.status !== "active") throw Object.assign(new Error("暂停或结束项目不能下发新培训"), { statusCode: 409, code: "PROJECT_READ_ONLY" }); }
     const template = await prisma.trainingTemplate.findUniqueOrThrow({ where: { id: input.templateId } }); await assertScope(principal, template.scopeType, template.scopeId);
     if (template.type !== input.type) throw Object.assign(new Error("模板培训类型不匹配"), { statusCode: 400, code: "TYPE_MISMATCH" });
     const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id: input.paperId }, include: { bank: true, items: { include: { question: { include: { bank: true } } } } } });
@@ -298,32 +307,47 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   app.post("/api/assignments/:id/attempts/start", authenticated, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const assignment = await assertAssignment(principal, id);
     if (!principal.personId || principal.personId !== assignment.personId) forbidden("考试只能由本人开始");
-    const existing = await prisma.examAttempt.findFirst({ where: { assignmentId: id, status: "in_progress", expiresAt: { gt: new Date() } }, include: { answers: { select: { questionId: true, answer: true } } }, orderBy: { attemptNumber: "desc" } }); if (existing) return { data: publicAttempt(existing) };
-    if (!(["pending_exam", "remediation_required"] as string[]).includes(assignment.status)) throw Object.assign(new Error("当前任务不可开始考试"), { statusCode: 409, code: "INVALID_ASSIGNMENT_STATE" });
-    if (await prisma.learningProgress.count({ where: { assignmentId: id, completedAt: null } })) throw Object.assign(new Error("请先完成全部课件"), { statusCode: 409, code: "LEARNING_INCOMPLETE" });
-    const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id: assignment.batch.paperId! }, include: { items: { include: { question: true }, orderBy: { sortOrder: "asc" } }, bank: { include: { questions: { where: { active: true } } } } } });
-    const selected = paper.mode === "fixed" ? paper.items.map((item) => ({ question: item.question, score: Number(item.score) })) : (paper.bank?.questions ?? []).sort(() => Math.random() - .5).slice(0, paper.randomCount ?? 0).map((question) => ({ question, score: 100 / (paper.randomCount ?? 1) }));
-    if (!selected.length || (paper.mode === "random" && selected.length !== paper.randomCount)) throw Object.assign(new Error("试卷题目不足"), { statusCode: 409, code: "INSUFFICIENT_QUESTIONS" });
-    const snapshot: ExamSnapshot = { questions: selected.map(({ question, score }) => ({ id: question.id, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, score })), totalScore: selected.reduce((sum, item) => sum + item.score, 0) };
-    const attemptNumber = await prisma.examAttempt.count({ where: { assignmentId: id } }) + 1;
-    const attempt = await prisma.examAttempt.create({ data: { assignmentId: id, attemptNumber, snapshot: snapshot as unknown as Prisma.InputJsonValue, expiresAt: new Date(Date.now() + assignment.batch.durationMin * 60_000) } });
+    const attempt = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM training_assignments WHERE id = ${id}::uuid FOR UPDATE`;
+      const existing = await tx.examAttempt.findFirst({ where: { assignmentId: id, status: "in_progress", expiresAt: { gt: new Date() } }, include: { answers: { select: { questionId: true, answer: true } } }, orderBy: { attemptNumber: "desc" } }); if (existing) return existing;
+      const current = await tx.trainingAssignment.findUniqueOrThrow({ where: { id }, include: { batch: true } });
+      if (!(["pending_exam", "remediation_required"] as string[]).includes(current.status)) throw Object.assign(new Error("当前任务不可开始考试"), { statusCode: 409, code: "INVALID_ASSIGNMENT_STATE" });
+      if (await tx.learningProgress.count({ where: { assignmentId: id, completedAt: null } })) throw Object.assign(new Error("请先完成全部课件"), { statusCode: 409, code: "LEARNING_INCOMPLETE" });
+      const paper = await tx.examPaper.findUniqueOrThrow({ where: { id: current.batch.paperId! }, include: { items: { include: { question: true }, orderBy: { sortOrder: "asc" } }, bank: { include: { questions: { where: { active: true } } } } } });
+      const selected = paper.mode === "fixed" ? paper.items.map((item) => ({ question: item.question, score: Number(item.score) })) : (paper.bank?.questions ?? []).sort(() => Math.random() - .5).slice(0, paper.randomCount ?? 0).map((question) => ({ question, score: 100 / (paper.randomCount ?? 1) }));
+      if (!selected.length || (paper.mode === "random" && selected.length !== paper.randomCount)) throw Object.assign(new Error("试卷题目不足"), { statusCode: 409, code: "INSUFFICIENT_QUESTIONS" });
+      const snapshot: ExamSnapshot = { questions: selected.map(({ question, score }) => ({ id: question.id, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, score })), totalScore: selected.reduce((sum, item) => sum + item.score, 0) };
+      const attemptNumber = await tx.examAttempt.count({ where: { assignmentId: id } }) + 1;
+      return tx.examAttempt.create({ data: { assignmentId: id, attemptNumber, snapshot: snapshot as unknown as Prisma.InputJsonValue, expiresAt: new Date(Date.now() + current.batch.durationMin * 60_000) } });
+    });
     return { data: publicAttempt(attempt) };
   });
   app.put("/api/attempts/:id/answers", authenticated, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const attempt = await prisma.examAttempt.findUniqueOrThrow({ where: { id } }); const assignment = await assertAssignment(principal, attempt.assignmentId); if (principal.personId !== assignment.personId) forbidden("答题只能由本人操作");
-    if (attempt.status !== "in_progress" || attempt.expiresAt <= new Date()) throw Object.assign(new Error("考试已结束"), { statusCode: 409, code: "ATTEMPT_CLOSED" });
     const answers = z.object({ answers: z.array(z.object({ questionId: z.string().uuid(), answer: z.array(z.string()).min(1) })).max(200) }).parse(request.body).answers;
-    await prisma.$transaction(answers.map((answer) => prisma.examAnswer.upsert({ where: { attemptId_questionId: { attemptId: id, questionId: answer.questionId } }, create: { attemptId: id, questionId: answer.questionId, answer: answer.answer }, update: { answer: answer.answer } })));
+    const questionIds = new Set((attempt.snapshot as unknown as ExamSnapshot).questions.map((question) => question.id));
+    if (new Set(answers.map((answer) => answer.questionId)).size !== answers.length || answers.some((answer) => !questionIds.has(answer.questionId))) throw Object.assign(new Error("答案不属于本次试卷"), { statusCode: 400, code: "INVALID_ATTEMPT_ANSWERS" });
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM exam_attempts WHERE id = ${id}::uuid FOR UPDATE`;
+      const current = await tx.examAttempt.findUniqueOrThrow({ where: { id } });
+      if (current.status !== "in_progress" || current.expiresAt <= new Date()) throw Object.assign(new Error("考试已结束"), { statusCode: 409, code: "ATTEMPT_CLOSED" });
+      for (const answer of answers) await tx.examAnswer.upsert({ where: { attemptId_questionId: { attemptId: id, questionId: answer.questionId } }, create: { attemptId: id, questionId: answer.questionId, answer: answer.answer }, update: { answer: answer.answer } });
+    });
     return { data: { saved: answers.length } };
   });
   app.post("/api/attempts/:id/submit", authenticated, async (request) => {
-    const principal = principalOf(request); const { id } = idParam.parse(request.params); const attempt = await prisma.examAttempt.findUniqueOrThrow({ where: { id }, include: { assignment: { include: { batch: true } }, answers: true } }); const owned = await assertAssignment(principal, attempt.assignmentId); if (principal.personId !== owned.personId) forbidden("交卷只能由本人操作");
-    if (attempt.status === "submitted") return { data: { score: Number(attempt.score), passed: attempt.passed, assignmentStatus: attempt.assignment.status } };
-    if (attempt.expiresAt < new Date()) throw Object.assign(new Error("考试已超时"), { statusCode: 409, code: "ATTEMPT_EXPIRED" });
-    const snapshot = attempt.snapshot as unknown as ExamSnapshot; const answers = new Map(attempt.answers.map((answer) => [answer.questionId, answer.answer]));
-    const raw = snapshot.questions.reduce((sum, question) => sum + (sameAnswer(answers.get(question.id), question.correct) ? question.score : 0), 0); const score = snapshot.totalScore ? Math.round(raw / snapshot.totalScore * 10000) / 100 : 0; const passed = score >= Number(attempt.assignment.batch.passScore); const status = passed ? "pending_signature" : attempt.attemptNumber >= attempt.assignment.batch.maxAttempts ? "locked" : "remediation_required";
-    const result = await prisma.$transaction(async (tx) => { const submitted = await tx.examAttempt.update({ where: { id }, data: { status: "submitted", submittedAt: new Date(), score, passed } }); await tx.trainingAssignment.update({ where: { id: attempt.assignmentId }, data: { status } }); if (!passed && status === "remediation_required") { const originals = await tx.learningProgress.findMany({ where: { assignmentId: attempt.assignmentId, remediationRound: 0 }, select: { coursewareVersionId: true } }); await tx.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: attempt.assignmentId, coursewareVersionId: item.coursewareVersionId, remediationRound: attempt.attemptNumber })), skipDuplicates: true }); } return submitted; });
-    audit(principal.accountId, "exam.submit", "exam_attempt", id, { score, passed }); return { data: { score: Number(result.score), passed, assignmentStatus: status } };
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const found = await prisma.examAttempt.findUniqueOrThrow({ where: { id } }); const owned = await assertAssignment(principal, found.assignmentId); if (principal.personId !== owned.personId) forbidden("交卷只能由本人操作");
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM exam_attempts WHERE id = ${id}::uuid FOR UPDATE`;
+      const attempt = await tx.examAttempt.findUniqueOrThrow({ where: { id }, include: { assignment: { include: { batch: true } }, answers: true } });
+      if (attempt.status === "submitted") return { score: Number(attempt.score), passed: Boolean(attempt.passed), assignmentStatus: attempt.assignment.status, fresh: false };
+      if (attempt.expiresAt < new Date()) throw Object.assign(new Error("考试已超时"), { statusCode: 409, code: "ATTEMPT_EXPIRED" });
+      const snapshot = attempt.snapshot as unknown as ExamSnapshot; const answers = new Map(attempt.answers.map((answer) => [answer.questionId, answer.answer]));
+      const raw = snapshot.questions.reduce((sum, question) => sum + (sameAnswer(answers.get(question.id), question.correct) ? question.score : 0), 0); const score = snapshot.totalScore ? Math.round(raw / snapshot.totalScore * 10000) / 100 : 0; const passed = score >= Number(attempt.assignment.batch.passScore); const assignmentStatus = passed ? "pending_signature" : attempt.attemptNumber >= attempt.assignment.batch.maxAttempts ? "locked" : "remediation_required";
+      await tx.examAttempt.update({ where: { id }, data: { status: "submitted", submittedAt: new Date(), score, passed } }); await tx.trainingAssignment.update({ where: { id: attempt.assignmentId }, data: { status: assignmentStatus } }); if (!passed && assignmentStatus === "remediation_required") { const originals = await tx.learningProgress.findMany({ where: { assignmentId: attempt.assignmentId, remediationRound: 0 }, select: { coursewareVersionId: true } }); await tx.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: attempt.assignmentId, coursewareVersionId: item.coursewareVersionId, remediationRound: attempt.attemptNumber })), skipDuplicates: true }); }
+      return { score, passed, assignmentStatus, fresh: true };
+    });
+    if (result.fresh) audit(principal.accountId, "exam.submit", "exam_attempt", id, { score: result.score, passed: result.passed }); return { data: { score: result.score, passed: result.passed, assignmentStatus: result.assignmentStatus } };
   });
   app.post("/api/assignments/:id/sign", authenticated, async (request, reply) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const assignment = await assertAssignment(principal, id);

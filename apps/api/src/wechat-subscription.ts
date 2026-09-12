@@ -16,7 +16,7 @@ async function accessToken(env: Env) {
 export async function processNotificationOutbox(env: Env) {
   if (env.NODE_ENV !== "production" || !env.WECHAT_APP_ID || !env.WECHAT_APP_SECRET) return 0;
   const rows = await prisma.notificationOutbox.findMany({
-    where: { status: { in: ["pending", "failed", "skipped"] }, attemptCount: { lt: 3 }, OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }] },
+    where: { status: { in: ["pending", "failed"] }, attemptCount: { lt: 3 }, OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }] },
     include: { notification: { include: { person: { include: { account: { include: { wechatBindings: { where: { active: true } }, preferences: { where: { key: "wechat.subscriptionConsent" } } } } } } } } }, take: 50, orderBy: { createdAt: "asc" }
   });
   let sent = 0;

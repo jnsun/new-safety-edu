@@ -166,7 +166,8 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const status = z.object({ status: z.enum(["active", "disabled"]) }).parse(request.body).status;
     const person = await prisma.$transaction(async (tx) => {
       const updated = await tx.person.update({ where: { id }, data: { status }, select: personSafeSelect });
-      if (status === "disabled") await tx.account.updateMany({ where: { personId: id }, data: { status: "disabled" } });
+      if (status === "disabled") { await tx.account.updateMany({ where: { personId: id }, data: { status: "disabled", sessionVersion: { increment: 1 } } }); await tx.refreshSession.updateMany({ where: { account: { personId: id }, revokedAt: null }, data: { revokedAt: new Date() } }); }
+      else await tx.account.updateMany({ where: { personId: id }, data: { status: "active" } });
       return updated;
     });
     audit(principal.accountId, "person.status_change", "person", id, { status });
@@ -197,11 +198,13 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
 
   app.get("/api/accounts", manager, async (request) => {
     const principal = principalOf(request);
-    const roles = isCompanyAdmin(principal) ? undefined : { some: { active: true, OR: [
-      { scopeType: "organization" as const, scopeId: { in: await accessibleOrganizationIds(principal) } },
-      { scopeType: "project" as const, scopeId: { in: projectScopeIds(principal) } }
-    ] } };
-    return { data: await prisma.account.findMany({ where: roles ? { roles } : {}, select: { id: true, username: true, status: true, personId: true, roles: true, createdAt: true } }) };
+    const orgIds = await accessibleOrganizationIds(principal); const projectIds = projectScopeIds(principal);
+    const where: Prisma.AccountWhereInput = isCompanyAdmin(principal) ? {} : { OR: [
+      { roles: { some: { active: true, OR: [{ scopeType: "organization", scopeId: { in: orgIds } }, { scopeType: "project", scopeId: { in: projectIds } }] } } },
+      { person: { organizations: { some: { active: true, organizationId: { in: orgIds } } } } },
+      { person: { projectMemberships: { some: { status: "active", projectId: { in: projectIds } } } } }
+    ] };
+    return { data: await prisma.account.findMany({ where, select: { id: true, username: true, status: true, personId: true, roles: true, createdAt: true } }) };
   });
 
   app.post("/api/accounts", manager, async (request, reply) => {
@@ -241,6 +244,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     if (role.scopeType === "company" && !isCompanyAdmin(principal)) forbidden();
     if (role.scopeType === "organization" && (!role.scopeId || !await canAccessOrganization(principal, role.scopeId))) forbidden();
     if (role.scopeType === "project" && (!role.scopeId || !await canAccessProject(principal, role.scopeId))) forbidden();
+    if (role.scopeType === "person" && (!role.scopeId || !await canAccessPerson(principal, role.scopeId))) forbidden();
     await prisma.roleAssignment.update({ where: { id }, data: { active: false } });
     await auditCritical(principal.accountId, "role.revoke", "role_assignment", id, undefined, "var/audit-fallback.ndjson");
     return reply.code(204).send();

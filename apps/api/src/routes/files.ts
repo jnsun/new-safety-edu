@@ -20,7 +20,7 @@ export async function registerFileRoutes(app: FastifyInstance, deps: { env: Env;
     if (!part) throw Object.assign(new Error("请选择文件"), { statusCode: 400, code: "FILE_REQUIRED" });
     if (kind === "photo" && !["image/jpeg", "image/png"].includes(part.mimetype)) throw Object.assign(new Error("照片只支持 JPEG/PNG"), { statusCode: 400, code: "INVALID_MIME" });
     if (kind === "signature" && part.mimetype !== "image/png") throw Object.assign(new Error("签字只支持 PNG"), { statusCode: 400, code: "INVALID_MIME" });
-    if (kind === "courseware" && part.mimetype !== "text/html") throw Object.assign(new Error("HTML 课件只支持单个 .html 文件"), { statusCode: 400, code: "INVALID_MIME" });
+    if (kind === "courseware" && (part.mimetype !== "text/html" || !/\.html?$/i.test(part.filename))) throw Object.assign(new Error("HTML 课件只支持单个 .html 文件"), { statusCode: 400, code: "INVALID_MIME" });
     const buffer = await part.toBuffer();
     const key = `${new Date().getUTCFullYear()}/${randomUUID()}`;
     const root = resolve(deps.env.UPLOAD_ROOT);

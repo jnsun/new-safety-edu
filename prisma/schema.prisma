@@ -185,36 +185,36 @@ model Person {
   createdAt          DateTime                 @default(now()) @map("created_at")
   updatedAt          DateTime                 @updatedAt @map("updated_at")
 
-  @@index([phone, status])
   @@unique([nationalIdHash])
+  @@index([phone, status])
   @@map("persons")
 }
 
 model WechatBinding {
-  id        String   @id @default(uuid()) @db.Uuid
-  appId     String   @map("app_id") @db.VarChar(64)
-  openid    String   @db.VarChar(128)
-  unionid   String?  @db.VarChar(128)
-  accountId String   @map("account_id") @db.Uuid
-  account   Account  @relation(fields: [accountId], references: [id])
-  active    Boolean  @default(true)
+  id        String    @id @default(uuid()) @db.Uuid
+  appId     String    @map("app_id") @db.VarChar(64)
+  openid    String    @db.VarChar(128)
+  unionid   String?   @db.VarChar(128)
+  accountId String    @map("account_id") @db.Uuid
+  account   Account   @relation(fields: [accountId], references: [id])
+  active    Boolean   @default(true)
   boundAt   DateTime? @map("bound_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
 
   @@unique([appId, openid])
   @@map("wechat_bindings")
 }
 
 model RefreshSession {
-  id        String   @id @default(uuid()) @db.Uuid
-  accountId String   @map("account_id") @db.Uuid
-  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  tokenHash String   @unique @map("token_hash") @db.VarChar(64)
-  expiresAt DateTime @map("expires_at")
+  id        String    @id @default(uuid()) @db.Uuid
+  accountId String    @map("account_id") @db.Uuid
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+  expiresAt DateTime  @map("expires_at")
   revokedAt DateTime? @map("revoked_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
 
   @@map("refresh_sessions")
 }
@@ -271,7 +271,7 @@ model Project {
   name                      String          @db.VarChar(160)
   code                      String          @unique @db.VarChar(50)
   responsibleOrganizationId String          @map("responsible_organization_id") @db.Uuid
-  responsibleOrganization  Organization    @relation(fields: [responsibleOrganizationId], references: [id])
+  responsibleOrganization   Organization    @relation(fields: [responsibleOrganizationId], references: [id])
   status                    ProjectStatus   @default(active)
   members                   ProjectMember[]
   batches                   TrainingBatch[]
@@ -329,20 +329,20 @@ model Courseware {
 }
 
 model CoursewareVersion {
-  id           String             @id @default(uuid()) @db.Uuid
-  coursewareId String             @map("courseware_id") @db.Uuid
-  courseware   Courseware         @relation(fields: [coursewareId], references: [id])
-  version      Int
-  status       PublishStatus      @default(draft)
-  richText     String?            @map("rich_text")
-  fileId       String?            @map("file_id") @db.Uuid
-  file         PrivateFile?       @relation(fields: [fileId], references: [id])
-  contentHash  String             @map("content_hash") @db.VarChar(64)
-  publishedAt  DateTime?          @map("published_at")
+  id            String                 @id @default(uuid()) @db.Uuid
+  coursewareId  String                 @map("courseware_id") @db.Uuid
+  courseware    Courseware             @relation(fields: [coursewareId], references: [id])
+  version       Int
+  status        PublishStatus          @default(draft)
+  richText      String?                @map("rich_text")
+  fileId        String?                @map("file_id") @db.Uuid
+  file          PrivateFile?           @relation(fields: [fileId], references: [id])
+  contentHash   String                 @map("content_hash") @db.VarChar(64)
+  publishedAt   DateTime?              @map("published_at")
   templateItems TrainingTemplateItem[]
-  progress     LearningProgress[]
-  createdAt    DateTime           @default(now()) @map("created_at")
-  updatedAt    DateTime           @updatedAt @map("updated_at")
+  progress      LearningProgress[]
+  createdAt     DateTime               @default(now()) @map("created_at")
+  updatedAt     DateTime               @updatedAt @map("updated_at")
 
   @@unique([coursewareId, version])
   @@map("courseware_versions")
@@ -378,14 +378,14 @@ model TrainingTemplateItem {
 }
 
 model QuestionBank {
-  id        String     @id @default(uuid()) @db.Uuid
-  name      String     @db.VarChar(160)
-  scopeType ScopeType  @map("scope_type")
-  scopeId   String?    @map("scope_id") @db.Uuid
+  id        String      @id @default(uuid()) @db.Uuid
+  name      String      @db.VarChar(160)
+  scopeType ScopeType   @map("scope_type")
+  scopeId   String?     @map("scope_id") @db.Uuid
   questions Question[]
   papers    ExamPaper[]
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
 
   @@map("question_banks")
 }
@@ -408,16 +408,16 @@ model Question {
 }
 
 model ExamPaper {
-  id            String          @id @default(uuid()) @db.Uuid
-  name          String          @db.VarChar(160)
-  mode          PaperMode
-  bankId        String?         @map("bank_id") @db.Uuid
-  bank          QuestionBank?   @relation(fields: [bankId], references: [id])
-  randomCount   Int?            @map("random_count")
-  items         ExamPaperItem[]
-  batches       TrainingBatch[]
-  createdAt     DateTime        @default(now()) @map("created_at")
-  updatedAt     DateTime        @updatedAt @map("updated_at")
+  id          String          @id @default(uuid()) @db.Uuid
+  name        String          @db.VarChar(160)
+  mode        PaperMode
+  bankId      String?         @map("bank_id") @db.Uuid
+  bank        QuestionBank?   @relation(fields: [bankId], references: [id])
+  randomCount Int?            @map("random_count")
+  items       ExamPaperItem[]
+  batches     TrainingBatch[]
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
 
   @@map("exam_papers")
 }
@@ -462,58 +462,58 @@ model TrainingBatch {
 }
 
 model TrainingAssignment {
-  id           String              @id @default(uuid()) @db.Uuid
-  batchId      String              @map("batch_id") @db.Uuid
-  personId     String              @map("person_id") @db.Uuid
-  batch        TrainingBatch       @relation(fields: [batchId], references: [id])
-  person       Person              @relation(fields: [personId], references: [id])
-  status       AssignmentStatus    @default(pending_learning)
-  completedAt  DateTime?           @map("completed_at")
-  cancelledAt  DateTime?           @map("cancelled_at")
-  progress     LearningProgress[]
-  attempts     ExamAttempt[]
-  signatures   Signature[]
+  id            String                @id @default(uuid()) @db.Uuid
+  batchId       String                @map("batch_id") @db.Uuid
+  personId      String                @map("person_id") @db.Uuid
+  batch         TrainingBatch         @relation(fields: [batchId], references: [id])
+  person        Person                @relation(fields: [personId], references: [id])
+  status        AssignmentStatus      @default(pending_learning)
+  completedAt   DateTime?             @map("completed_at")
+  cancelledAt   DateTime?             @map("cancelled_at")
+  progress      LearningProgress[]
+  attempts      ExamAttempt[]
+  signatures    Signature[]
   confirmations ProjectConfirmation[]
   notifications Notification[]
-  createdAt    DateTime            @default(now()) @map("created_at")
-  updatedAt    DateTime            @updatedAt @map("updated_at")
+  createdAt     DateTime              @default(now()) @map("created_at")
+  updatedAt     DateTime              @updatedAt @map("updated_at")
 
   @@unique([batchId, personId])
   @@map("training_assignments")
 }
 
 model LearningProgress {
-  id                  String            @id @default(uuid()) @db.Uuid
-  assignmentId        String            @map("assignment_id") @db.Uuid
-  coursewareVersionId String            @map("courseware_version_id") @db.Uuid
+  id                  String             @id @default(uuid()) @db.Uuid
+  assignmentId        String             @map("assignment_id") @db.Uuid
+  coursewareVersionId String             @map("courseware_version_id") @db.Uuid
   assignment          TrainingAssignment @relation(fields: [assignmentId], references: [id])
-  coursewareVersion   CoursewareVersion @relation(fields: [coursewareVersionId], references: [id])
-  openedAt            DateTime?         @map("opened_at")
-  reachedEndAt        DateTime?         @map("reached_end_at")
-  completedAt         DateTime?         @map("completed_at")
-  remediationRound    Int               @default(0) @map("remediation_round")
-  createdAt           DateTime          @default(now()) @map("created_at")
-  updatedAt           DateTime          @updatedAt @map("updated_at")
+  coursewareVersion   CoursewareVersion  @relation(fields: [coursewareVersionId], references: [id])
+  openedAt            DateTime?          @map("opened_at")
+  reachedEndAt        DateTime?          @map("reached_end_at")
+  completedAt         DateTime?          @map("completed_at")
+  remediationRound    Int                @default(0) @map("remediation_round")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
 
   @@unique([assignmentId, coursewareVersionId, remediationRound])
   @@map("learning_progress")
 }
 
 model ExamAttempt {
-  id             String             @id @default(uuid()) @db.Uuid
-  assignmentId   String             @map("assignment_id") @db.Uuid
-  assignment     TrainingAssignment @relation(fields: [assignmentId], references: [id])
-  attemptNumber  Int                @map("attempt_number")
-  status         AttemptStatus      @default(in_progress)
-  snapshot       Json
-  startedAt      DateTime           @default(now()) @map("started_at")
-  expiresAt      DateTime           @map("expires_at")
-  submittedAt    DateTime?          @map("submitted_at")
-  score          Decimal?           @db.Decimal(6, 2)
-  passed         Boolean?
-  answers        ExamAnswer[]
-  createdAt      DateTime           @default(now()) @map("created_at")
-  updatedAt      DateTime           @updatedAt @map("updated_at")
+  id            String             @id @default(uuid()) @db.Uuid
+  assignmentId  String             @map("assignment_id") @db.Uuid
+  assignment    TrainingAssignment @relation(fields: [assignmentId], references: [id])
+  attemptNumber Int                @map("attempt_number")
+  status        AttemptStatus      @default(in_progress)
+  snapshot      Json
+  startedAt     DateTime           @default(now()) @map("started_at")
+  expiresAt     DateTime           @map("expires_at")
+  submittedAt   DateTime?          @map("submitted_at")
+  score         Decimal?           @db.Decimal(6, 2)
+  passed        Boolean?
+  answers       ExamAnswer[]
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
 
   @@unique([assignmentId, attemptNumber])
   @@map("exam_attempts")
@@ -533,21 +533,21 @@ model ExamAnswer {
 }
 
 model Signature {
-  id            String             @id @default(uuid()) @db.Uuid
-  assignmentId  String             @map("assignment_id") @db.Uuid
-  personId      String             @map("person_id") @db.Uuid
-  fileId        String             @map("file_id") @db.Uuid
-  assignment    TrainingAssignment @relation(fields: [assignmentId], references: [id])
-  person        Person             @relation(fields: [personId], references: [id])
-  file          PrivateFile        @relation(fields: [fileId], references: [id])
-  recordHash    String             @map("record_hash") @db.VarChar(64)
-  deviceInfo    Json?              @map("device_info")
-  correctionOfId String?           @map("correction_of_id") @db.Uuid
-  correctionOf  Signature?         @relation("SignatureCorrection", fields: [correctionOfId], references: [id])
-  corrections   Signature[]        @relation("SignatureCorrection")
-  signedAt      DateTime           @default(now()) @map("signed_at")
-  createdAt     DateTime           @default(now()) @map("created_at")
-  updatedAt     DateTime           @updatedAt @map("updated_at")
+  id             String             @id @default(uuid()) @db.Uuid
+  assignmentId   String             @map("assignment_id") @db.Uuid
+  personId       String             @map("person_id") @db.Uuid
+  fileId         String             @map("file_id") @db.Uuid
+  assignment     TrainingAssignment @relation(fields: [assignmentId], references: [id])
+  person         Person             @relation(fields: [personId], references: [id])
+  file           PrivateFile        @relation(fields: [fileId], references: [id])
+  recordHash     String             @map("record_hash") @db.VarChar(64)
+  deviceInfo     Json?              @map("device_info")
+  correctionOfId String?            @map("correction_of_id") @db.Uuid
+  correctionOf   Signature?         @relation("SignatureCorrection", fields: [correctionOfId], references: [id])
+  corrections    Signature[]        @relation("SignatureCorrection")
+  signedAt       DateTime           @default(now()) @map("signed_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
 
   @@unique([assignmentId, correctionOfId])
   @@map("signatures")
@@ -587,33 +587,33 @@ model Notification {
 }
 
 model NotificationOutbox {
-  id             String         @id @default(uuid()) @db.Uuid
-  notificationId String         @unique @map("notification_id") @db.Uuid
-  notification   Notification   @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  status         OutboxStatus   @default(pending)
-  attemptCount   Int            @default(0) @map("attempt_count")
-  nextAttemptAt  DateTime?      @map("next_attempt_at")
-  lastError      String?        @map("last_error")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  updatedAt      DateTime       @updatedAt @map("updated_at")
+  id             String       @id @default(uuid()) @db.Uuid
+  notificationId String       @unique @map("notification_id") @db.Uuid
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  status         OutboxStatus @default(pending)
+  attemptCount   Int          @default(0) @map("attempt_count")
+  nextAttemptAt  DateTime?    @map("next_attempt_at")
+  lastError      String?      @map("last_error")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
 
   @@map("notification_outbox")
 }
 
 model ChangeRequest {
-  id          String              @id @default(uuid()) @db.Uuid
-  personId    String?             @map("person_id") @db.Uuid
-  person      Person?             @relation(fields: [personId], references: [id])
-  accountId   String?             @map("account_id") @db.Uuid
-  projectId   String?             @map("project_id") @db.Uuid
-  type        ChangeRequestType
-  status      ChangeRequestStatus @default(pending)
-  payload     Json
-  reviewedBy  String?             @map("reviewed_by") @db.Uuid
-  reviewedAt  DateTime?           @map("reviewed_at")
-  reviewNote  String?              @map("review_note") @db.VarChar(500)
-  createdAt   DateTime            @default(now()) @map("created_at")
-  updatedAt   DateTime            @updatedAt @map("updated_at")
+  id         String              @id @default(uuid()) @db.Uuid
+  personId   String?             @map("person_id") @db.Uuid
+  person     Person?             @relation(fields: [personId], references: [id])
+  accountId  String?             @map("account_id") @db.Uuid
+  projectId  String?             @map("project_id") @db.Uuid
+  type       ChangeRequestType
+  status     ChangeRequestStatus @default(pending)
+  payload    Json
+  reviewedBy String?             @map("reviewed_by") @db.Uuid
+  reviewedAt DateTime?           @map("reviewed_at")
+  reviewNote String?             @map("review_note") @db.VarChar(500)
+  createdAt  DateTime            @default(now()) @map("created_at")
+  updatedAt  DateTime            @updatedAt @map("updated_at")
 
   @@map("change_requests")
 }

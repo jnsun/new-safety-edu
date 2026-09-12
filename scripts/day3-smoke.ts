@@ -10,7 +10,7 @@ const headers = (token: string) => ({ authorization: `Bearer ${token}`, "content
 async function call(path: string, init: RequestInit = {}, expected = 200) {
   const request = { ...init };
   if (request.method && request.method !== "GET" && request.body === undefined) request.body = "{}";
-  const response = await fetch(`${base}${path}`, request);
+  const response = await fetch(`${base}${path}`, { ...request, signal: AbortSignal.timeout(10_000) });
   const body = await response.json() as { data?: unknown; error?: { code?: string; message?: string } };
   assert.equal(response.status, expected, `${path}: ${body.error?.code} ${body.error?.message}`);
   return body.data as any;
@@ -29,6 +29,7 @@ async function main() {
   const template = await prisma.trainingTemplate.create({ data: { name: "Day3 smoke template", type: "routine", scopeType: "company", items: { create: { coursewareVersionId: version.id, sortOrder: 0 } } } });
   const bank = await prisma.questionBank.create({ data: { name: "Day3 smoke bank", scopeType: "company" } });
   const question = await prisma.question.create({ data: { bankId: bank.id, type: "true_false", prompt: "Smoke question", options: ["正确", "错误"], correct: ["正确"] } });
+  const outsideQuestion = await prisma.question.create({ data: { bankId: bank.id, type: "true_false", prompt: "Outside question", options: ["正确", "错误"], correct: ["正确"] } });
   const paper = await prisma.examPaper.create({ data: { name: "Day3 smoke paper", mode: "fixed", items: { create: { questionId: question.id, sortOrder: 0, score: 100 } } } });
   const batch = await prisma.trainingBatch.create({ data: { businessKey: `smoke:${randomUUID()}`, name: "Day3 smoke training", type: "routine", templateId: template.id, paperId: paper.id, durationMin: 30, passScore: 80, maxAttempts: 2 } });
   const assignments = await Promise.all(people.map((person) => prisma.trainingAssignment.create({ data: { batchId: batch.id, personId: person.id, progress: { create: { coursewareVersionId: version.id } } } })));
@@ -43,11 +44,15 @@ async function main() {
   await call(`/api/assignments/${assignments[0]!.id}/coursewares/${version.id}`, { headers: headers(token) });
   await call(`/api/assignments/${assignments[0]!.id}/learning/${version.id}/complete`, { method: "POST", headers: headers(token) });
 
-  const first = await call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) });
+  const [first, concurrentStart] = await Promise.all([call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) }), call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) })]);
+  assert.equal(concurrentStart.id, first.id); assert.equal(await prisma.examAttempt.count({ where: { assignmentId: assignments[0]!.id } }), 1);
+  await call(`/api/attempts/${first.id}/answers`, { method: "PUT", headers: headers(token), body: JSON.stringify({ answers: [{ questionId: outsideQuestion.id, answer: ["正确"] }] }) }, 400);
   await call(`/api/attempts/${first.id}/answers`, { method: "PUT", headers: headers(token), body: JSON.stringify({ answers: [{ questionId: question.id, answer: ["错误"] }] }) });
   const resumed = await call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) });
   assert.equal(resumed.id, first.id); assert.deepEqual(resumed.answers[0].answer, ["错误"]);
-  assert.equal((await call(`/api/attempts/${first.id}/submit`, { method: "POST", headers: headers(token) })).assignmentStatus, "remediation_required");
+  const submissions = await Promise.all([call(`/api/attempts/${first.id}/submit`, { method: "POST", headers: headers(token) }), call(`/api/attempts/${first.id}/submit`, { method: "POST", headers: headers(token) })]);
+  assert.ok(submissions.every((result) => result.assignmentStatus === "remediation_required"));
+  await assert.rejects(() => prisma.examAttempt.update({ where: { id: first.id }, data: { score: 100 } }));
   await call(`/api/assignments/${assignments[0]!.id}/coursewares/${version.id}`, { headers: headers(token) });
   await call(`/api/assignments/${assignments[0]!.id}/learning/${version.id}/complete`, { method: "POST", headers: headers(token) });
   const second = await call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) });
@@ -68,6 +73,7 @@ async function main() {
   assert.equal(uploadResponse.status, 201); const uploaded = (await uploadResponse.json() as any).data;
   assert.equal((await call(`/api/assignments/${assignments[0]!.id}/sign`, { method: "POST", headers: headers(token), body: JSON.stringify({ fileId: uploaded.id, deviceInfo: { platform: "smoke" } }) }, 201)).status, "completed");
   await call(`/api/assignments/${assignments[0]!.id}/sign`, { method: "POST", headers: headers(token), body: JSON.stringify({ fileId: uploaded.id }) }, 409);
+  await assert.rejects(() => prisma.trainingAssignment.update({ where: { id: assignments[0]!.id }, data: { status: "learning" } }));
   assert.equal((await call("/api/me/assignments?scope=records", { headers: headers(token) })).length, 1);
   await call(`/api/me/records/${assignments[0]!.id}`, { headers: headers(token) });
   assert.equal(await prisma.trainingAssignment.count({ where: { personId: people[1]!.id, status: "pending_learning" } }), 1);

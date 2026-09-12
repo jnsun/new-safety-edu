@@ -66,6 +66,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       create: { accountId: request.principal!.accountId, key: "wechat.subscriptionConsent", value: statuses },
       update: { value: statuses }
     });
+    if (request.principal!.personId && Object.values(statuses).includes("accept")) await prisma.notificationOutbox.updateMany({ where: { status: "skipped", notification: { personId: request.principal!.personId } }, data: { status: "pending", nextAttemptAt: null, lastError: null } });
     return { data: { saved: true } };
   });
 
