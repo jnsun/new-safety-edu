@@ -21,11 +21,10 @@ server {
   index index.html;
   client_max_body_size 16m;
 
-  location ~ ^/MP_verify_[A-Za-z0-9]+\.txt$ {
-    root /etc/nginx/wechat-verification;
+  location = /Cd8v8XCO1X.txt {
+    alias /etc/nginx/wechat-verification/Cd8v8XCO1X.txt;
     default_type text/plain;
     add_header X-Content-Type-Options nosniff always;
-    try_files $uri =404;
     limit_except GET HEAD { deny all; }
   }
 
