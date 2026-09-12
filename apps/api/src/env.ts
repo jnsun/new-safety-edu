@@ -24,8 +24,5 @@ export function loadEnv(): Env {
   const env = schema.parse(process.env);
   const key = Buffer.from(env.FIELD_ENCRYPTION_KEY, "base64");
   if (key.length !== 32) throw new Error("FIELD_ENCRYPTION_KEY 必须是 Base64 编码的 32 字节密钥");
-  if (env.NODE_ENV === "production" && (!env.WECHAT_APP_ID || !env.WECHAT_APP_SECRET)) {
-    throw new Error("生产环境必须配置 WECHAT_APP_ID 和 WECHAT_APP_SECRET");
-  }
   return env;
 }

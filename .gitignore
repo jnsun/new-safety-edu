@@ -11,5 +11,6 @@ dist/
 var/uploads/*
 !var/uploads/.gitkeep
 var/audit-fallback.ndjson
+var/release-*.tar.gz
 apps/miniprogram/private.config.json
 .artifact-work/
