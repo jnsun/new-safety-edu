@@ -1,2 +1,9 @@
 const api = require('../../utils/api')
-Page({ data: { busy: false, error: '' }, async login() { this.setData({ busy: true, error: '' }); try { const { code } = await wx.login(); const data = await api.publicRequest('/api/wechat/login', 'POST', { code }); api.saveSession(data); wx.reLaunch({ url: data.bindingStatus === 'bound' ? '/pages/todo/index' : '/pages/bind/index' }); } catch (error) { this.setData({ error: error.message }); } finally { this.setData({ busy: false }); } } })
+Page({
+  data: { busy: false, sending: false, error: '', phone: '', smsCode: '', countdown: 0 },
+  setPhone(e) { this.setData({ phone: e.detail.value }) }, setSmsCode(e) { this.setData({ smsCode: e.detail.value }) },
+  finish(data) { api.saveSession(data); wx.reLaunch({ url: data.bindingStatus === 'bound' ? '/pages/todo/index' : '/pages/bind/index' }) },
+  async login() { this.setData({ busy: true, error: '' }); try { const { code } = await wx.login(); this.finish(await api.publicRequest('/api/wechat/login', 'POST', { code })) } catch (error) { this.setData({ error: error.message }) } finally { this.setData({ busy: false }) } },
+  async sendCode() { if (!/^1\d{10}$/.test(this.data.phone) || this.data.countdown) return wx.showToast({ title: '请输入正确手机号', icon: 'none' }); this.setData({ sending: true, error: '' }); try { await api.publicRequest('/api/auth/phone/code', 'POST', { phone: this.data.phone }); this.setData({ countdown: 60 }); const timer = setInterval(() => { const next = this.data.countdown - 1; this.setData({ countdown: next }); if (next <= 0) clearInterval(timer) }, 1000); wx.showToast({ title: '验证码已发送' }) } catch (error) { this.setData({ error: error.message }) } finally { this.setData({ sending: false }) } },
+  async phoneLogin() { if (!/^1\d{10}$/.test(this.data.phone) || !/^\d{6}$/.test(this.data.smsCode)) return wx.showToast({ title: '请填写手机号和验证码', icon: 'none' }); this.setData({ busy: true, error: '' }); try { this.finish(await api.publicRequest('/api/auth/phone/login', 'POST', { phone: this.data.phone, code: this.data.smsCode })) } catch (error) { this.setData({ error: error.message }) } finally { this.setData({ busy: false }) } }
+})

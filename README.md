@@ -1,6 +1,6 @@
-# 安全培训教育平台 V0.1
+# 安全生产管理平台
 
-全新单仓库 MVP：Fastify API、React 管理后台、PostgreSQL/Prisma 与原生微信小程序。客户端只通过 API 访问业务数据。
+单仓库安全生产管理平台：Fastify API、React 管理后台、PostgreSQL/Prisma 与原生微信小程序。当前模块包括培训教育、野外项目月报和资质证照；客户端只通过 API 访问业务数据。
 
 ## 本地启动
 
@@ -23,6 +23,8 @@ pnpm dev
 - 小程序：微信开发者工具导入 `apps/miniprogram`；开发态 API 地址见 `config/env.js`
 
 生产环境绝不启用微信 Mock。`var/uploads` 必须持久化且不应由 Web 服务器公开映射。
+
+手机号验证码登录需要服务器配置 `SMS_SEND_ENDPOINT` 和 `SMS_SEND_TOKEN`；网关接收 HTTPS JSON `{ phone, code, purpose }`。网页微信扫码登录需要在微信开放平台创建网站应用，并在服务器配置 `WECHAT_WEB_APP_ID`、`WECHAT_WEB_APP_SECRET` 和回调地址 `WECHAT_WEB_REDIRECT_URI`。这些密钥不得进入 Admin 或小程序构建产物。
 
 ## 常用命令
 

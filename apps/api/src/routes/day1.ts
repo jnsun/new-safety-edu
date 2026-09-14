@@ -97,8 +97,10 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
   app.post("/api/organizations", manager, async (request, reply) => {
     const principal = principalOf(request);
     const input = organizationCreateSchema.parse(request.body);
-    if (!isCompanyAdmin(principal) && (!input.parentId || !await canAccessOrganization(principal, input.parentId))) forbidden();
-    const organization = await prisma.organization.create({ data: { name: input.name, type: input.type, ...(input.parentId ? { parent: { connect: { id: input.parentId } } } : {}) } });
+    const defaultCompany = !input.parentId && ["department", "business_entity"].includes(input.type) ? await prisma.organization.findFirst({ where: { type: "company" }, orderBy: { createdAt: "asc" }, select: { id: true } }) : null;
+    const parentId = input.parentId ?? defaultCompany?.id;
+    if (!isCompanyAdmin(principal) && (!parentId || !await canAccessOrganization(principal, parentId))) forbidden();
+    const organization = await prisma.organization.create({ data: { name: input.name, type: input.type, ...(parentId ? { parent: { connect: { id: parentId } } } : {}) } });
     audit(principal.accountId, "organization.create", "organization", organization.id);
     return reply.code(201).send({ data: organization });
   });

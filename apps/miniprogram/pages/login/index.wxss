@@ -1,1 +1,4 @@
 .error { display: block; color: #d92d20; margin-top: 20rpx; }
+.code-row { display: flex; gap: 16rpx; align-items: center; }
+.code-input { flex: 1; }
+.code-button { width: 220rpx; margin: 0; }

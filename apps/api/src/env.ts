@@ -15,7 +15,12 @@ const schema = z.object({
   WECHAT_SUBSCRIBE_TEMPLATE_TASK: z.string().optional(),
   WECHAT_SUBSCRIBE_TEMPLATE_DUE: z.string().optional(),
   WECHAT_SUBSCRIBE_FIELD_TITLE: z.string().default("thing1"),
-  WECHAT_SUBSCRIBE_FIELD_BODY: z.string().default("thing2")
+  WECHAT_SUBSCRIBE_FIELD_BODY: z.string().default("thing2"),
+  SMS_SEND_ENDPOINT: z.string().url().optional(),
+  SMS_SEND_TOKEN: z.string().min(16).optional(),
+  WECHAT_WEB_APP_ID: z.string().optional(),
+  WECHAT_WEB_APP_SECRET: z.string().optional(),
+  WECHAT_WEB_REDIRECT_URI: z.string().url().optional()
 });
 
 export type Env = z.infer<typeof schema>;

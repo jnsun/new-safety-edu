@@ -20,6 +20,20 @@ export function encryptNationalId(value: string, env: Env) {
   };
 }
 
+export function encryptField(value: string, env: Env) {
+  const key = Buffer.from(env.FIELD_ENCRYPTION_KEY, "base64");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(value.trim(), "utf8"), cipher.final()]);
+  return { cipher: ciphertext.toString("base64"), iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64") };
+}
+
+export function decryptField(ciphertext: string, iv: string, tag: string, env: Env): string {
+  const decipher = createDecipheriv("aes-256-gcm", Buffer.from(env.FIELD_ENCRYPTION_KEY, "base64"), Buffer.from(iv, "base64"));
+  decipher.setAuthTag(Buffer.from(tag, "base64"));
+  return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64")), decipher.final()]).toString("utf8");
+}
+
 export function hashNationalId(value: string, env: Env): string {
   return createHmac("sha256", Buffer.from(env.FIELD_ENCRYPTION_KEY, "base64")).update(value.trim().toUpperCase()).digest("hex");
 }

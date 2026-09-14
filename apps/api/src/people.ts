@@ -17,7 +17,8 @@ export type PersonInput = {
 const safeSelect = {
   id: true, name: true, phone: true, type: true, status: true, nationalIdLast4: true,
   photoFileId: true, createdAt: true, updatedAt: true,
-  organizations: { where: { active: true }, select: { organization: { select: { id: true, name: true } }, primary: true } }
+  organizations: { where: { active: true }, select: { organization: { select: { id: true, name: true } }, primary: true } },
+  account: { select: { id: true, username: true, status: true, roles: { where: { active: true }, select: { id: true, role: true, scopeType: true, scopeId: true } } } }
 } satisfies Prisma.PersonSelect;
 
 export async function createPerson(input: PersonInput, principal: Principal, env: Env, tx: Prisma.TransactionClient | typeof prisma = prisma) {

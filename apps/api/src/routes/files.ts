@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { audit } from "../audit.js";
-import { canAccessPerson, forbidden, isCompanyAdmin } from "../access.js";
+import { canAccessOrganization, canAccessPerson, forbidden, isCompanyAdmin } from "../access.js";
 import { sha256 } from "../crypto.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -35,11 +35,13 @@ export async function registerFileRoutes(app: FastifyInstance, deps: { env: Env;
   app.get("/api/files/:id", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!;
     const id = z.object({ id: z.string().uuid() }).parse(request.params).id;
-    const file = await prisma.privateFile.findUnique({ where: { id }, include: { personPhotos: { select: { id: true } }, signatures: { select: { personId: true } } } });
+    const file = await prisma.privateFile.findUnique({ where: { id }, include: { personPhotos: { select: { id: true } }, signatures: { select: { personId: true } }, personCertificates: { select: { personId: true } }, organizationQualifications: { select: { organizationId: true } } } });
     if (!file) throw Object.assign(new Error("文件不存在"), { statusCode: 404, code: "NOT_FOUND" });
     const photoAllowed = (await Promise.all(file.personPhotos.map((person) => canAccessPerson(principal, person.id)))).some(Boolean);
     const signatureAllowed = (await Promise.all(file.signatures.map((signature) => canAccessPerson(principal, signature.personId)))).some(Boolean);
-    if (file.uploadedBy !== principal.accountId && !isCompanyAdmin(principal) && !photoAllowed && !signatureAllowed) forbidden("无权读取该私有文件");
+    const personCertificateAllowed = (await Promise.all(file.personCertificates.map((row) => canAccessPerson(principal, row.personId)))).some(Boolean);
+    const qualificationAllowed = (await Promise.all(file.organizationQualifications.map((row) => canAccessOrganization(principal, row.organizationId)))).some(Boolean);
+    if (file.uploadedBy !== principal.accountId && !isCompanyAdmin(principal) && !photoAllowed && !signatureAllowed && !personCertificateAllowed && !qualificationAllowed) forbidden("无权读取该私有文件");
     const content = await readFile(resolve(deps.env.UPLOAD_ROOT, file.storageKey));
     reply.header("Content-Type", file.mimeType).header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff")
       .header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(file.originalName)}`);
