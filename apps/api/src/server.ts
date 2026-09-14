@@ -20,6 +20,8 @@ import { registerPersonImportRoutes } from "./routes/person-import.js";
 import { registerSafetyManagementRoutes } from "./routes/safety-management.js";
 import { registerPhoneAuthRoutes } from "./routes/phone-auth.js";
 import { registerWechatWebAuthRoutes } from "./routes/wechat-web-auth.js";
+import { registerQualificationRoutes } from "./routes/qualifications.js";
+import { registerProjectReportingRoutes } from "./routes/project-reporting.js";
 
 const env = loadEnv();
 const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.code", "body.refreshToken", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
@@ -51,6 +53,8 @@ await registerWechatRoutes(app, { env, ...guards });
 await registerDay2Routes(app, { env, ...guards });
 await registerDay4Routes(app, { env, ...guards });
 await registerSafetyManagementRoutes(app, { env, ...guards });
+await registerQualificationRoutes(app, { env, authenticate: guards.authenticate });
+await registerProjectReportingRoutes(app, { authenticate: guards.authenticate });
 await registerPhoneAuthRoutes(app, { env });
 await registerWechatWebAuthRoutes(app, { env });
 

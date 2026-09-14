@@ -20,6 +20,7 @@ export async function registerFileRoutes(app: FastifyInstance, deps: { env: Env;
     if (!part) throw Object.assign(new Error("请选择文件"), { statusCode: 400, code: "FILE_REQUIRED" });
     if (kind === "photo" && !["image/jpeg", "image/png"].includes(part.mimetype)) throw Object.assign(new Error("照片只支持 JPEG/PNG"), { statusCode: 400, code: "INVALID_MIME" });
     if (kind === "signature" && part.mimetype !== "image/png") throw Object.assign(new Error("签字只支持 PNG"), { statusCode: 400, code: "INVALID_MIME" });
+    if (kind === "attachment" && !["application/pdf", "image/png", "image/jpeg", "image/webp"].includes(part.mimetype)) throw Object.assign(new Error("证照附件只支持 PDF/PNG/JPG/WebP"), { statusCode: 400, code: "INVALID_MIME" });
     if (kind === "courseware" && (part.mimetype !== "text/html" || !/\.html?$/i.test(part.filename))) throw Object.assign(new Error("HTML 课件只支持单个 .html 文件"), { statusCode: 400, code: "INVALID_MIME" });
     const buffer = await part.toBuffer();
     const key = `${new Date().getUTCFullYear()}/${randomUUID()}`;
@@ -35,13 +36,16 @@ export async function registerFileRoutes(app: FastifyInstance, deps: { env: Env;
   app.get("/api/files/:id", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!;
     const id = z.object({ id: z.string().uuid() }).parse(request.params).id;
-    const file = await prisma.privateFile.findUnique({ where: { id }, include: { personPhotos: { select: { id: true } }, signatures: { select: { personId: true } }, personCertificates: { select: { personId: true } }, organizationQualifications: { select: { organizationId: true } } } });
+    const file = await prisma.privateFile.findUnique({ where: { id }, include: { personPhotos: { select: { id: true } }, signatures: { select: { personId: true } }, personCertificates: { select: { personId: true } }, organizationQualifications: { select: { organizationId: true } }, certificateAttachments: { select: { personCertificate: { select: { personId: true } }, organizationQualification: { select: { organizationId: true } } } } } });
     if (!file) throw Object.assign(new Error("文件不存在"), { statusCode: 404, code: "NOT_FOUND" });
     const photoAllowed = (await Promise.all(file.personPhotos.map((person) => canAccessPerson(principal, person.id)))).some(Boolean);
     const signatureAllowed = (await Promise.all(file.signatures.map((signature) => canAccessPerson(principal, signature.personId)))).some(Boolean);
     const personCertificateAllowed = (await Promise.all(file.personCertificates.map((row) => canAccessPerson(principal, row.personId)))).some(Boolean);
     const qualificationAllowed = (await Promise.all(file.organizationQualifications.map((row) => canAccessOrganization(principal, row.organizationId)))).some(Boolean);
-    if (file.uploadedBy !== principal.accountId && !isCompanyAdmin(principal) && !photoAllowed && !signatureAllowed && !personCertificateAllowed && !qualificationAllowed) forbidden("无权读取该私有文件");
+    const attachmentAllowed = (await Promise.all(file.certificateAttachments.map(async (row) => row.personCertificate
+      ? canAccessPerson(principal, row.personCertificate.personId)
+      : row.organizationQualification ? canAccessOrganization(principal, row.organizationQualification.organizationId) : false))).some(Boolean);
+    if (file.uploadedBy !== principal.accountId && !isCompanyAdmin(principal) && !photoAllowed && !signatureAllowed && !personCertificateAllowed && !qualificationAllowed && !attachmentAllowed) forbidden("无权读取该私有文件");
     const content = await readFile(resolve(deps.env.UPLOAD_ROOT, file.storageKey));
     reply.header("Content-Type", file.mimeType).header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff")
       .header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(file.originalName)}`);

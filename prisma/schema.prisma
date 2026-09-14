@@ -154,6 +154,36 @@ enum MonthlyReportStatus {
   submitted
 }
 
+enum ReportProjectStatus {
+  active
+  completed
+}
+
+enum ReportFieldType {
+  text
+  number
+  textarea
+  select
+  date
+}
+
+enum CertificateCategory {
+  company
+  personal
+}
+
+enum CertificateLifecycleStatus {
+  active
+  replaced
+  revoked
+}
+
+enum CertificateTrainingStatus {
+  trained
+  not_required
+  pending
+}
+
 model Account {
   id              String           @id @default(uuid()) @db.Uuid
   username        String?          @unique @db.VarChar(80)
@@ -232,18 +262,20 @@ model RefreshSession {
 }
 
 model Organization {
-  id             String                      @id @default(uuid()) @db.Uuid
-  name           String                      @db.VarChar(120)
-  type           OrganizationType
-  parentId       String?                     @map("parent_id") @db.Uuid
-  parent         Organization?               @relation("OrganizationTree", fields: [parentId], references: [id])
-  children       Organization[]              @relation("OrganizationTree")
-  memberships    OrganizationMembership[]
-  projects       Project[]
-  qualifications OrganizationQualification[]
-  monthlyReports ProjectMonthlyReport[]
-  createdAt      DateTime                    @default(now()) @map("created_at")
-  updatedAt      DateTime                    @updatedAt @map("updated_at")
+  id                      String                      @id @default(uuid()) @db.Uuid
+  name                    String                      @db.VarChar(120)
+  type                    OrganizationType
+  parentId                String?                     @map("parent_id") @db.Uuid
+  reportingEnabled        Boolean                     @default(false) @map("reporting_enabled")
+  parent                  Organization?               @relation("OrganizationTree", fields: [parentId], references: [id])
+  children                Organization[]              @relation("OrganizationTree")
+  memberships             OrganizationMembership[]
+  projects                Project[]
+  qualifications          OrganizationQualification[]
+  monthlyReports          ProjectMonthlyReport[]
+  departmentMonthStatuses DepartmentMonthStatus[]
+  createdAt               DateTime                    @default(now()) @map("created_at")
+  updatedAt               DateTime                    @updatedAt @map("updated_at")
 
   @@unique([parentId, name])
   @@map("organizations")
@@ -326,6 +358,7 @@ model PrivateFile {
   signatures                 Signature[]
   personCertificates         PersonCertificate[]
   organizationQualifications OrganizationQualification[]
+  certificateAttachments     CertificateAttachment[]
   createdAt                  DateTime                    @default(now()) @map("created_at")
   updatedAt                  DateTime                    @updatedAt @map("updated_at")
 
@@ -333,76 +366,236 @@ model PrivateFile {
 }
 
 model PersonCertificate {
-  id                  String       @id @default(uuid()) @db.Uuid
-  personId            String       @map("person_id") @db.Uuid
-  person              Person       @relation(fields: [personId], references: [id])
-  name                String       @db.VarChar(160)
-  category            String?      @db.VarChar(80)
-  certificateNoCipher String?      @map("certificate_no_cipher")
-  certificateNoIv     String?      @map("certificate_no_iv")
-  certificateNoTag    String?      @map("certificate_no_tag")
-  certificateNoLast4  String?      @map("certificate_no_last4") @db.VarChar(8)
-  issuingAuthority    String?      @map("issuing_authority") @db.VarChar(160)
-  issuedAt            DateTime?    @map("issued_at") @db.Date
-  expiresAt           DateTime?    @map("expires_at") @db.Date
-  fileId              String?      @map("file_id") @db.Uuid
-  file                PrivateFile? @relation(fields: [fileId], references: [id])
-  active              Boolean      @default(true)
-  createdAt           DateTime     @default(now()) @map("created_at")
-  updatedAt           DateTime     @updatedAt @map("updated_at")
+  id                  String                      @id @default(uuid()) @db.Uuid
+  personId            String                      @map("person_id") @db.Uuid
+  person              Person                      @relation(fields: [personId], references: [id])
+  name                String                      @db.VarChar(160)
+  category            String?                     @db.VarChar(80)
+  typeId              String?                     @map("type_id") @db.Uuid
+  type                CertificateType?            @relation(fields: [typeId], references: [id])
+  subtype1Value       String?                     @map("subtype_1_value") @db.VarChar(120)
+  subtype2Value       String?                     @map("subtype_2_value") @db.VarChar(120)
+  certificateNoCipher String?                     @map("certificate_no_cipher")
+  certificateNoIv     String?                     @map("certificate_no_iv")
+  certificateNoTag    String?                     @map("certificate_no_tag")
+  certificateNoLast4  String?                     @map("certificate_no_last4") @db.VarChar(8)
+  issuingAuthority    String?                     @map("issuing_authority") @db.VarChar(160)
+  issuedAt            DateTime?                   @map("issued_at") @db.Date
+  validFrom           DateTime?                   @map("valid_from") @db.Date
+  expiresAt           DateTime?                   @map("expires_at") @db.Date
+  isLongTerm          Boolean                     @default(false) @map("is_long_term")
+  holderPosition      String?                     @map("holder_position") @db.VarChar(120)
+  status              CertificateLifecycleStatus  @default(active)
+  trainingStatus      CertificateTrainingStatus?  @default(pending) @map("training_status")
+  remark              String?                     @db.VarChar(2000)
+  renewedFromId       String?                     @map("renewed_from_id") @db.Uuid
+  renewedFrom         PersonCertificate?          @relation("PersonCertificateRenewal", fields: [renewedFromId], references: [id])
+  renewals            PersonCertificate[]         @relation("PersonCertificateRenewal")
+  renewedAt           DateTime?                   @map("renewed_at")
+  createdBy           String?                     @map("created_by") @db.Uuid
+  fileId              String?                     @map("file_id") @db.Uuid
+  file                PrivateFile?                @relation(fields: [fileId], references: [id])
+  attachments         CertificateAttachment[]
+  trainingRecords     CertificateTrainingRecord[]
+  active              Boolean                     @default(true)
+  createdAt           DateTime                    @default(now()) @map("created_at")
+  updatedAt           DateTime                    @updatedAt @map("updated_at")
 
   @@index([personId, active, expiresAt])
   @@map("person_certificates")
 }
 
 model OrganizationQualification {
-  id                  String       @id @default(uuid()) @db.Uuid
-  organizationId      String       @map("organization_id") @db.Uuid
-  organization        Organization @relation(fields: [organizationId], references: [id])
-  name                String       @db.VarChar(160)
-  category            String?      @db.VarChar(80)
-  certificateNoCipher String?      @map("certificate_no_cipher")
-  certificateNoIv     String?      @map("certificate_no_iv")
-  certificateNoTag    String?      @map("certificate_no_tag")
-  certificateNoLast4  String?      @map("certificate_no_last4") @db.VarChar(8)
-  issuingAuthority    String?      @map("issuing_authority") @db.VarChar(160)
-  issuedAt            DateTime?    @map("issued_at") @db.Date
-  expiresAt           DateTime?    @map("expires_at") @db.Date
+  id                  String                      @id @default(uuid()) @db.Uuid
+  organizationId      String                      @map("organization_id") @db.Uuid
+  organization        Organization                @relation(fields: [organizationId], references: [id])
+  name                String                      @db.VarChar(160)
+  category            String?                     @db.VarChar(80)
+  typeId              String?                     @map("type_id") @db.Uuid
+  type                CertificateType?            @relation(fields: [typeId], references: [id])
+  subtype1Value       String?                     @map("subtype_1_value") @db.VarChar(120)
+  subtype2Value       String?                     @map("subtype_2_value") @db.VarChar(120)
+  certificateNoCipher String?                     @map("certificate_no_cipher")
+  certificateNoIv     String?                     @map("certificate_no_iv")
+  certificateNoTag    String?                     @map("certificate_no_tag")
+  certificateNoLast4  String?                     @map("certificate_no_last4") @db.VarChar(8)
+  issuingAuthority    String?                     @map("issuing_authority") @db.VarChar(160)
+  issuedAt            DateTime?                   @map("issued_at") @db.Date
+  validFrom           DateTime?                   @map("valid_from") @db.Date
+  expiresAt           DateTime?                   @map("expires_at") @db.Date
+  isLongTerm          Boolean                     @default(false) @map("is_long_term")
+  status              CertificateLifecycleStatus  @default(active)
+  remark              String?                     @db.VarChar(2000)
+  renewedFromId       String?                     @map("renewed_from_id") @db.Uuid
+  renewedFrom         OrganizationQualification?  @relation("OrganizationQualificationRenewal", fields: [renewedFromId], references: [id])
+  renewals            OrganizationQualification[] @relation("OrganizationQualificationRenewal")
+  renewedAt           DateTime?                   @map("renewed_at")
+  createdBy           String?                     @map("created_by") @db.Uuid
   scope               String?
-  fileId              String?      @map("file_id") @db.Uuid
-  file                PrivateFile? @relation(fields: [fileId], references: [id])
-  active              Boolean      @default(true)
-  createdAt           DateTime     @default(now()) @map("created_at")
-  updatedAt           DateTime     @updatedAt @map("updated_at")
+  fileId              String?                     @map("file_id") @db.Uuid
+  file                PrivateFile?                @relation(fields: [fileId], references: [id])
+  attachments         CertificateAttachment[]
+  active              Boolean                     @default(true)
+  createdAt           DateTime                    @default(now()) @map("created_at")
+  updatedAt           DateTime                    @updatedAt @map("updated_at")
 
   @@index([organizationId, active, expiresAt])
   @@map("organization_qualifications")
 }
 
+model CertificateType {
+  id                         String                      @id @default(uuid()) @db.Uuid
+  name                       String                      @unique @db.VarChar(160)
+  category                   CertificateCategory
+  subtype1Label              String?                     @map("subtype_1_label") @db.VarChar(80)
+  subtype1Options            Json                        @default("[]") @map("subtype_1_options")
+  subtype2Label              String?                     @map("subtype_2_label") @db.VarChar(80)
+  subtype2Options            Json                        @default("[]") @map("subtype_2_options")
+  sortOrder                  Int                         @default(0) @map("sort_order")
+  active                     Boolean                     @default(true)
+  personCertificates         PersonCertificate[]
+  organizationQualifications OrganizationQualification[]
+  createdAt                  DateTime                    @default(now()) @map("created_at")
+  updatedAt                  DateTime                    @updatedAt @map("updated_at")
+
+  @@index([category, active, sortOrder])
+  @@map("certificate_types")
+}
+
+model CertificateAttachment {
+  id                          String                     @id @default(uuid()) @db.Uuid
+  fileId                      String                     @map("file_id") @db.Uuid
+  file                        PrivateFile                @relation(fields: [fileId], references: [id])
+  personCertificateId         String?                    @map("person_certificate_id") @db.Uuid
+  personCertificate           PersonCertificate?         @relation(fields: [personCertificateId], references: [id])
+  organizationQualificationId String?                    @map("organization_qualification_id") @db.Uuid
+  organizationQualification   OrganizationQualification? @relation(fields: [organizationQualificationId], references: [id])
+  createdBy                   String                     @map("created_by") @db.Uuid
+  createdAt                   DateTime                   @default(now()) @map("created_at")
+  updatedAt                   DateTime                   @updatedAt @map("updated_at")
+
+  @@unique([fileId])
+  @@map("certificate_attachments")
+}
+
+model CertificateTrainingRecord {
+  id                   String            @id @default(uuid()) @db.Uuid
+  personCertificateId  String            @map("person_certificate_id") @db.Uuid
+  personCertificate    PersonCertificate @relation(fields: [personCertificateId], references: [id])
+  year                 Int
+  trainingDate         DateTime          @map("training_date") @db.Date
+  content              String            @db.VarChar(1000)
+  trainingOrganization String?           @map("training_organization") @db.VarChar(160)
+  hours                Decimal?          @db.Decimal(6, 2)
+  result               String?           @db.VarChar(120)
+  remark               String?           @db.VarChar(1000)
+  createdBy            String            @map("created_by") @db.Uuid
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
+
+  @@index([personCertificateId, year])
+  @@map("certificate_training_records")
+}
+
+model CertificateSetting {
+  id        String   @id @default("default") @db.VarChar(32)
+  warnDays  Int      @default(90) @map("warn_days")
+  updatedBy String?  @map("updated_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("certificate_settings")
+}
+
 model ProjectMonthlyReport {
-  id                      String              @id @default(uuid()) @db.Uuid
-  projectId               String              @map("project_id") @db.Uuid
-  project                 Project             @relation(fields: [projectId], references: [id])
-  reportingOrganizationId String              @map("reporting_organization_id") @db.Uuid
-  reportingOrganization   Organization        @relation(fields: [reportingOrganizationId], references: [id])
-  reportMonth             DateTime            @map("report_month") @db.Date
-  status                  MonthlyReportStatus @default(draft)
-  progressSummary         String              @map("progress_summary")
-  onsiteCount             Int                 @default(0) @map("onsite_count")
-  safetyHazardCount       Int                 @default(0) @map("safety_hazard_count")
-  rectifiedHazardCount    Int                 @default(0) @map("rectified_hazard_count")
-  safetyInvestment        Decimal             @default(0) @map("safety_investment") @db.Decimal(14, 2)
-  incidentCount           Int                 @default(0) @map("incident_count")
-  notes                   String?
-  submittedBy             String?             @map("submitted_by") @db.Uuid
-  submittedAt             DateTime?           @map("submitted_at")
-  updatedBy               String              @map("updated_by") @db.Uuid
-  createdAt               DateTime            @default(now()) @map("created_at")
-  updatedAt               DateTime            @updatedAt @map("updated_at")
+  id                        String              @id @default(uuid()) @db.Uuid
+  projectId                 String              @map("project_id") @db.Uuid
+  project                   Project             @relation(fields: [projectId], references: [id])
+  reportingOrganizationId   String              @map("reporting_organization_id") @db.Uuid
+  reportingOrganization     Organization        @relation(fields: [reportingOrganizationId], references: [id])
+  reportMonth               DateTime            @map("report_month") @db.Date
+  status                    MonthlyReportStatus @default(draft)
+  progressSummary           String              @map("progress_summary")
+  projectTypeId             String?             @map("project_type_id") @db.Uuid
+  projectType               ReportProjectType?  @relation(fields: [projectTypeId], references: [id])
+  constructionLocation      String?             @map("construction_location") @db.VarChar(300)
+  contractAmount            Decimal             @default(0) @map("contract_amount") @db.Decimal(14, 2)
+  durationMonths            Int?                @map("duration_months")
+  departmentEntity          String?             @map("department_entity") @db.VarChar(160)
+  projectManager            String?             @map("project_manager") @db.VarChar(80)
+  contactInfo               String?             @map("contact_info") @db.VarChar(120)
+  overallProgress           String?             @map("overall_progress")
+  monthlyConstructionStatus String?             @map("monthly_construction_status")
+  equipmentModels           String?             @map("equipment_models")
+  onsiteCount               Int                 @default(0) @map("onsite_count")
+  onsiteVehicles            Int                 @default(0) @map("onsite_vehicles")
+  safetyInspection          Boolean             @default(false) @map("safety_inspection")
+  safetyHazards             Boolean             @default(false) @map("safety_hazards")
+  safetyHazardDetail        String?             @map("safety_hazard_detail")
+  safetyHazardCount         Int                 @default(0) @map("safety_hazard_count")
+  rectifiedHazardCount      Int                 @default(0) @map("rectified_hazard_count")
+  safetyInvestment          Decimal             @default(0) @map("safety_investment") @db.Decimal(14, 2)
+  incidentCount             Int                 @default(0) @map("incident_count")
+  notes                     String?
+  projectStatus             ReportProjectStatus @default(active) @map("project_status")
+  customData                Json                @default("{}") @map("custom_data")
+  submittedBy               String?             @map("submitted_by") @db.Uuid
+  submittedAt               DateTime?           @map("submitted_at")
+  updatedBy                 String              @map("updated_by") @db.Uuid
+  createdAt                 DateTime            @default(now()) @map("created_at")
+  updatedAt                 DateTime            @updatedAt @map("updated_at")
 
   @@unique([projectId, reportMonth])
   @@index([reportingOrganizationId, reportMonth])
   @@map("project_monthly_reports")
+}
+
+model ReportProjectType {
+  id        String                 @id @default(uuid()) @db.Uuid
+  name      String                 @unique @db.VarChar(160)
+  sortOrder Int                    @default(0) @map("sort_order")
+  active    Boolean                @default(true)
+  reports   ProjectMonthlyReport[]
+  createdAt DateTime               @default(now()) @map("created_at")
+  updatedAt DateTime               @updatedAt @map("updated_at")
+
+  @@index([active, sortOrder])
+  @@map("report_project_types")
+}
+
+model ReportField {
+  id        String          @id @default(uuid()) @db.Uuid
+  fieldKey  String          @unique @map("field_key") @db.VarChar(80)
+  label     String          @db.VarChar(120)
+  fieldType ReportFieldType @map("field_type")
+  options   Json            @default("[]")
+  required  Boolean         @default(false) @map("is_required")
+  sortOrder Int             @default(0) @map("sort_order")
+  active    Boolean         @default(true) @map("is_active")
+  builtin   Boolean         @default(false) @map("is_builtin")
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @updatedAt @map("updated_at")
+
+  @@index([active, sortOrder])
+  @@map("report_fields")
+}
+
+model DepartmentMonthStatus {
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @map("organization_id") @db.Uuid
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  reportingYear   Int          @map("reporting_year")
+  reportingMonth  Int          @map("reporting_month")
+  noFieldProjects Boolean      @default(true) @map("no_field_projects")
+  confirmedAt     DateTime     @default(now()) @map("confirmed_at")
+  confirmedBy     String       @map("confirmed_by") @db.Uuid
+  note            String?      @db.VarChar(1000)
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@unique([organizationId, reportingYear, reportingMonth])
+  @@index([reportingYear, reportingMonth])
+  @@map("department_month_statuses")
 }
 
 model PhoneVerificationCode {
