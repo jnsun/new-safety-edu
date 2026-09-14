@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert, App as AntApp, Button, Card, Collapse, Form, Input, Layout, Menu, message, Modal, Select, Space, Table, Tabs, Tag, Typography, Upload
 } from "antd";
-import { DashboardOutlined, TeamOutlined, ApartmentOutlined, ReadOutlined, FileDoneOutlined, ScheduleOutlined, LineChartOutlined, SettingOutlined, UploadOutlined, SafetyCertificateOutlined, CalendarOutlined, WechatOutlined } from "@ant-design/icons";
+import { DashboardOutlined, TeamOutlined, ApartmentOutlined, ReadOutlined, FileDoneOutlined, ScheduleOutlined, LineChartOutlined, SettingOutlined, UploadOutlined, SafetyCertificateOutlined, CalendarOutlined, WechatOutlined, SearchOutlined } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
 import { CoursewarePage, QuestionsPage, TrainingPage } from "./Day2Pages";
@@ -148,12 +148,30 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
     <Modal title={`${memberProject?.name ?? "项目"} · 成员`} open={!!memberProject} footer={null} onCancel={() => setMemberProject(undefined)}><Form layout="inline" onFinish={async (v) => { await api(`/api/projects/${memberProject!.id}/members`, json("POST", v)); void members.refetch(); void qc.invalidateQueries({ queryKey: ["projects"] }); }}><Form.Item name="personId" rules={[{ required: true }]}><Select style={{ width: 220 }} placeholder="选择人员" options={(people.data ?? []).map((p) => ({ value: p.id, label: p.name }))} /></Form.Item><Button type="primary" htmlType="submit">加入项目</Button></Form><Table style={{ marginTop: 16 }} rowKey="id" pagination={false} dataSource={members.data} columns={[{ title: "姓名", render: (_: unknown, row: { id: string; status: string; person: Person }) => row.person.name }, { title: "状态", dataIndex: "status", render: (v: string) => labels[v] ?? v }, { title: "审核", render: (_: unknown, row: { id: string; status: string; person: Person }) => row.status === "pending" ? <Space><Button type="primary" size="small" onClick={async () => { await api(`/api/project-members/${row.id}/review`, json("PATCH", { status: "active" })); void members.refetch(); }}>通过</Button><Button danger size="small" onClick={async () => { await api(`/api/project-members/${row.id}/review`, json("PATCH", { status: "rejected", note: "不符合当前项目关系" })); void members.refetch(); }}>驳回</Button></Space> : null }]} /></Modal></>;
 }
 
+const platformModules = [
+  { title: "培训教育", description: "人员学习、考试、签字与培训档案", path: "/training-dashboard", icon: <DashboardOutlined />, tone: "blue" },
+  { title: "野外项目报送", description: "按项目、月份填报安全生产月报", path: "/monthly-reports", icon: <CalendarOutlined />, tone: "green" },
+  { title: "资质证照管理", description: "人员证书、单位资质与到期时间", path: "/qualifications", icon: <SafetyCertificateOutlined />, tone: "orange" },
+  { title: "安全责任制", description: "岗位安全职责与责任落实记录", path: null, icon: <TeamOutlined />, tone: "purple" },
+  { title: "风险分级管控", description: "风险辨识、分级和管控措施", path: null, icon: <LineChartOutlined />, tone: "cyan" },
+  { title: "隐患排查治理", description: "隐患登记、整改和复查记录", path: null, icon: <SearchOutlined />, tone: "indigo" },
+  { title: "安全检查", description: "日常检查、专项检查与检查记录", path: null, icon: <FileDoneOutlined />, tone: "red" },
+  { title: "应急管理", description: "预案、演练和应急处置记录", path: null, icon: <ScheduleOutlined />, tone: "teal" },
+  { title: "事故事件管理", description: "事故、未遂事件和调查记录", path: null, icon: <SettingOutlined />, tone: "slate" }
+] as const;
+
+function PlatformPortal() {
+  const navigate = useNavigate();
+  return <><div className="portal-heading"><Typography.Text className="portal-eyebrow">物化院有限公司</Typography.Text><Typography.Title level={2}>安全生产管理平台</Typography.Title><Typography.Paragraph type="secondary">请选择需要进入的业务模块</Typography.Paragraph></div>
+    <div className="module-grid">{platformModules.map((item) => <button type="button" className={`module-card module-${item.tone}${item.path ? "" : " module-planned"}`} key={item.title} onClick={() => item.path ? navigate(item.path) : message.info(`${item.title}暂定为后续模块，功能尚未启用`)}><span className="module-icon">{item.icon}</span><span className="module-title">{item.title}</span><span className="module-description">{item.description}</span><span className="module-enter">{item.path ? "进入模块 ›" : "待规划"}</span></button>)}</div></>;
+}
+
 function Shell({ principal }: { principal: Principal }) {
   const navigate = useNavigate(); const location = useLocation(); const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(() => location.pathname === "/" ? "/" : `/${location.pathname.split("/")[1]}`, [location.pathname]);
   return <><Layout className="app-shell"><Layout.Sider width={228} breakpoint="lg" collapsedWidth="0" theme="light"><div className="brand"><div className="brand-mark">安</div><div className="brand-copy">物化院<small>安全生产管理平台</small></div></div><Menu mode="inline" selectedKeys={[selected]} items={menuItems} onClick={({ key }) => navigate(key)} /></Layout.Sider>
     <Layout><Layout.Header className="topbar"><span className="topbar-title">安全生产管理工作台</span><Space><Tag>{principal.roles.map((r) => labels[r.role] ?? r.role).join(" / ") || "无角色"}</Tag><Button onClick={() => setPasswordOpen(true)}>修改密码</Button><Button onClick={async () => { await api("/api/auth/logout", { method: "POST" }); navigate("/login"); }}>退出</Button></Space></Layout.Header>
-      <Layout.Content className="content"><Routes><Route path="/" element={<DashboardPage />} /><Route path="/people" element={<People canImport={principal.roles.some((role) => role.role === "company_admin")} />} /><Route path="/organization" element={<OrganizationProjects principal={principal} />} /><Route path="/courseware" element={<CoursewarePage />} /><Route path="/questions" element={<QuestionsPage />} /><Route path="/training" element={<TrainingPage />} /><Route path="/records" element={<RecordsPage />} /><Route path="/reports" element={<ReportsPage />} /><Route path="/monthly-reports" element={<MonthlyReportsPage />} /><Route path="/qualifications" element={<QualificationsPage />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></Layout.Content></Layout></Layout>
+      <Layout.Content className="content"><Routes><Route path="/" element={<PlatformPortal />} /><Route path="/training-dashboard" element={<DashboardPage />} /><Route path="/people" element={<People canImport={principal.roles.some((role) => role.role === "company_admin")} />} /><Route path="/organization" element={<OrganizationProjects principal={principal} />} /><Route path="/courseware" element={<CoursewarePage />} /><Route path="/questions" element={<QuestionsPage />} /><Route path="/training" element={<TrainingPage />} /><Route path="/records" element={<RecordsPage />} /><Route path="/reports" element={<ReportsPage />} /><Route path="/monthly-reports" element={<MonthlyReportsPage />} /><Route path="/qualifications" element={<QualificationsPage />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></Layout.Content></Layout></Layout>
     <Modal title="修改密码" open={passwordOpen} footer={null} onCancel={() => setPasswordOpen(false)} destroyOnClose><Form layout="vertical" onFinish={async (values) => { try { await api("/api/auth/change-password", json("POST", values)); message.success("密码已修改，请重新登录"); setPasswordOpen(false); navigate("/login"); } catch (error) { message.error((error as Error).message); } }}><Form.Item name="currentPassword" label="当前密码" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item><Form.Item name="newPassword" label="新密码" rules={[{ required: true, min: 12 }]}><Input.Password autoComplete="new-password" /></Form.Item><Form.Item name="confirmPassword" label="确认新密码" dependencies={["newPassword"]} rules={[{ required: true }, ({ getFieldValue }) => ({ validator: (_, value) => value === getFieldValue("newPassword") ? Promise.resolve() : Promise.reject(new Error("两次输入的密码不一致")) })]}><Input.Password autoComplete="new-password" /></Form.Item><Button type="primary" htmlType="submit">确认修改</Button></Form></Modal></>;
 }
 
