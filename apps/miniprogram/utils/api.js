@@ -16,6 +16,17 @@ function rawRequest(path, method, data, token) {
 function saveSession(data) {
   wx.setStorageSync('accessToken', data.accessToken)
   wx.setStorageSync('refreshToken', data.refreshToken)
+  wx.removeStorageSync('loggedOut')
+}
+
+function clearSession() {
+  wx.removeStorageSync('accessToken')
+  wx.removeStorageSync('refreshToken')
+  wx.setStorageSync('loggedOut', true)
+}
+
+async function logout() {
+  try { await request('/api/auth/logout', 'POST') } finally { clearSession() }
 }
 
 async function request(path, method = 'GET', data) {
@@ -42,6 +53,13 @@ function upload(filePath, kind) {
   }))
 }
 
+function download(path) {
+  return new Promise((resolve, reject) => wx.downloadFile({
+    url: apiUrl(path), header: { Authorization: `Bearer ${wx.getStorageSync('accessToken')}` },
+    success(response) { if (response.statusCode >= 200 && response.statusCode < 300) resolve(response.tempFilePath); else reject(new Error('文件读取失败')); }, fail: reject
+  }))
+}
+
 const uploadPhoto = (filePath) => upload(filePath, 'photo')
 const uploadSignature = (filePath) => upload(filePath, 'signature')
-module.exports = { request, publicRequest, saveSession, uploadPhoto, uploadSignature }
+module.exports = { request, publicRequest, saveSession, clearSession, logout, uploadPhoto, uploadSignature, download }

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
@@ -8,6 +9,11 @@ import { audit } from "../audit.js";
 import { accessibleOrganizationIds, canAccessOrganization, canAccessPerson, canAccessProject, forbidden, isCompanyAdmin, projectScopeIds } from "../access.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+
+const requestContentKey = (row: { accountId: string | null; personId: string | null; projectId: string | null; type: string; payload: Prisma.JsonValue }) => {
+  const payload = row.payload as Record<string, unknown>;
+  return [row.accountId, row.personId, row.projectId, row.type, payload.name, payload.phone, payload.type, payload.organizationId, payload.reason].map((value) => String(value ?? "")).join("|");
+};
 
 async function wechatSession(code: string, env: Env): Promise<{ openid: string; unionid?: string }> {
   if (env.NODE_ENV === "development" && code.startsWith("dev:")) return { openid: `dev-${code.slice(4) || "user"}` };
@@ -54,6 +60,17 @@ async function bindPerson(currentAccountId: string, personId: string) {
   });
 }
 
+async function pendingBindingRequest(accountId: string, phone: string, matchCount: number) {
+  const existing = await prisma.changeRequest.findFirst({ where: { accountId, type: "binding", status: "pending", payload: { path: ["phone"], equals: phone } }, orderBy: { createdAt: "desc" } });
+  if (existing) return existing;
+  try {
+    return await prisma.changeRequest.create({ data: { accountId, type: "binding", payload: { phone, matchCount } } });
+  } catch (error) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+    return prisma.changeRequest.findFirstOrThrow({ where: { accountId, type: "binding", status: "pending", payload: { path: ["phone"], equals: phone } }, orderBy: { createdAt: "desc" } });
+  }
+}
+
 export async function registerWechatRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard; requireManager: Guard }) {
   app.get("/api/wechat/subscription-config", { preHandler: deps.authenticate }, async () => ({ data: {
     templateIds: [...new Set([deps.env.WECHAT_SUBSCRIBE_TEMPLATE_TASK, deps.env.WECHAT_SUBSCRIBE_TEMPLATE_DUE].filter((value): value is string => Boolean(value)))]
@@ -86,6 +103,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
 
   app.get("/api/wechat/registration-options", { preHandler: deps.authenticate }, async () => ({ data: {
     organizations: await prisma.organization.findMany({ where: { type: { in: ["department", "contractor"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    departments: await prisma.organization.findMany({ where: { type: { in: ["business_entity", "department"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     projects: await prisma.project.findMany({ where: { status: "active" }, select: { id: true, name: true }, orderBy: { name: "asc" } })
   } }));
 
@@ -100,8 +118,23 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       audit(targetId, "wechat.auto_bind", "person", matches[0]!.id);
       return { data: { status: "bound", ...(await issueSession(targetId, deps.env)) } };
     }
-    const requestRow = await prisma.changeRequest.create({ data: { accountId, type: "binding", payload: { phone, matchCount: matches.length } } });
+    const requestRow = await pendingBindingRequest(accountId, phone, matches.length);
     return { data: { status: "pending_review", requestId: requestRow.id } };
+  });
+
+  app.put("/api/wechat/binding-requests/:id/profile", { preHandler: deps.authenticate }, async (request) => {
+    const id = z.object({ id: z.string().uuid() }).parse(request.params).id;
+    const input = z.object({ name: z.string().trim().min(2).max(80), organizationId: z.string().uuid(), reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    const [row, organization] = await Promise.all([
+      prisma.changeRequest.findFirst({ where: { id, accountId: request.principal!.accountId, type: "binding", status: "pending" } }),
+      prisma.organization.findFirst({ where: { id: input.organizationId, type: { in: ["business_entity", "department"] } }, select: { id: true } })
+    ]);
+    if (!row) forbidden("只能补充本人当前待审核的绑定申请");
+    if (!organization) throw Object.assign(new Error("所选部门不存在或不可申请"), { statusCode: 400, code: "INVALID_ORGANIZATION" });
+    const payload = row.payload as Record<string, unknown>;
+    await prisma.changeRequest.update({ where: { id }, data: { payload: { ...payload, name: input.name, organizationId: input.organizationId, reason: input.reason } } });
+    audit(request.principal!.accountId, "binding.profile_submitted", "change_request", id, { organizationId: input.organizationId });
+    return { data: { id, status: "pending" } };
   });
 
   app.post("/api/wechat/registration-requests", { preHandler: deps.authenticate }, async (request, reply) => {
@@ -110,9 +143,15 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       type: z.enum(["contractor", "temporary_individual"]), organizationId: z.string().uuid(), projectId: z.string().uuid(),
       nationalId: z.string().trim().min(6).max(30), photoFileId: z.string().uuid()
     }).parse(request.body);
+    const accountId = request.principal!.accountId;
+    const existing = (await prisma.changeRequest.findMany({ where: { accountId, projectId: input.projectId, type: "registration", status: "pending" }, orderBy: { createdAt: "desc" } })).find((row) => {
+      const payload = row.payload as Record<string, unknown>;
+      return payload.name === input.name && payload.phone === input.phone && payload.type === input.type && payload.organizationId === input.organizationId;
+    });
+    if (existing) return { data: { id: existing.id, status: existing.status } };
     const encrypted = encryptNationalId(input.nationalId, deps.env);
     const row = await prisma.changeRequest.create({ data: {
-      accountId: request.principal!.accountId, projectId: input.projectId, type: "registration",
+      accountId, projectId: input.projectId, type: "registration",
       payload: { name: input.name, phone: input.phone, type: input.type, organizationId: input.organizationId, photoFileId: input.photoFileId, ...encrypted }
     } });
     return reply.code(201).send({ data: { id: row.id, status: row.status } });
@@ -120,12 +159,16 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
 
   app.get("/api/binding-requests", { preHandler: [deps.authenticate, deps.requireManager] }, async (request) => {
     const principal = request.principal!; const orgIds = new Set(await accessibleOrganizationIds(principal)); const projectIds = new Set(projectScopeIds(principal));
-    const candidates = await prisma.changeRequest.findMany({ where: { status: "pending", type: { in: ["binding", "registration"] } }, orderBy: { createdAt: "asc" } });
-    const rows = isCompanyAdmin(principal) ? candidates : candidates.filter((row) => (row.projectId && projectIds.has(row.projectId)) || (row.type === "registration" && orgIds.has(String((row.payload as Record<string, unknown>).organizationId ?? ""))));
+    const candidates = await prisma.changeRequest.findMany({ where: { status: "pending", type: { in: ["binding", "registration"] } }, orderBy: { createdAt: "desc" } });
+    const seen = new Set<string>(); const uniqueCandidates = candidates.filter((row) => { const key = requestContentKey(row); if (seen.has(key)) return false; seen.add(key); return true; });
+    const rows = isCompanyAdmin(principal) ? uniqueCandidates : uniqueCandidates.filter((row) => (row.projectId && projectIds.has(row.projectId)) || orgIds.has(String((row.payload as Record<string, unknown>).organizationId ?? "")));
+    const organizationIds = [...new Set(rows.map((row) => String((row.payload as Record<string, unknown>).organizationId ?? "")).filter(Boolean))];
+    const organizationNames = new Map((await prisma.organization.findMany({ where: { id: { in: organizationIds } }, select: { id: true, name: true } })).map((row) => [row.id, row.name]));
     return { data: rows.map(({ payload, ...row }) => {
       const value = payload as Record<string, unknown>;
       const phone = typeof value.phone === "string" ? `${value.phone.slice(0, 3)}****${value.phone.slice(-4)}` : undefined;
-      return { ...row, payload: { ...(typeof value.name === "string" ? { name: value.name } : {}), ...(phone ? { phone } : {}), ...(typeof value.type === "string" ? { type: value.type } : {}), matchCount: value.matchCount } };
+      const organizationId = typeof value.organizationId === "string" ? value.organizationId : undefined;
+      return { ...row, payload: { ...(typeof value.name === "string" ? { name: value.name } : {}), ...(phone ? { phone } : {}), ...(typeof value.type === "string" ? { type: value.type } : {}), ...(typeof value.reason === "string" ? { reason: value.reason } : {}), ...(organizationId ? { organizationId, organizationName: organizationNames.get(organizationId) } : {}), matchCount: value.matchCount } };
     }) };
   });
 

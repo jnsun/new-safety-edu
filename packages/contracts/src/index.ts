@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const roleNames = ["company_admin", "org_admin", "project_admin", "learner"] as const;
+export const roleNames = ["company_admin", "org_leader", "org_admin", "field_reporter", "project_admin", "learner"] as const;
 export const personTypes = ["employee", "contractor", "temporary_individual"] as const;
 export const personStatuses = ["pending", "active", "disabled"] as const;
 export const projectStatuses = ["active", "paused", "ended"] as const;
@@ -31,7 +31,7 @@ export const roleAssignmentCreateSchema = z.object({
   scopeType: z.enum(["company", "organization", "project", "person"]),
   scopeId: z.string().uuid().nullable().optional()
 }).superRefine((value, context) => {
-  const expected = { company_admin: "company", org_admin: "organization", project_admin: "project", learner: "person" }[value.role];
+  const expected = { company_admin: "company", org_leader: "organization", org_admin: "organization", field_reporter: "organization", project_admin: "project", learner: "person" }[value.role];
   if (value.scopeType !== expected || (value.scopeType === "company" ? value.scopeId != null : !value.scopeId)) {
     context.addIssue({ code: "custom", message: "角色与 scope 类型不匹配" });
   }

@@ -15,9 +15,13 @@ export function encryptNationalId(value: string, env: Env) {
     nationalIdCipher: ciphertext.toString("base64"),
     nationalIdIv: iv.toString("base64"),
     nationalIdTag: cipher.getAuthTag().toString("base64"),
-    nationalIdHash: createHmac("sha256", key).update(normalized).digest("hex"),
+    nationalIdHash: hashNationalId(normalized, env),
     nationalIdLast4: normalized.slice(-4).padStart(4, "*")
   };
+}
+
+export function hashNationalId(value: string, env: Env): string {
+  return createHmac("sha256", Buffer.from(env.FIELD_ENCRYPTION_KEY, "base64")).update(value.trim().toUpperCase()).digest("hex");
 }
 
 export function decryptNationalId(ciphertext: string, iv: string, tag: string, env: Env): string {

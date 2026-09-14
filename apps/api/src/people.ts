@@ -1,6 +1,6 @@
 import type { PersonType, Prisma } from "@prisma/client";
 import type { Principal } from "./auth.js";
-import { canAccessOrganization, forbidden } from "./access.js";
+import { canAccessOrganization, forbidden, isCompanyAdmin } from "./access.js";
 import { encryptNationalId, normalizePhone } from "./crypto.js";
 import type { Env } from "./env.js";
 import { prisma } from "./db.js";
@@ -9,9 +9,9 @@ export type PersonInput = {
   name: string;
   phone: string;
   type: PersonType;
-  organizationId: string;
-  nationalId: string;
-  photoFileId: string;
+  organizationId?: string;
+  nationalId?: string;
+  photoFileId?: string;
 };
 
 const safeSelect = {
@@ -21,20 +21,20 @@ const safeSelect = {
 } satisfies Prisma.PersonSelect;
 
 export async function createPerson(input: PersonInput, principal: Principal, env: Env, tx: Prisma.TransactionClient | typeof prisma = prisma) {
-  if (!await canAccessOrganization(principal, input.organizationId)) forbidden();
+  if (input.organizationId ? !await canAccessOrganization(principal, input.organizationId) : !isCompanyAdmin(principal)) forbidden();
   const phone = normalizePhone(input.phone);
   if (!/^1\d{10}$/.test(phone)) throw Object.assign(new Error("手机号格式错误"), { statusCode: 400, code: "INVALID_PHONE" });
   const [duplicate, photo] = await Promise.all([
     tx.person.findFirst({ where: { phone, status: "active" }, select: { id: true } }),
-    tx.privateFile.findUnique({ where: { id: input.photoFileId }, select: { kind: true } })
+    input.photoFileId ? tx.privateFile.findUnique({ where: { id: input.photoFileId }, select: { kind: true } }) : null
   ]);
   if (duplicate) throw Object.assign(new Error("该手机号已有在用人员档案"), { statusCode: 409, code: "PHONE_EXISTS" });
-  if (photo?.kind !== "photo") throw Object.assign(new Error("必须选择已上传的个人照片"), { statusCode: 400, code: "PHOTO_REQUIRED" });
-  const encrypted = encryptNationalId(input.nationalId, env);
+  if (input.photoFileId && photo?.kind !== "photo") throw Object.assign(new Error("所选文件不是个人照片"), { statusCode: 400, code: "INVALID_PHOTO" });
+  const encrypted = input.nationalId ? encryptNationalId(input.nationalId, env) : {};
   return tx.person.create({
     data: {
-      name: input.name.trim(), phone, type: input.type, status: "active", photoFileId: input.photoFileId, ...encrypted,
-      organizations: { create: { organizationId: input.organizationId, primary: true } }
+      name: input.name.trim(), phone, type: input.type, status: "active", ...(input.photoFileId ? { photoFileId: input.photoFileId } : {}), ...encrypted,
+      ...(input.organizationId ? { organizations: { create: { organizationId: input.organizationId, primary: true } } } : {})
     },
     select: safeSelect
   });

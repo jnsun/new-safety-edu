@@ -34,7 +34,9 @@ enum OrganizationType {
 
 enum RoleName {
   company_admin
+  org_leader
   org_admin
+  field_reporter
   project_admin
   learner
 }
@@ -129,12 +131,15 @@ enum ChangeRequestType {
   profile_change
   registration
   binding_change
+  department_transfer
 }
 
 enum ChangeRequestStatus {
   pending
   approved
   rejected
+  duplicate
+  cancelled
 }
 
 enum OutboxStatus {
@@ -168,13 +173,13 @@ model Person {
   phone              String                   @db.VarChar(20)
   type               PersonType
   status             PersonStatus             @default(pending)
-  nationalIdCipher   String                   @map("national_id_cipher")
-  nationalIdIv       String                   @map("national_id_iv")
-  nationalIdTag      String                   @map("national_id_tag")
-  nationalIdHash     String                   @map("national_id_hash") @db.VarChar(64)
-  nationalIdLast4    String                   @map("national_id_last4") @db.Char(4)
-  photoFileId        String                   @map("photo_file_id") @db.Uuid
-  photoFile          PrivateFile              @relation("PersonPhoto", fields: [photoFileId], references: [id])
+  nationalIdCipher   String?                  @map("national_id_cipher")
+  nationalIdIv       String?                  @map("national_id_iv")
+  nationalIdTag      String?                  @map("national_id_tag")
+  nationalIdHash     String?                  @map("national_id_hash") @db.VarChar(64)
+  nationalIdLast4    String?                  @map("national_id_last4") @db.Char(4)
+  photoFileId        String?                  @map("photo_file_id") @db.Uuid
+  photoFile          PrivateFile?             @relation("PersonPhoto", fields: [photoFileId], references: [id])
   account            Account?
   organizations      OrganizationMembership[]
   projectMemberships ProjectMember[]

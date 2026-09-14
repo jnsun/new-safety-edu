@@ -49,7 +49,7 @@ export function authHandlers(env: Env) {
       request.principal = { accountId: account.id, personId: account.personId, roles: account.roles };
     },
     async requireManager(request: FastifyRequest, _reply: FastifyReply) {
-      if (!request.principal?.roles.some(({ role }) => role !== "learner")) {
+      if (!request.principal?.roles.some(({ role }) => ["company_admin", "org_leader", "org_admin", "project_admin"].includes(role))) {
         throw Object.assign(new Error("无管理权限"), { statusCode: 403, code: "FORBIDDEN" });
       }
     }

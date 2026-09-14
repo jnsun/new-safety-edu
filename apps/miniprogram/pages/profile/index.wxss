@@ -1,1 +1,6 @@
-
+.logout { color: #d70015 !important; }
+.photo-wrap { display: flex; align-items: center; gap: 24rpx; margin: 24rpx 0; }
+.photo { width: 144rpx; height: 184rpx; border-radius: 18rpx; background: #f2f2f7; }
+.placeholder { display: flex; align-items: center; justify-content: center; color: #86868b; font-size: 24rpx; }
+.mini-button { margin: 0; width: auto; padding: 0 28rpx; font-size: 26rpx; }
+.hint { display: block; color: #86868b; font-size: 24rpx; line-height: 1.5; margin-top: 18rpx; }

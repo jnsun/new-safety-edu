@@ -11,7 +11,7 @@ type RequestRow = { id: string; type: string; status: string; applicant: string;
 type Batch = Option & { type: string; assignments: unknown[] };
 const statusNames: Record<string, string> = { not_started: "未开始", pending_learning: "待学习", learning: "学习中", pending_exam: "待考试", failed: "考试不合格", remediation_required: "需补学", locked: "已锁定", pending_signature: "待签字", confirmation_pending: "待项目确认", completed: "已完成", cancelled: "已取消" };
 const typeNames: Record<string, string> = { three_level: "三级教育", project_induction: "项目入场", routine: "日常/年度", change_update: "变化补充" };
-const requestTypeNames: Record<string, string> = { binding: "档案绑定", registration: "人员注册", profile_change: "资料变更", binding_change: "微信换绑", project_join: "加入项目" };
+const requestTypeNames: Record<string, string> = { binding: "档案绑定", registration: "人员注册", profile_change: "资料变更", binding_change: "微信换绑", department_transfer: "调换部门", project_join: "加入项目" };
 const requestStatusNames: Record<string, string> = { pending: "待审核", approved: "已通过", rejected: "已驳回" };
 const queryString = (values: Record<string, string | undefined>) => { const params = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => value && params.set(key, value)); const text = params.toString(); return text ? `?${text}` : ""; };
 

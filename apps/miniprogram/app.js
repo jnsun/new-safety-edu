@@ -8,6 +8,7 @@ App({
   globalData: { session: null, ready: null },
   onLaunch() { this.globalData.ready = this.bootstrap() },
   async bootstrap() {
+    if (wx.getStorageSync('loggedOut')) return wx.reLaunch({ url: '/pages/login/index' })
     try {
       const code = await loginCode()
       const data = await api.publicRequest('/api/wechat/login', 'POST', { code })

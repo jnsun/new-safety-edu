@@ -16,6 +16,7 @@ import { registerWechatRoutes } from "./routes/wechat.js";
 import { registerDay2Routes } from "./routes/day2.js";
 import { generateScheduledReminders, registerDay4Routes } from "./routes/day4.js";
 import { processNotificationOutbox } from "./wechat-subscription.js";
+import { registerPersonImportRoutes } from "./routes/person-import.js";
 
 const env = loadEnv();
 const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.code", "body.refreshToken", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
@@ -41,6 +42,7 @@ app.setErrorHandler((error, _request, reply) => {
 
 const guards = authHandlers(env);
 await registerDay1Routes(app, { env, ...guards });
+await registerPersonImportRoutes(app, { env, ...guards });
 await registerFileRoutes(app, { env, ...guards });
 await registerWechatRoutes(app, { env, ...guards });
 await registerDay2Routes(app, { env, ...guards });

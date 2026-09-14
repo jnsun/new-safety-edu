@@ -4,7 +4,7 @@ import { prisma } from "./db.js";
 export const isCompanyAdmin = (principal: Principal) => principal.roles.some((r) => r.role === "company_admin");
 
 export function organizationScopeIds(principal: Principal): string[] {
-  return principal.roles.filter((r) => r.role === "org_admin" && r.scopeType === "organization" && r.scopeId).map((r) => r.scopeId as string);
+  return principal.roles.filter((r) => ["org_leader", "org_admin"].includes(r.role) && r.scopeType === "organization" && r.scopeId).map((r) => r.scopeId as string);
 }
 
 export function projectScopeIds(principal: Principal): string[] {

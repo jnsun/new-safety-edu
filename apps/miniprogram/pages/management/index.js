@@ -1,6 +1,6 @@
 const api = require('../../utils/api')
 const statusNames = { pending_learning: '待学习', learning: '学习中', pending_exam: '待考试', remediation_required: '需补学', locked: '已锁定', pending_signature: '待签字', confirmation_pending: '待项目确认', completed: '已完成' }
-const requestTypeNames = { binding: '档案绑定', registration: '人员注册', profile_change: '资料变更', binding_change: '微信换绑', project_join: '加入项目' }
+const requestTypeNames = { binding: '档案绑定', registration: '人员注册', profile_change: '资料变更', binding_change: '微信换绑', department_transfer: '调换部门', project_join: '加入项目' }
 Page({
   data: { assignments: [], requests: [], persons: [], unlockReason: '', reviewNote: '', error: '' },
   async onShow() { try { const [assignments, requests, persons] = await Promise.all([api.request('/api/management/assignments'), api.request('/api/management/requests'), api.request('/api/persons')]); this.setData({ assignments: assignments.filter((row) => row.status !== 'completed').map((row) => ({ ...row, statusText: statusNames[row.status] || row.status })), requests: requests.filter((row) => row.status === 'pending').map((row) => ({ ...row, typeText: requestTypeNames[row.type] || row.type })), persons, error: '' }); } catch (error) { if (error.statusCode === 403) wx.navigateBack(); else this.setData({ error: error.message }); } },
