@@ -27,12 +27,19 @@ const labels: Record<string, string> = {
   org_admin: "部门管理员", field_reporter: "野外项目报送人员", project_admin: "项目管理员", learner: "人员"
 };
 const organizationTypeLabels: Record<string, string> = { company: "公司", business_entity: "经营实体", department: "部门", contractor: "外协单位" };
-const menuItems: NonNullable<MenuProps["items"]> = [
-  ["/", "首页", <DashboardOutlined />], ["/people", "人员与账号", <TeamOutlined />], ["/organization", "组织与项目", <ApartmentOutlined />],
+const trainingMenuItems: NonNullable<MenuProps["items"]> = [
+  ["/", "返回平台首页", <DashboardOutlined />], ["/training-dashboard", "培训教育首页", <DashboardOutlined />], ["/people", "人员与账号", <TeamOutlined />], ["/organization", "组织与项目", <ApartmentOutlined />],
   ["/courseware", "课件与模板", <ReadOutlined />], ["/questions", "题库与试卷", <FileDoneOutlined />], ["/training", "培训安排", <ScheduleOutlined />],
   ["/records", "进度与记录", <LineChartOutlined />], ["/reports", "报表与设置", <SettingOutlined />]
-  , ["/monthly-reports", "野外项目月报", <CalendarOutlined />], ["/qualifications", "资质证照管理", <SafetyCertificateOutlined />]
 ].map(([key, label, icon]) => ({ key: key as string, label, icon }));
+
+const moduleMenuItems = (pathname: string): NonNullable<MenuProps["items"]> => pathname === "/"
+  ? [{ key: "/", label: "首页", icon: <DashboardOutlined /> }]
+  : pathname.startsWith("/monthly-reports")
+    ? [{ key: "/", label: "返回平台首页", icon: <DashboardOutlined /> }, { key: "/monthly-reports", label: "野外项目报送", icon: <CalendarOutlined /> }]
+    : pathname.startsWith("/qualifications")
+      ? [{ key: "/", label: "返回平台首页", icon: <DashboardOutlined /> }, { key: "/qualifications", label: "资质证照管理", icon: <SafetyCertificateOutlined /> }]
+      : trainingMenuItems;
 
 function Login() {
   const navigate = useNavigate(); const qc = useQueryClient(); const [busy, setBusy] = useState(false);
@@ -169,8 +176,10 @@ function PlatformPortal() {
 function Shell({ principal }: { principal: Principal }) {
   const navigate = useNavigate(); const location = useLocation(); const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(() => location.pathname === "/" ? "/" : `/${location.pathname.split("/")[1]}`, [location.pathname]);
-  return <><Layout className="app-shell"><Layout.Sider width={228} breakpoint="lg" collapsedWidth="0" theme="light"><div className="brand"><div className="brand-mark">安</div><div className="brand-copy">物化院<small>安全生产管理平台</small></div></div><Menu mode="inline" selectedKeys={[selected]} items={menuItems} onClick={({ key }) => navigate(key)} /></Layout.Sider>
-    <Layout><Layout.Header className="topbar"><span className="topbar-title">安全生产管理工作台</span><Space><Tag>{principal.roles.map((r) => labels[r.role] ?? r.role).join(" / ") || "无角色"}</Tag><Button onClick={() => setPasswordOpen(true)}>修改密码</Button><Button onClick={async () => { await api("/api/auth/logout", { method: "POST" }); navigate("/login"); }}>退出</Button></Space></Layout.Header>
+  const sidebarItems = useMemo(() => moduleMenuItems(location.pathname), [location.pathname]);
+  const workspaceTitle = location.pathname === "/" ? "安全生产管理平台" : location.pathname.startsWith("/monthly-reports") ? "野外项目报送" : location.pathname.startsWith("/qualifications") ? "资质证照管理" : "培训教育";
+  return <><Layout className="app-shell"><Layout.Sider width={228} breakpoint="lg" collapsedWidth="0" theme="light"><div className="brand"><div className="brand-mark">安</div><div className="brand-copy">物化院<small>{workspaceTitle}</small></div></div><Menu mode="inline" selectedKeys={[selected]} items={sidebarItems} onClick={({ key }) => navigate(key)} /></Layout.Sider>
+    <Layout><Layout.Header className="topbar"><span className="topbar-title">{workspaceTitle}</span><Space><Tag>{principal.roles.map((r) => labels[r.role] ?? r.role).join(" / ") || "无角色"}</Tag><Button onClick={() => setPasswordOpen(true)}>修改密码</Button><Button onClick={async () => { await api("/api/auth/logout", { method: "POST" }); navigate("/login"); }}>退出</Button></Space></Layout.Header>
       <Layout.Content className="content"><Routes><Route path="/" element={<PlatformPortal />} /><Route path="/training-dashboard" element={<DashboardPage />} /><Route path="/people" element={<People canImport={principal.roles.some((role) => role.role === "company_admin")} />} /><Route path="/organization" element={<OrganizationProjects principal={principal} />} /><Route path="/courseware" element={<CoursewarePage />} /><Route path="/questions" element={<QuestionsPage />} /><Route path="/training" element={<TrainingPage />} /><Route path="/records" element={<RecordsPage />} /><Route path="/reports" element={<ReportsPage />} /><Route path="/monthly-reports" element={<MonthlyReportsPage />} /><Route path="/qualifications" element={<QualificationsPage />} /><Route path="*" element={<Navigate to="/" replace />} /></Routes></Layout.Content></Layout></Layout>
     <Modal title="修改密码" open={passwordOpen} footer={null} onCancel={() => setPasswordOpen(false)} destroyOnClose><Form layout="vertical" onFinish={async (values) => { try { await api("/api/auth/change-password", json("POST", values)); message.success("密码已修改，请重新登录"); setPasswordOpen(false); navigate("/login"); } catch (error) { message.error((error as Error).message); } }}><Form.Item name="currentPassword" label="当前密码" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item><Form.Item name="newPassword" label="新密码" rules={[{ required: true, min: 12 }]}><Input.Password autoComplete="new-password" /></Form.Item><Form.Item name="confirmPassword" label="确认新密码" dependencies={["newPassword"]} rules={[{ required: true }, ({ getFieldValue }) => ({ validator: (_, value) => value === getFieldValue("newPassword") ? Promise.resolve() : Promise.reject(new Error("两次输入的密码不一致")) })]}><Input.Password autoComplete="new-password" /></Form.Item><Button type="primary" htmlType="submit">确认修改</Button></Form></Modal></>;
 }
