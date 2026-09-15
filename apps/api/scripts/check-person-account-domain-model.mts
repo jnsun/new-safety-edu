@@ -47,4 +47,7 @@ assert.equal(roleAccountRelation?.relationOnDelete, "Restrict", "Deleting an acc
 const migration = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("../../../prisma/migrations/202609150001_person_account_domain_foundations/migration.sql", import.meta.url), "utf8"));
 assert.ok(migration.includes(`NOT ("role" = 'company_admin' AND "scope_type" = 'company' AND "scope_id" IS NULL)`), "Existing bootstrap company_admin must be allowed until it is linked to a person");
 
+const preflight = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("./preflight-identity.mts", import.meta.url), "utf8"));
+assert.ok(preflight.includes(`NOT (role = 'company_admin' AND scope_type = 'company' AND scope_id IS NULL)`), "Identity preflight must allow the bootstrap company_admin exception");
+
 console.log("PERSON_ACCOUNT_DOMAIN_MODEL_OK");
