@@ -36,7 +36,7 @@ async function runMigrationApply<T>(apply: () => Promise<T>) {
   try {
     return await apply();
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") throw migrationStateChanged();
+    if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2034" || (error.code === "P2010" && error.meta?.code === "40001"))) throw migrationStateChanged();
     throw error;
   }
 }
@@ -300,12 +300,15 @@ async function migrateDepartment(context: ReceivablesAdminContext, sourceId: str
   assertTokenIdentity(payload, { kind: "department", actorId: context.principal.accountId, sourceId, targetId: input.targetId });
   return runMigrationApply(() => prisma.$transaction(async (tx) => {
     const access = await requireAction(context, "manageAccess", tx);
-    const [source, target, rows] = await Promise.all([
+    const departmentIds = [sourceId, input.targetId].sort();
+    await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id IN (${Prisma.join(departmentIds.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
+    const [source, target] = await Promise.all([
       tx.receivableDepartment.findUnique({ where: { id: sourceId }, select: departmentSelect }),
       tx.receivableDepartment.findUnique({ where: { id: input.targetId }, select: departmentSelect }),
-      tx.receivableLedger.findMany({ where: { financeDepartmentId: sourceId }, select: { id: true, revision: true }, orderBy: { id: "asc" } }),
     ]);
     assertSourceAndTarget(source, target, "部门");
+    await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE finance_department_id = ${sourceId}::uuid ORDER BY id FOR UPDATE`;
+    const rows = await tx.receivableLedger.findMany({ where: { financeDepartmentId: sourceId }, select: { id: true, revision: true }, orderBy: { id: "asc" } });
     assertTokenFresh(payload, source!.revision, target!.revision, migrationSnapshot(rows));
     const updated = await tx.receivableLedger.updateMany({ where: { id: { in: rows.map(({ id }) => id) }, financeDepartmentId: sourceId }, data: { financeDepartmentId: input.targetId, revision: { increment: 1 } } });
     if (updated.count !== rows.length) throw migrationStateChanged();

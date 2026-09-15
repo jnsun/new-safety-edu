@@ -42,7 +42,7 @@ async function waitForMigrationLockWaiters(expected: number) {
       WHERE datname = current_database()
         AND wait_event_type = 'Lock'
         AND query ILIKE '%receivable_departments%'
-        AND query ILIKE 'UPDATE%'
+        AND (query ILIKE 'UPDATE%' OR query ILIKE 'SELECT id FROM receivable_departments WHERE id IN (%ORDER BY id FOR UPDATE%')
     `;
     if (Number(row?.count ?? 0n) >= expected) return;
     await delay(20);

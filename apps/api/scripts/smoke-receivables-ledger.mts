@@ -56,6 +56,21 @@ async function waitForLockWaiters(tableFragment: string, queryPattern: string, e
   return false;
 }
 
+async function waitForReceivablesLockWaiters(expected: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [row] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND wait_event_type = 'Lock'
+        AND (query ILIKE '%receivable_departments%' OR query ILIKE '%receivable_ledgers%')
+    `;
+    if (Number(row?.count ?? 0n) >= expected) return true;
+    await delay(20);
+  }
+  return false;
+}
+
 async function createIdentity(label: string, role?: "org_leader" | "company_admin", scopeId?: string) {
   const person = await prisma.person.create({ data: { name: `${marker}-${label}`, phone: `1940000${String(phoneCounter++).padStart(4, "0")}`, type: "employee", status: "active" } });
   ids.people.push(person.id);
@@ -187,6 +202,8 @@ try {
   const inactiveDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-inactive`, active: false } }); ids.departments.push(inactiveDepartment.id);
   const createRaceDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-create-race` } }); ids.departments.push(createRaceDepartment.id);
   const reassignRaceDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-reassign-race` } }); ids.departments.push(reassignRaceDepartment.id);
+  const migrationRaceSource = await prisma.receivableDepartment.create({ data: { name: `${marker}-migration-race-source`, active: false } }); ids.departments.push(migrationRaceSource.id);
+  const migrationRaceTarget = await prisma.receivableDepartment.create({ data: { name: `${marker}-migration-race-target` } }); ids.departments.push(migrationRaceTarget.id);
   await createGrant({ accountId: admin.id, grantedBy: owner.id, role: "admin" });
   await createGrant({ accountId: reporterA.id, grantedBy: owner.id, role: "reporter", canCreate: true, departmentIds: [departmentA.id] });
   await createGrant({ accountId: reporterNoCreate.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentA.id] });
@@ -366,6 +383,29 @@ try {
   assert.equal(reassignFactsAfter.ledger?.revision, reassignFactsBefore.ledger?.revision);
   assert.equal(reassignFactsAfter.revisions.length, reassignFactsBefore.revisions.length);
   assert.equal(reassignFactsAfter.audits.length, reassignFactsBefore.audits.length);
+
+  const migrationRaceLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: migrationRaceSource.id, contractNo: `${marker}-migration-reassignment-race`, contractNoNormalized: `${marker}-migration-reassignment-race`, createdBy: owner.id } }); ids.ledgers.push(migrationRaceLedger.id);
+  const migrationRacePreview = (await expectStatus<{ impactCount: number; token: string }>(`/api/receivables/departments/${migrationRaceSource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: jsonBody({ mode: "preview", targetId: migrationRaceTarget.id }) })).data!;
+  assert.equal(migrationRacePreview.impactCount, 1);
+  let migrationRaceRequest!: ReturnType<typeof request<{ impactCount: number }>>;
+  let migrationReassignmentRequest!: ReturnType<typeof request<LedgerResponse>>;
+  let migrationQueued = false;
+  let migrationReassignmentQueued = false;
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id = ${migrationRaceTarget.id}::uuid FOR UPDATE`;
+    await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id = ${migrationRaceLedger.id}::uuid FOR UPDATE`;
+    migrationRaceRequest = request<{ impactCount: number }>(`/api/receivables/departments/${migrationRaceSource.id}/migrate`, tokens.owner!, { method: "POST", body: jsonBody({ mode: "apply", targetId: migrationRaceTarget.id, token: migrationRacePreview.token, reason: "migration wins lock order race", confirm: true }) });
+    migrationQueued = await waitForReceivablesLockWaiters(1);
+    migrationReassignmentRequest = request<LedgerResponse>(`/api/receivables/ledgers/${migrationRaceLedger.id}`, tokens.owner!, { method: "PATCH", body: jsonBody({ revision: 1, reason: "reassignment waits behind migration", financeDepartmentId: migrationRaceTarget.id }) });
+    migrationReassignmentQueued = await waitForReceivablesLockWaiters(2);
+  });
+  const [migrationRaceResult, migrationReassignmentResult] = await Promise.all([migrationRaceRequest, migrationReassignmentRequest]);
+  assert.equal(migrationQueued, true, "department migration did not enter the explicit row-lock queue");
+  assert.equal(migrationReassignmentQueued, true, "ledger reassignment did not enter the explicit row-lock queue after migration");
+  assert.equal(migrationRaceResult.response.status, 200, `migration must win without a 40P01/P2034 deadlock: ${JSON.stringify(migrationRaceResult.body)}`);
+  assert.equal(migrationReassignmentResult.response.status, 409, JSON.stringify(migrationReassignmentResult.body));
+  assert.equal(migrationReassignmentResult.body.error?.code, "REVISION_CONFLICT");
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: migrationRaceLedger.id } })).financeDepartmentId, migrationRaceTarget.id);
 
   const atomic = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-audit-atomic`, collectionNotes: "atomic before" });
   const unrelatedContract = `${marker}-unrelated-p2002`;
