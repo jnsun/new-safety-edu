@@ -25,6 +25,7 @@
     "check:sensitive-token-scope": "tsx scripts/check-sensitive-token-scope.mts",
     "check:private-file-policy": "tsx scripts/check-private-file-policy.mts",
     "check:file-association-policy": "tsx scripts/check-file-association-policy.mts",
+    "check:receivables-core": "tsx scripts/check-receivables-core.mts",
     "check:transaction-audit-policy": "tsx scripts/check-transaction-audit-policy.mts",
     "check:request-policy": "tsx scripts/check-request-policy.mts",
     "check:change-request-lifecycle": "tsx scripts/check-change-request-lifecycle.mts",

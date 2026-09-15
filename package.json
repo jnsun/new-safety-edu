@@ -28,6 +28,7 @@
     "check:sensitive-token-scope": "pnpm --filter @safety/api check:sensitive-token-scope",
     "check:private-file-policy": "pnpm --filter @safety/api check:private-file-policy",
     "check:file-association-policy": "pnpm --filter @safety/api check:file-association-policy",
+    "check:receivables-core": "pnpm --filter @safety/api check:receivables-core",
     "check:transaction-audit-policy": "pnpm --filter @safety/api check:transaction-audit-policy",
     "check:request-policy": "pnpm --filter @safety/api check:request-policy",
     "check:change-request-lifecycle": "pnpm --filter @safety/api check:change-request-lifecycle",
