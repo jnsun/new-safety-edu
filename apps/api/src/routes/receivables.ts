@@ -10,6 +10,7 @@ import { queryReceivables } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
 import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
+import { applyReceivablesImport, authorizeReceivablesImport, listReceivablesImports, previewReceivablesImport, rollbackReceivablesImport } from "../receivables-import.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type RouteDependencies = {
@@ -91,6 +92,8 @@ const writeoffInput = z.object({ ledgerRevision: z.number().int().positive(), re
 const attachmentFields = z.object({ ledgerRevision: z.coerce.number().int().positive(), category: z.string().trim().min(1).max(120).default("general") }).strict();
 const attachmentVoidInput = z.object({ ledgerRevision: z.number().int().positive(), revision: z.number().int().positive(), reason: reasonInput }).strict();
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() }).strict();
+const importApplyInput = z.object({ revision: z.number().int().positive(), decisions: z.array(z.object({ rowNumber: z.number().int().min(2), decision: z.enum(["skip", "update"]) }).strict()).max(200_000) }).strict();
+const importRollbackInput = z.object({ revision: z.number().int().positive(), reason: reasonInput }).strict();
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
 const lockReceivablesSetup = (tx: Prisma.TransactionClient) => tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
@@ -160,6 +163,21 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.get("/api/receivables/dashboard", { preHandler: deps.authenticate }, async (request) => ({
     data: await queryReceivables(request.principal as Principal, { type: "dashboard", input: receivablesDashboardInput.parse(request.query) }),
   }));
+  app.get("/api/receivables/imports", { preHandler: deps.authenticate }, async (request) => ({ data: await listReceivablesImports(request.principal as Principal) }));
+  app.post("/api/receivables/imports/preview", { preHandler: deps.authenticate }, async (request, reply) => {
+    await authorizeReceivablesImport(request.principal as Principal);
+    const part = await request.file({ limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+    if (!part) throw httpError(400, "FILE_REQUIRED", "请选择文件");
+    const content = await part.toBuffer();
+    if (part.file.truncated) throw httpError(413, "FILE_TOO_LARGE", "导入文件不得超过 10 MiB");
+    const data = await previewReceivablesImport(adminContext(request), { originalName: part.filename, mimeType: part.mimetype, content }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads" });
+    return reply.code(201).send({ data });
+  });
+  app.post("/api/receivables/imports/:id/apply", { preHandler: deps.authenticate }, async (request) => {
+    const input = importApplyInput.parse(request.body);
+    return { data: await applyReceivablesImport(adminContext(request), idParams.parse(request.params).id, { revision: input.revision, rows: input.decisions }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads" }) };
+  });
+  app.post("/api/receivables/imports/:id/rollback", { preHandler: deps.authenticate }, async (request) => ({ data: await rollbackReceivablesImport(adminContext(request), idParams.parse(request.params).id, importRollbackInput.parse(request.body)) }));
   app.post("/api/receivables/ledgers", { preHandler: deps.authenticate }, async (request, reply) => {
     const data = await writeReceivablesLedger(ledgerContext(request), { type: "create", input: ledgerCreateInput.parse(request.body) });
     return reply.code(201).send({ data });
