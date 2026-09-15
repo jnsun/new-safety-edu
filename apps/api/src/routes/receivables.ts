@@ -78,14 +78,14 @@ const ledgerPatchInput = z.object({
 const ledgerVoidInput = z.object({ revision: z.number().int().positive(), reason: reasonInput, confirm: z.literal(true) }).strict();
 const amountInput = z.string().trim().min(1).max(80);
 const detailDateInput = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const invoiceCreateInput = z.object({ invoiceDate: detailDateInput, invoiceNo: z.string().trim().max(120).nullable().optional(), amount: amountInput, note: z.string().trim().max(10_000).nullable().optional() }).strict();
-const receiptCreateInput = z.object({ receiptDate: detailDateInput, referenceNo: z.string().trim().max(120).nullable().optional(), amount: amountInput, note: z.string().trim().max(10_000).nullable().optional() }).strict();
+const invoiceCreateInput = z.object({ ledgerRevision: z.number().int().positive(), invoiceDate: detailDateInput, invoiceNo: z.string().trim().max(120).nullable().optional(), amount: amountInput, note: z.string().trim().max(10_000).nullable().optional() }).strict();
+const receiptCreateInput = z.object({ ledgerRevision: z.number().int().positive(), receiptDate: detailDateInput, referenceNo: z.string().trim().max(120).nullable().optional(), amount: amountInput, note: z.string().trim().max(10_000).nullable().optional() }).strict();
 const invoicePatchInput = invoiceCreateInput.extend({ revision: z.number().int().positive(), reason: reasonInput }).strict();
 const receiptPatchInput = receiptCreateInput.extend({ revision: z.number().int().positive(), reason: reasonInput }).strict();
-const detailVoidInput = z.object({ revision: z.number().int().positive(), reason: reasonInput }).strict();
+const detailVoidInput = z.object({ ledgerRevision: z.number().int().positive(), revision: z.number().int().positive(), reason: reasonInput }).strict();
 const detailParams = z.object({ id: z.string().uuid(), invoiceId: z.string().uuid() }).strict();
 const receiptParams = z.object({ id: z.string().uuid(), receiptId: z.string().uuid() }).strict();
-const writeoffInput = z.object({ revision: z.number().int().positive(), reason: reasonInput, writeoffAmount: amountInput }).strict();
+const writeoffInput = z.object({ ledgerRevision: z.number().int().positive(), reason: reasonInput, writeoffAmount: amountInput }).strict();
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
 const lockReceivablesSetup = (tx: Prisma.TransactionClient) => tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
@@ -166,15 +166,15 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   }));
   app.post("/api/receivables/ledgers/:id/invoices", { preHandler: deps.authenticate }, async (request, reply) => {
     const input = invoiceCreateInput.parse(request.body); const id = idParams.parse(request.params).id;
-    const data = await writeReceivablesMoney(ledgerContext(request), { type: "invoice.create", ledgerId: id, input: { date: input.invoiceDate, invoiceNo: input.invoiceNo, amount: input.amount, note: input.note } }); return reply.code(201).send({ data });
+    const data = await writeReceivablesMoney(ledgerContext(request), { type: "invoice.create", ledgerId: id, input: { ledgerRevision: input.ledgerRevision, date: input.invoiceDate, invoiceNo: input.invoiceNo, amount: input.amount, note: input.note } }); return reply.code(201).send({ data });
   });
   app.patch("/api/receivables/ledgers/:id/invoices/:invoiceId", { preHandler: deps.authenticate }, async (request) => {
     const input = invoicePatchInput.parse(request.body); const params = detailParams.parse(request.params);
-    return { data: await writeReceivablesMoney(ledgerContext(request), { type: "invoice.patch", ledgerId: params.id, detailId: params.invoiceId, input: { date: input.invoiceDate, invoiceNo: input.invoiceNo, amount: input.amount, note: input.note, revision: input.revision, reason: input.reason } }) };
+    return { data: await writeReceivablesMoney(ledgerContext(request), { type: "invoice.patch", ledgerId: params.id, detailId: params.invoiceId, input: { ledgerRevision: input.ledgerRevision, date: input.invoiceDate, invoiceNo: input.invoiceNo, amount: input.amount, note: input.note, revision: input.revision, reason: input.reason } }) };
   });
   app.post("/api/receivables/ledgers/:id/invoices/:invoiceId/void", { preHandler: deps.authenticate }, async (request) => { const params = detailParams.parse(request.params); return { data: await writeReceivablesMoney(ledgerContext(request), { type: "invoice.void", ledgerId: params.id, detailId: params.invoiceId, input: detailVoidInput.parse(request.body) }) }; });
-  app.post("/api/receivables/ledgers/:id/receipts", { preHandler: deps.authenticate }, async (request, reply) => { const input = receiptCreateInput.parse(request.body); const id = idParams.parse(request.params); const data = await writeReceivablesMoney(ledgerContext(request), { type: "receipt.create", ledgerId: id.id, input: { date: input.receiptDate, referenceNo: input.referenceNo, amount: input.amount, note: input.note } }); return reply.code(201).send({ data }); });
-  app.patch("/api/receivables/ledgers/:id/receipts/:receiptId", { preHandler: deps.authenticate }, async (request) => { const input = receiptPatchInput.parse(request.body); const params = receiptParams.parse(request.params); return { data: await writeReceivablesMoney(ledgerContext(request), { type: "receipt.patch", ledgerId: params.id, detailId: params.receiptId, input: { date: input.receiptDate, referenceNo: input.referenceNo, amount: input.amount, note: input.note, revision: input.revision, reason: input.reason } }) }; });
+  app.post("/api/receivables/ledgers/:id/receipts", { preHandler: deps.authenticate }, async (request, reply) => { const input = receiptCreateInput.parse(request.body); const id = idParams.parse(request.params); const data = await writeReceivablesMoney(ledgerContext(request), { type: "receipt.create", ledgerId: id.id, input: { ledgerRevision: input.ledgerRevision, date: input.receiptDate, referenceNo: input.referenceNo, amount: input.amount, note: input.note } }); return reply.code(201).send({ data }); });
+  app.patch("/api/receivables/ledgers/:id/receipts/:receiptId", { preHandler: deps.authenticate }, async (request) => { const input = receiptPatchInput.parse(request.body); const params = receiptParams.parse(request.params); return { data: await writeReceivablesMoney(ledgerContext(request), { type: "receipt.patch", ledgerId: params.id, detailId: params.receiptId, input: { ledgerRevision: input.ledgerRevision, date: input.receiptDate, referenceNo: input.referenceNo, amount: input.amount, note: input.note, revision: input.revision, reason: input.reason } }) }; });
   app.post("/api/receivables/ledgers/:id/receipts/:receiptId/void", { preHandler: deps.authenticate }, async (request) => { const params = receiptParams.parse(request.params); return { data: await writeReceivablesMoney(ledgerContext(request), { type: "receipt.void", ledgerId: params.id, detailId: params.receiptId, input: detailVoidInput.parse(request.body) }) }; });
   app.patch("/api/receivables/ledgers/:id/writeoff", { preHandler: deps.authenticate }, async (request) => ({ data: await writeReceivablesMoney(ledgerContext(request), { type: "writeoff.patch", ledgerId: idParams.parse(request.params).id, input: writeoffInput.parse(request.body) }) }));
 
