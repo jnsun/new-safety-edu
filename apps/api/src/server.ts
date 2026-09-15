@@ -128,6 +128,15 @@ const shutdown = () => {
 const shutdownFromSignal = () => void shutdown().then(() => process.exit(0)).catch((error) => { app.log.error({ err: error }, "shutdown_failed"); process.exit(1); });
 process.on("SIGINT", shutdownFromSignal);
 process.on("SIGTERM", shutdownFromSignal);
+if (env.NODE_ENV === "test" && process.env.RECEIVABLES_EXPORT_SMOKE === "1" && process.send) {
+  process.on("message", (message) => {
+    if (message !== "receivables-export-smoke-shutdown") return;
+    process.send?.("receivables-export-smoke-shutdown-started");
+    void shutdown().then(() => {
+      process.send?.("receivables-export-smoke-shutdown-complete", () => process.exit(0));
+    }).catch((error) => { app.log.error({ err: error }, "shutdown_failed"); process.exit(1); });
+  });
+}
 
 const listenHost = env.NODE_ENV === "test" && process.env.RECEIVABLES_TEST_LISTEN_HOST === "127.0.0.1" ? "127.0.0.1" : "0.0.0.0";
 await app.listen({ port: env.PORT, host: listenHost });

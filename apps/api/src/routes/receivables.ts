@@ -63,7 +63,7 @@ const receivablesListInput = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
 }).strict();
 const receivablesDashboardInput = z.object(receivablesFilters).strict();
-const receivablesExportCreateInput = z.object({ idempotencyKey: z.string().uuid().optional(), filters: z.object(receivablesFilters).strict().default({}) }).strict();
+const receivablesExportCreateInput = z.object({ idempotencyKey: z.string().uuid(), filters: z.object(receivablesFilters).strict().default({}) }).strict();
 const receivablesExportListInput = z.object({ page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).strict();
 const receivablesExportTokenInput = z.object({ token: z.string().min(32).max(200) }).strict();
 const ledgerText = (max: number) => z.string().max(max).nullable().optional();
