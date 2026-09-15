@@ -2,12 +2,19 @@ import { Prisma } from "@prisma/client";
 
 export type DecimalValue = string | Prisma.Decimal;
 
+export type ReceivableAmountDetail = {
+  amount: DecimalValue;
+  status: string;
+};
+
+type ReceivableAmount = DecimalValue | ReceivableAmountDetail;
+
 export type ReceivablesActorCapabilities = {
   canManageAll: boolean;
   canCreateLedger: boolean;
 };
 
-export const reporterCreateFields = [
+export const reporterCreateFields = Object.freeze([
   "financeDepartmentId",
   "contractNo",
   "projectName",
@@ -21,9 +28,9 @@ export const reporterCreateFields = [
   "debtStatus",
   "collectionOwner",
   "collectionNotes",
-] as const;
+] as const);
 
-export const reporterPatchFields = ["debtStatus", "collectionOwner", "collectionNotes"] as const;
+export const reporterPatchFields = Object.freeze(["debtStatus", "collectionOwner", "collectionNotes"] as const);
 
 export function normalizeContractNo(value: string): string {
   return value.trim();
@@ -32,8 +39,8 @@ export function normalizeContractNo(value: string): string {
 export function calculateReceivableAmounts(input: {
   finalAmount: DecimalValue | null;
   writeoffAmount: DecimalValue;
-  invoiceAmounts: readonly DecimalValue[];
-  receiptAmounts: readonly DecimalValue[];
+  invoiceAmounts: readonly ReceivableAmount[];
+  receiptAmounts: readonly ReceivableAmount[];
 }): {
   invoicedAmount: string;
   receivedAmount: string;
@@ -102,11 +109,27 @@ export function assertTransition(currentStatus: string, action: string): void {
 }
 
 function decimal(value: DecimalValue): Prisma.Decimal {
-  return new Prisma.Decimal(value);
+  try {
+    const amount = new Prisma.Decimal(value);
+    if (!amount.isFinite() || amount.decimalPlaces() > 4 || amount.abs().trunc().toFixed(0).length > 14) {
+      throw new Error("DECIMAL_18_4_INVALID");
+    }
+    return amount;
+  } catch (error) {
+    if (error instanceof Error && error.message === "DECIMAL_18_4_INVALID") throw error;
+    throw new Error("DECIMAL_18_4_INVALID");
+  }
 }
 
-function sum(values: readonly DecimalValue[]): Prisma.Decimal {
-  return values.reduce<Prisma.Decimal>((total, value) => total.plus(decimal(value)), new Prisma.Decimal(0));
+function sum(values: readonly ReceivableAmount[]): Prisma.Decimal {
+  return values.reduce<Prisma.Decimal>((total, value) => {
+    if (isAmountDetail(value) && value.status !== "active") return total;
+    return total.plus(decimal(isAmountDetail(value) ? value.amount : value));
+  }, new Prisma.Decimal(0));
+}
+
+function isAmountDetail(value: ReceivableAmount): value is ReceivableAmountDetail {
+  return typeof value === "object" && value !== null && "amount" in value && "status" in value;
 }
 
 function format(value: Prisma.Decimal): string {

@@ -19,6 +19,23 @@ assert.deepEqual(
   calculateReceivableAmounts({ finalAmount: new Prisma.Decimal("100"), writeoffAmount: new Prisma.Decimal("10"), invoiceAmounts: ["80.1234"], receiptAmounts: ["110.1234"] }),
   { invoicedAmount: "80.1234", receivedAmount: "110.1234", internalReceivable: "-30.0000", externalReceivable: "19.8766", balance: "-20.1234", anomaly: "writeoff_adjustment_required" },
 );
+assert.deepEqual(
+  calculateReceivableAmounts({
+    finalAmount: "100",
+    writeoffAmount: "0",
+    invoiceAmounts: [{ amount: "80", status: "active" }, { amount: "20", status: "voided" }],
+    receiptAmounts: [{ amount: "30", status: "active" }, { amount: "10", status: "voided" }],
+  }),
+  { invoicedAmount: "80.0000", receivedAmount: "30.0000", internalReceivable: "50.0000", externalReceivable: "20.0000", balance: "70.0000", anomaly: null },
+);
+assert.throws(
+  () => calculateReceivableAmounts({ finalAmount: "100.00001", writeoffAmount: "0", invoiceAmounts: [], receiptAmounts: [] }),
+  /DECIMAL_18_4_INVALID/,
+);
+assert.throws(
+  () => calculateReceivableAmounts({ finalAmount: "100000000000000", writeoffAmount: "0", invoiceAmounts: [], receiptAmounts: [] }),
+  /DECIMAL_18_4_INVALID/,
+);
 assert.equal(calculateReceivableAmounts({ finalAmount: null, writeoffAmount: "0", invoiceAmounts: ["80"], receiptAmounts: ["30"] }).balance, null);
 assert.equal(calculateReceivableAmounts({ finalAmount: null, writeoffAmount: "0", invoiceAmounts: [], receiptAmounts: [] }).anomaly, "final_amount_missing");
 assert.equal(calculateReceivableAmounts({ finalAmount: "100", writeoffAmount: "0", invoiceAmounts: [], receiptAmounts: ["101"] }).anomaly, "over_received");
@@ -28,6 +45,8 @@ assert.doesNotThrow(() => assertWriteoffAllowed({ previous: "20", next: "10", fi
 
 assert.ok(reporterCreateFields.includes("contractNo"));
 assert.ok(reporterPatchFields.includes("debtStatus"));
+assert.throws(() => (reporterPatchFields as unknown as string[]).push("finalAmount"), TypeError);
+assert.equal(reporterPatchFields.includes("finalAmount" as never), false);
 assert.throws(() => assertLedgerPatchAllowed({ canManageAll: false, canCreateLedger: true }, null, { finalAmount: "100" }), /REPORTER_FIELD_NOT_ALLOWED/);
 assert.throws(() => assertLedgerPatchAllowed({ canManageAll: false, canCreateLedger: false }, null, { contractNo: "HT-001" }), /REPORTER_CREATE_NOT_ALLOWED/);
 assert.throws(() => assertLedgerPatchAllowed({ canManageAll: false, canCreateLedger: true }, { id: "ledger-1" }, { contractNo: "HT-002" }), /REPORTER_FIELD_NOT_ALLOWED/);
