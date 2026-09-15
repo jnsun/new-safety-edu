@@ -10,7 +10,7 @@ import ExcelJS from "exceljs";
 import { SignJWT } from "jose";
 import unzipper from "unzipper";
 import { orphanPrivateFiles } from "../src/private-file-retention.js";
-import { RECEIVABLE_WORKBOOK_LIMITS, receivableAttachmentStoragePath, removeReceivableAttachmentFiles, validateReceivableWorkbookDirectory, validateReceivableWorkbookShape } from "../src/receivables-files.js";
+import { RECEIVABLE_WORKBOOK_LIMITS, parseReceivableWorkbookEndOfCentralDirectory, preflightReceivableWorkbookArchive, receivableAttachmentStoragePath, removeReceivableAttachmentFiles, validateReceivableWorkbookDirectory, validateReceivableWorkbookShape } from "../src/receivables-files.js";
 
 const expectedDatabaseUrl = "postgresql://postgres@127.0.0.1:55432/receivables_test";
 const databaseUrl = process.env.DATABASE_URL ?? "";
@@ -111,12 +111,44 @@ function checkWorkbookResourcePolicy() {
     [entry({ compressedSize: 0, uncompressedSize: 1 })],
     [entry({ flags: 1 })],
     [entry({ path: "../workbook.xml" })],
+    [entry({ path: "/workbook.xml" })],
+    [entry({ path: "xl\\workbook.xml" })],
+    [entry({ path: "xl/\0workbook.xml" })],
+    [entry({ path: "C:/workbook.xml" })],
     [entry(), entry()],
   ]) assert.throws(() => validateReceivableWorkbookDirectory(entries), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
   const tooManySheets = new ExcelJS.Workbook(); for (let index = 0; index <= RECEIVABLE_WORKBOOK_LIMITS.worksheets; index += 1) tooManySheets.addWorksheet(`Sheet${index}`);
   assert.throws(() => validateReceivableWorkbookShape(tooManySheets), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
   const sparseRows = new ExcelJS.Workbook(); sparseRows.addWorksheet("Rows").getCell(`A${RECEIVABLE_WORKBOOK_LIMITS.rows + 1}`).value = "too far";
   assert.throws(() => validateReceivableWorkbookShape(sparseRows), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
+}
+
+function maliciousEndOfCentralDirectory(overrides: Partial<{ diskNumber: number; diskStart: number; entriesOnDisk: number; entries: number; centralSize: number; centralOffset: number; commentLength: number }> = {}) {
+  const values = { diskNumber: 0, diskStart: 0, entriesOnDisk: 1, entries: 1, centralSize: 0, centralOffset: 0, commentLength: 0, ...overrides };
+  const content = Buffer.alloc(22 + values.commentLength); content.writeUInt32LE(0x06054b50, 0); content.writeUInt16LE(values.diskNumber, 4); content.writeUInt16LE(values.diskStart, 6); content.writeUInt16LE(values.entriesOnDisk, 8); content.writeUInt16LE(values.entries, 10); content.writeUInt32LE(values.centralSize, 12); content.writeUInt32LE(values.centralOffset, 16); content.writeUInt16LE(values.commentLength, 20); return content;
+}
+
+async function checkBoundedEndOfCentralDirectory() {
+  const workbook = await validXlsx();
+  const parsed = parseReceivableWorkbookEndOfCentralDirectory(workbook);
+  assert.ok(parsed.entries > 0 && parsed.entries <= 256); assert.ok(parsed.centralOffset + parsed.centralSize <= parsed.endOffset);
+  for (const content of [
+    maliciousEndOfCentralDirectory({ entriesOnDisk: 0xffff, entries: 0xffff, centralSize: 0xffffffff, centralOffset: 0xffffffff }),
+    maliciousEndOfCentralDirectory({ entriesOnDisk: 257, entries: 257 }),
+    maliciousEndOfCentralDirectory({ diskNumber: 1 }),
+    maliciousEndOfCentralDirectory({ diskStart: 1 }),
+    maliciousEndOfCentralDirectory({ entriesOnDisk: 1, entries: 2 }),
+    maliciousEndOfCentralDirectory({ centralSize: 1 }),
+    Buffer.concat([maliciousEndOfCentralDirectory(), Buffer.from("trailing")]),
+  ]) assert.throws(() => parseReceivableWorkbookEndOfCentralDirectory(content), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
+  const zip64Locator = Buffer.alloc(20); zip64Locator.writeUInt32LE(0x07064b50, 0);
+  const zip64Record = Buffer.alloc(56); zip64Record.writeUInt32LE(0x06064b50, 0);
+  for (const content of [Buffer.concat([zip64Locator, maliciousEndOfCentralDirectory()]), Buffer.concat([zip64Record, maliciousEndOfCentralDirectory()])]) assert.throws(() => parseReceivableWorkbookEndOfCentralDirectory(content), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
+  const open = unzipper.Open as typeof unzipper.Open & { buffer: typeof unzipper.Open.buffer }; const original = open.buffer; let thirdPartyCalled = false;
+  open.buffer = (() => { thirdPartyCalled = true; throw new Error("unzipper must not receive rejected metadata"); }) as typeof open.buffer;
+  try { await assert.rejects(() => preflightReceivableWorkbookArchive(maliciousEndOfCentralDirectory({ entriesOnDisk: 0xffff, entries: 0xffff })), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT"); }
+  finally { open.buffer = original; }
+  assert.equal(thirdPartyCalled, false, "malicious EOCD reached unzipper");
 }
 
 async function start() {
@@ -186,6 +218,7 @@ async function unchanged(ledgerId: string, action: () => Promise<unknown>) {
 
 try {
   checkWorkbookResourcePolicy();
+  await checkBoundedEndOfCentralDirectory();
   if (process.platform === "win32") {
     const source = await readFile(resolve(root, "apps/api/src/receivables-files.ts"), "utf8");
     assert.match(source, /writeFile\(temporaryPath, content, \{ mode: 0o600 \}\)/, "atomic upload helper must request mode 0600");

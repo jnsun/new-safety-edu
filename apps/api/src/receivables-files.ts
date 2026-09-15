@@ -37,6 +37,24 @@ export const RECEIVABLE_WORKBOOK_LIMITS = Object.freeze({
 
 export type ReceivableWorkbookDirectoryEntry = { path: string; type: "Directory" | "File"; flags: number; compressedSize: number; uncompressedSize: number };
 
+export function parseReceivableWorkbookEndOfCentralDirectory(content: Buffer) {
+  const minimumSize = 22; const signature = 0x06054b50; const candidates: number[] = [];
+  const scanStart = content.length - Math.min(65_557, content.length);
+  for (let offset = content.length - minimumSize; offset >= scanStart; offset -= 1) {
+    if (content.readUInt32LE(offset) === signature && offset + minimumSize + content.readUInt16LE(offset + 20) === content.length) candidates.push(offset);
+  }
+  if (candidates.length !== 1) throw invalidFileContent();
+  const endOffset = candidates[0]!;
+  const diskNumber = content.readUInt16LE(endOffset + 4); const diskStart = content.readUInt16LE(endOffset + 6);
+  const entriesOnDisk = content.readUInt16LE(endOffset + 8); const entries = content.readUInt16LE(endOffset + 10);
+  const centralSize = content.readUInt32LE(endOffset + 12); const centralOffset = content.readUInt32LE(endOffset + 16);
+  const centralEnd = centralOffset + centralSize;
+  const hasZip64Locator = endOffset >= 20 && content.readUInt32LE(endOffset - 20) === 0x07064b50;
+  const hasZip64Record = endOffset >= 56 && content.readUInt32LE(endOffset - 56) === 0x06064b50;
+  if (diskNumber !== 0 || diskStart !== 0 || entriesOnDisk !== entries || entries === 0xffff || entries > RECEIVABLE_WORKBOOK_LIMITS.entries || centralSize === 0xffffffff || centralOffset === 0xffffffff || !Number.isSafeInteger(centralEnd) || centralEnd > endOffset || hasZip64Locator || hasZip64Record) throw invalidFileContent();
+  return { entries, centralSize, centralOffset, endOffset };
+}
+
 export function validateReceivableWorkbookDirectory(entries: readonly ReceivableWorkbookDirectoryEntry[]) {
   if (entries.length > RECEIVABLE_WORKBOOK_LIMITS.entries) throw invalidFileContent();
   const seen = new Set<string>();
@@ -55,7 +73,9 @@ export function validateReceivableWorkbookDirectory(entries: readonly Receivable
 }
 
 export async function preflightReceivableWorkbookArchive(content: Buffer) {
+  const metadata = parseReceivableWorkbookEndOfCentralDirectory(content);
   const directory = await unzipper.Open.buffer(content).catch(() => { throw invalidFileContent(); });
+  if (directory.files.length !== metadata.entries) throw invalidFileContent();
   validateReceivableWorkbookDirectory(directory.files);
 }
 
