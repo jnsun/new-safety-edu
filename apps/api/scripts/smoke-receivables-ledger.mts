@@ -40,6 +40,22 @@ type LedgerResponse = {
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const jsonBody = (value: unknown) => JSON.stringify(value);
 
+async function waitForLockWaiters(tableFragment: string, queryPattern: string, expected: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [row] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND wait_event_type = 'Lock'
+        AND query ILIKE ${`%${tableFragment}%`}
+        AND query ILIKE ${queryPattern}
+    `;
+    if (Number(row?.count ?? 0n) >= expected) return true;
+    await delay(20);
+  }
+  return false;
+}
+
 async function createIdentity(label: string, role?: "org_leader" | "company_admin", scopeId?: string) {
   const person = await prisma.person.create({ data: { name: `${marker}-${label}`, phone: `1940000${String(phoneCounter++).padStart(4, "0")}`, type: "employee", status: "active" } });
   ids.people.push(person.id);
@@ -135,10 +151,11 @@ async function stopServer() {
 async function cleanup() {
   if (triggerInstalled) {
     await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "receivable_ledgers"`);
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}_insert" ON "receivable_ledgers"`);
     await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${triggerFunctionName}"()`);
     triggerInstalled = false;
   }
-  await prisma.auditLog.deleteMany({ where: { objectId: { in: ids.ledgers }, action: { startsWith: "receivables.ledger." } } });
+  await prisma.auditLog.deleteMany({ where: { actorId: { in: ids.accounts }, action: { startsWith: "receivables." } } });
   await prisma.receivableLedgerRevision.deleteMany({ where: { ledgerId: { in: ids.ledgers } } });
   await prisma.receivableLedger.deleteMany({ where: { id: { in: ids.ledgers } } });
   await prisma.receivableSetting.deleteMany({ where: { financeOrganizationId: { in: ids.organizations } } });
@@ -160,18 +177,24 @@ try {
   const reporterA = await createIdentity("reporter-a");
   const reporterNoCreate = await createIdentity("reporter-no-create");
   const reporterB = await createIdentity("reporter-b");
+  const revokeRaceReporter = await createIdentity("revoke-race-reporter");
+  const readonly = await createIdentity("readonly");
   const companyAdmin = await createIdentity("company-admin", "company_admin");
   await prisma.receivableSetting.create({ data: { id: 1, financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
 
   const departmentA = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-a` } }); ids.departments.push(departmentA.id);
   const departmentB = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-b` } }); ids.departments.push(departmentB.id);
   const inactiveDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-inactive`, active: false } }); ids.departments.push(inactiveDepartment.id);
+  const createRaceDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-create-race` } }); ids.departments.push(createRaceDepartment.id);
+  const reassignRaceDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-reassign-race` } }); ids.departments.push(reassignRaceDepartment.id);
   await createGrant({ accountId: admin.id, grantedBy: owner.id, role: "admin" });
   await createGrant({ accountId: reporterA.id, grantedBy: owner.id, role: "reporter", canCreate: true, departmentIds: [departmentA.id] });
   await createGrant({ accountId: reporterNoCreate.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentA.id] });
   await createGrant({ accountId: reporterB.id, grantedBy: owner.id, role: "reporter", canCreate: true, departmentIds: [departmentB.id] });
+  const revokeRaceGrant = await createGrant({ accountId: revokeRaceReporter.id, grantedBy: owner.id, role: "reporter", canCreate: true, departmentIds: [departmentA.id] });
+  await createGrant({ accountId: readonly.id, grantedBy: owner.id, role: "readonly", departmentIds: [departmentA.id] });
 
-  const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterNoCreate, reporterB, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
+  const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterNoCreate, reporterB, revokeRaceReporter, readonly, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
   await startServer();
 
   const auto = await createLedger(tokens.owner!, {
@@ -190,6 +213,20 @@ try {
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitNull.id } })).finalAmount, null, "explicit null final must remain null");
   const workload = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-workload`, settlementMethod: "按工作量结算", contractAmount: "88" });
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: workload.id } })).finalAmount, null, "workload settlement must not auto-fill final amount");
+  const explicitFinal = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-explicit-final-patch`, settlementMethod: "固定总价", contractAmount: "100", finalAmount: "90" });
+  await expectStatus(`/api/receivables/ledgers/${explicitFinal.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "合同金额调整", contractAmount: "120" }) });
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitFinal.id } })).finalAmount?.toFixed(4), "90.0000", "omitted final must preserve an existing explicit final amount");
+  const nullFinalContractPatch = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-null-final-contract-patch`, settlementMethod: "固定总价", contractAmount: "100", finalAmount: null });
+  await expectStatus(`/api/receivables/ledgers/${nullFinalContractPatch.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "合同金额调整并带入", contractAmount: "120" }) });
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: nullFinalContractPatch.id } })).finalAmount?.toFixed(4), "120.0000", "null current final must auto-fill from a patched effective contract amount");
+  await expectStatus(`/api/receivables/ledgers/${workload.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "改为非工作量结算", settlementMethod: "固定总价" }) });
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: workload.id } })).finalAmount?.toFixed(4), "88.0000", "workload to non-workload must auto-fill a null final from the effective contract amount");
+  const switchToWorkload = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-switch-workload`, settlementMethod: "固定总价", contractAmount: "70" });
+  await expectStatus(`/api/receivables/ledgers/${switchToWorkload.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "改为工作量结算", settlementMethod: "按工作量结算" }) });
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: switchToWorkload.id } })).finalAmount?.toFixed(4), "70.0000", "switching to workload with omitted final must preserve the current final");
+  const explicitNullPatch = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-explicit-null-patch`, settlementMethod: "固定总价", contractAmount: "70" });
+  await expectStatus(`/api/receivables/ledgers/${explicitNullPatch.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "显式清空决算", contractAmount: "80", finalAmount: null }) });
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitNullPatch.id } })).finalAmount, null, "explicit patch final null must remain null");
   const reporterCreated = await createLedger(tokens.reporterA!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-reporter`, projectName: "报账员项目", debtStatus: "正常催收" });
 
   await expectError("/api/receivables/ledgers", tokens.owner!, 400, "VALIDATION_ERROR", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: "   " }) });
@@ -198,6 +235,7 @@ try {
   await expectError("/api/receivables/ledgers", tokens.owner!, 409, "RECEIVABLES_DEPARTMENT_INACTIVE", { method: "POST", body: jsonBody({ financeDepartmentId: inactiveDepartment.id, contractNo: `${marker}-inactive` }) });
   await expectError("/api/receivables/ledgers", tokens.reporterNoCreate!, 403, "RECEIVABLES_FORBIDDEN", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: `${marker}-no-create` }) });
   await expectError("/api/receivables/ledgers", tokens.reporterB!, 403, "RECEIVABLES_FORBIDDEN", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: `${marker}-cross-create` }) });
+  await expectError("/api/receivables/ledgers", tokens.readonly!, 403, "RECEIVABLES_FORBIDDEN", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: `${marker}-readonly-create` }) });
   await expectError("/api/receivables/ledgers", tokens.companyAdmin!, 403, "RECEIVABLES_FORBIDDEN", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: `${marker}-company-admin` }) });
   await expectError("/api/receivables/ledgers", tokens.reporterA!, 403, "RECEIVABLES_REPORTER_FIELD_NOT_ALLOWED", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: `${marker}-reporter-money`, contractAmount: "1" }) });
   for (const [label, contractAmount] of [["scale", "1.23456"], ["precision", "100000000000000"], ["negative", "-1"], ["number", 1]] as const) {
@@ -225,6 +263,7 @@ try {
   await expectError(`/api/receivables/ledgers/${reporterCreated.id}`, tokens.reporterA!, 400, "VALIDATION_ERROR", { method: "PATCH", body: jsonBody({ revision: 2, reason: "unknown", unexpected: true }) });
   await expectError(`/api/receivables/ledgers/${reporterCreated.id}`, tokens.reporterA!, 403, "RECEIVABLES_REPORTER_FIELD_NOT_ALLOWED", { method: "PATCH", body: jsonBody({ revision: 2, reason: "越权金额", finalAmount: "10" }) });
   await expectError(`/api/receivables/ledgers/${reporterCreated.id}`, tokens.reporterA!, 403, "RECEIVABLES_REPORTER_FIELD_NOT_ALLOWED", { method: "PATCH", body: jsonBody({ revision: 2, reason: "越权合同", contractNo: `${marker}-changed` }) });
+  await expectError(`/api/receivables/ledgers/${reporterCreated.id}`, tokens.readonly!, 403, "RECEIVABLES_FORBIDDEN", { method: "PATCH", body: jsonBody({ revision: 2, reason: "只读禁止修改", collectionNotes: "no" }) });
   await expectError(`/api/receivables/ledgers/${reporterCreated.id}`, tokens.reporterA!, 409, "REVISION_CONFLICT", { method: "PATCH", body: jsonBody({ revision: 1, reason: "旧版本", collectionNotes: "stale" }) });
   const hidden = await request(`/api/receivables/ledgers/${reporterCreated.id}`, tokens.reporterB!, { method: "PATCH", body: jsonBody({ revision: 2, reason: "cross scope", collectionNotes: "hidden" }) });
   const absent = await request(`/api/receivables/ledgers/${randomUUID()}`, tokens.reporterB!, { method: "PATCH", body: jsonBody({ revision: 2, reason: "absent", collectionNotes: "hidden" }) });
@@ -263,15 +302,97 @@ try {
   assert.equal((afterConcurrent.revisions[0]!.beforeSnapshot as Record<string, unknown>).collectionNotes, "before race");
   assert.ok(["owner won", "admin won"].includes(afterConcurrent.ledger?.collectionNotes ?? ""));
 
+  const revokeRaceContract = `${marker}-grant-revoke-race`;
+  const revokeRaceAuditBefore = await prisma.auditLog.count({ where: { actorId: revokeRaceReporter.id, action: "receivables.ledger.create" } });
+  let revokeRequest!: ReturnType<typeof request>;
+  let revokeRaceWrite!: ReturnType<typeof request<LedgerResponse>>;
+  let revokeRaceWriteWaited = false;
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM receivable_access_grants WHERE id = ${revokeRaceGrant.id}::uuid FOR UPDATE`;
+    revokeRequest = request(`/api/receivables/grants/${revokeRaceGrant.id}`, tokens.owner!, { method: "PATCH", body: jsonBody({ revision: revokeRaceGrant.revision, revoke: true, reason: "race revoke wins" }) });
+    assert.equal(await waitForLockWaiters("receivable_access_grants", "UPDATE%", 1), true, "grant revocation did not enter the row-lock queue");
+    revokeRaceWrite = request<LedgerResponse>("/api/receivables/ledgers", tokens.revokeRaceReporter!, { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: revokeRaceContract }) });
+    revokeRaceWriteWaited = await waitForLockWaiters("receivable_access_grants", "%SELECT%FOR UPDATE%", 1);
+  });
+  const [revokeResult, revokeRaceWriteResult] = await Promise.all([revokeRequest, revokeRaceWrite]);
+  if (revokeRaceWriteResult.body.data?.id) ids.ledgers.push(revokeRaceWriteResult.body.data.id);
+  assert.equal(revokeRaceWriteWaited, true, "ledger write did not queue behind the earlier grant revocation");
+  assert.equal(revokeResult.response.status, 200, JSON.stringify(revokeResult.body));
+  assert.equal(revokeRaceWriteResult.response.status, 403, JSON.stringify(revokeRaceWriteResult.body));
+  assert.equal(revokeRaceWriteResult.body.error?.code, "RECEIVABLES_FORBIDDEN");
+  assert.equal(await prisma.receivableLedger.count({ where: { contractNoNormalized: revokeRaceContract } }), 0);
+  assert.equal(await prisma.auditLog.count({ where: { actorId: revokeRaceReporter.id, action: "receivables.ledger.create" } }), revokeRaceAuditBefore);
+
+  const departmentCreateRaceContract = `${marker}-department-create-race-ledger`;
+  const departmentCreateAuditBefore = await prisma.auditLog.count({ where: { actorId: owner.id, action: "receivables.ledger.create" } });
+  let departmentDeactivateRequest!: ReturnType<typeof request>;
+  let departmentCreateRequest!: ReturnType<typeof request<LedgerResponse>>;
+  let departmentCreateWaited = false;
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id = ${createRaceDepartment.id}::uuid FOR UPDATE`;
+    departmentDeactivateRequest = request(`/api/receivables/departments/${createRaceDepartment.id}`, tokens.owner!, { method: "PATCH", body: jsonBody({ revision: createRaceDepartment.revision, active: false, reason: "race deactivate wins" }) });
+    assert.equal(await waitForLockWaiters("receivable_departments", "UPDATE%", 1), true, "department deactivation did not enter the row-lock queue");
+    departmentCreateRequest = request<LedgerResponse>("/api/receivables/ledgers", tokens.owner!, { method: "POST", body: jsonBody({ financeDepartmentId: createRaceDepartment.id, contractNo: departmentCreateRaceContract }) });
+    departmentCreateWaited = await waitForLockWaiters("receivable_departments", "%SELECT%FOR UPDATE%", 1);
+  });
+  const [departmentDeactivateResult, departmentCreateResult] = await Promise.all([departmentDeactivateRequest, departmentCreateRequest]);
+  if (departmentCreateResult.body.data?.id) ids.ledgers.push(departmentCreateResult.body.data.id);
+  assert.equal(departmentCreateWaited, true, "ledger create did not queue behind the earlier department deactivation");
+  assert.equal(departmentDeactivateResult.response.status, 200, JSON.stringify(departmentDeactivateResult.body));
+  assert.equal(departmentCreateResult.response.status, 409, JSON.stringify(departmentCreateResult.body));
+  assert.equal(departmentCreateResult.body.error?.code, "RECEIVABLES_DEPARTMENT_INACTIVE");
+  assert.equal(await prisma.receivableLedger.count({ where: { contractNoNormalized: departmentCreateRaceContract } }), 0);
+  assert.equal(await prisma.auditLog.count({ where: { actorId: owner.id, action: "receivables.ledger.create" } }), departmentCreateAuditBefore);
+
+  const reassignRaceLedger = await createLedger(tokens.owner!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-department-reassign-ledger` });
+  const reassignFactsBefore = await ledgerFacts(reassignRaceLedger.id);
+  let reassignDeactivateRequest!: ReturnType<typeof request>;
+  let reassignPatchRequest!: ReturnType<typeof request<LedgerResponse>>;
+  let reassignWaited = false;
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id = ${reassignRaceDepartment.id}::uuid FOR UPDATE`;
+    reassignDeactivateRequest = request(`/api/receivables/departments/${reassignRaceDepartment.id}`, tokens.owner!, { method: "PATCH", body: jsonBody({ revision: reassignRaceDepartment.revision, active: false, reason: "race reassign deactivate wins" }) });
+    assert.equal(await waitForLockWaiters("receivable_departments", "UPDATE%", 1), true, "reassignment target deactivation did not enter the row-lock queue");
+    reassignPatchRequest = request<LedgerResponse>(`/api/receivables/ledgers/${reassignRaceLedger.id}`, tokens.owner!, { method: "PATCH", body: jsonBody({ revision: 1, reason: "race reassignment", financeDepartmentId: reassignRaceDepartment.id }) });
+    reassignWaited = await waitForLockWaiters("receivable_departments", "%SELECT%FOR UPDATE%", 1);
+  });
+  const [reassignDeactivateResult, reassignPatchResult] = await Promise.all([reassignDeactivateRequest, reassignPatchRequest]);
+  assert.equal(reassignWaited, true, "ledger reassignment did not queue behind the earlier target deactivation");
+  assert.equal(reassignDeactivateResult.response.status, 200, JSON.stringify(reassignDeactivateResult.body));
+  assert.equal(reassignPatchResult.response.status, 409, JSON.stringify(reassignPatchResult.body));
+  assert.equal(reassignPatchResult.body.error?.code, "RECEIVABLES_DEPARTMENT_INACTIVE");
+  const reassignFactsAfter = await ledgerFacts(reassignRaceLedger.id);
+  assert.equal(reassignFactsAfter.ledger?.financeDepartmentId, departmentA.id);
+  assert.equal(reassignFactsAfter.ledger?.revision, reassignFactsBefore.ledger?.revision);
+  assert.equal(reassignFactsAfter.revisions.length, reassignFactsBefore.revisions.length);
+  assert.equal(reassignFactsAfter.audits.length, reassignFactsBefore.audits.length);
+
   const atomic = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-audit-atomic`, collectionNotes: "atomic before" });
-  const escapedContract = atomic.contractNoNormalized.replaceAll("'", "''");
-  await prisma.$executeRawUnsafe(`CREATE FUNCTION "${triggerFunctionName}"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.contract_no_normalized = '${escapedContract}' AND NEW.collection_notes = 'atomicity-change' THEN PERFORM pg_sleep(0.75); END IF; RETURN NEW; END $$`);
+  const unrelatedContract = `${marker}-unrelated-p2002`;
+  const escapedUnrelatedContract = unrelatedContract.replaceAll("'", "''");
+  await prisma.$executeRawUnsafe(`CREATE FUNCTION "${triggerFunctionName}"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_OP = 'INSERT' AND NEW.contract_no_normalized = '${escapedUnrelatedContract}' THEN RAISE EXCEPTION USING ERRCODE = '23505', CONSTRAINT = 'rxa_unrelated_unique'; END IF; IF TG_OP = 'UPDATE' AND NEW.collection_notes = 'unrelated-p2002' THEN RAISE EXCEPTION USING ERRCODE = '23505', CONSTRAINT = 'rxa_unrelated_update_unique'; END IF; RETURN NEW; END $$`);
   triggerInstalled = true;
   await prisma.$executeRawUnsafe(`CREATE TRIGGER "${triggerName}" BEFORE UPDATE ON "receivable_ledgers" FOR EACH ROW EXECUTE FUNCTION "${triggerFunctionName}"()`);
+  await prisma.$executeRawUnsafe(`CREATE TRIGGER "${triggerName}_insert" BEFORE INSERT ON "receivable_ledgers" FOR EACH ROW EXECUTE FUNCTION "${triggerFunctionName}"()`);
+  const unrelatedAuditBefore = await prisma.auditLog.count({ where: { actorId: owner.id, action: "receivables.ledger.create" } });
+  await expectError("/api/receivables/ledgers", tokens.owner!, 500, "INTERNAL_ERROR", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: unrelatedContract }) });
+  assert.equal(await prisma.receivableLedger.count({ where: { contractNoNormalized: unrelatedContract } }), 0);
+  assert.equal(await prisma.auditLog.count({ where: { actorId: owner.id, action: "receivables.ledger.create" } }), unrelatedAuditBefore, "unrelated P2002 must not leave a create audit");
+  const unrelatedPatchBefore = await ledgerFacts(atomic.id);
+  await expectError(`/api/receivables/ledgers/${atomic.id}`, tokens.admin!, 500, "INTERNAL_ERROR", { method: "PATCH", body: jsonBody({ revision: 1, reason: "unrelated unique", collectionNotes: "unrelated-p2002" }) });
+  const unrelatedPatchAfter = await ledgerFacts(atomic.id);
+  assert.equal(unrelatedPatchAfter.ledger?.revision, unrelatedPatchBefore.ledger?.revision);
+  assert.equal(unrelatedPatchAfter.ledger?.collectionNotes, unrelatedPatchBefore.ledger?.collectionNotes);
+  assert.equal(unrelatedPatchAfter.revisions.length, unrelatedPatchBefore.revisions.length);
+  assert.equal(unrelatedPatchAfter.audits.length, unrelatedPatchBefore.audits.length);
   const atomicBefore = await ledgerFacts(atomic.id);
-  const atomicRequest = request<LedgerResponse>(`/api/receivables/ledgers/${atomic.id}`, tokens.admin!, { method: "PATCH", body: jsonBody({ revision: 1, reason: "force audit rollback", collectionNotes: "atomicity-change" }) });
-  await delay(250);
-  await prisma.account.update({ where: { id: admin.id }, data: { status: "disabled" } });
+  let atomicRequest!: ReturnType<typeof request<LedgerResponse>>;
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id = ${atomic.id}::uuid FOR UPDATE`;
+    atomicRequest = request<LedgerResponse>(`/api/receivables/ledgers/${atomic.id}`, tokens.admin!, { method: "PATCH", body: jsonBody({ revision: 1, reason: "force audit rollback", collectionNotes: "atomicity-change" }) });
+    assert.equal(await waitForLockWaiters("receivable_ledgers", "%SELECT%FOR UPDATE%", 1), true, "atomicity write did not enter the ledger row-lock queue");
+    await prisma.account.update({ where: { id: admin.id }, data: { status: "disabled" } });
+  });
   const atomicFailure = await atomicRequest;
   assert.equal(atomicFailure.response.status, 409, JSON.stringify(atomicFailure.body));
   assert.equal(atomicFailure.body.error?.code, "ACTOR_STATE_CHANGED");
@@ -284,6 +405,7 @@ try {
 
   const toVoid = await createLedger(tokens.owner!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-void`, collectionNotes: "before void" });
   await expectError(`/api/receivables/ledgers/${toVoid.id}/void`, tokens.reporterA!, 403, "RECEIVABLES_REPORTER_FIELD_NOT_ALLOWED", { method: "POST", body: jsonBody({ revision: 1, reason: "reporter cannot void", confirm: true }) });
+  await expectError(`/api/receivables/ledgers/${toVoid.id}/void`, tokens.readonly!, 403, "RECEIVABLES_FORBIDDEN", { method: "POST", body: jsonBody({ revision: 1, reason: "readonly cannot void", confirm: true }) });
   await expectError(`/api/receivables/ledgers/${toVoid.id}/void`, tokens.owner!, 400, "VALIDATION_ERROR", { method: "POST", body: jsonBody({ revision: 1, reason: "missing confirm", confirm: false }) });
   await expectError(`/api/receivables/ledgers/${toVoid.id}/void`, tokens.owner!, 400, "VALIDATION_ERROR", { method: "POST", body: jsonBody({ revision: 1, reason: "unknown", confirm: true, unexpected: true }) });
   const voided = (await expectStatus<LedgerResponse>(`/api/receivables/ledgers/${toVoid.id}/void`, tokens.owner!, 200, { method: "POST", body: jsonBody({ revision: 1, reason: "重复录入作废", confirm: true }) })).data!;
@@ -303,12 +425,34 @@ try {
   assert.equal(afterRejectedVoid.revisions.length, 1);
   assert.equal(afterRejectedVoid.audits.length, 2);
 
+  const rebindOrganization = await prisma.organization.create({ data: { name: `${marker}-rebind-finance-org`, type: "department", parentId: company.id } }); ids.organizations.push(rebindOrganization.id);
+  const setupRaceContract = `${marker}-setup-rebind-race`;
+  const setupRaceAuditBefore = await prisma.auditLog.count({ where: { actorId: owner.id, action: "receivables.ledger.create" } });
+  let rebindRequest!: ReturnType<typeof request>;
+  let setupRaceWrite!: ReturnType<typeof request<LedgerResponse>>;
+  let setupRaceWriteWaited = false;
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(8645136501)`;
+    rebindRequest = request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: jsonBody({ organizationId: rebindOrganization.id, reason: "race rebind wins", confirm: true }) });
+    assert.equal(await waitForLockWaiters("pg_advisory_xact_lock", "%", 1), true, "setup rebind did not enter the advisory-lock queue");
+    setupRaceWrite = request<LedgerResponse>("/api/receivables/ledgers", tokens.owner!, { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: setupRaceContract }) });
+    setupRaceWriteWaited = await waitForLockWaiters("pg_advisory_xact_lock", "%", 2);
+  });
+  const [rebindResult, setupRaceWriteResult] = await Promise.all([rebindRequest, setupRaceWrite]);
+  if (setupRaceWriteResult.body.data?.id) ids.ledgers.push(setupRaceWriteResult.body.data.id);
+  assert.equal(setupRaceWriteWaited, true, "ledger write did not queue behind the earlier setup rebind");
+  assert.equal(rebindResult.response.status, 200, JSON.stringify(rebindResult.body));
+  assert.equal(setupRaceWriteResult.response.status, 403, JSON.stringify(setupRaceWriteResult.body));
+  assert.equal(setupRaceWriteResult.body.error?.code, "RECEIVABLES_FORBIDDEN");
+  assert.equal(await prisma.receivableLedger.count({ where: { contractNoNormalized: setupRaceContract } }), 0);
+  assert.equal(await prisma.auditLog.count({ where: { actorId: owner.id, action: "receivables.ledger.create" } }), setupRaceAuditBefore);
+
   console.log("RECEIVABLES_LEDGER_SMOKE=PASS");
 } finally {
   await stopServer();
   if (ids.accounts.length) await prisma.account.updateMany({ where: { id: { in: ids.accounts } }, data: { status: "active" } });
   await cleanup();
-  assert.equal(await prisma.auditLog.count({ where: { objectId: { in: ids.ledgers }, action: { startsWith: "receivables.ledger." } } }), 0);
+  assert.equal(await prisma.auditLog.count({ where: { actorId: { in: ids.accounts }, action: { startsWith: "receivables." } } }), 0);
   assert.equal(await prisma.receivableLedgerRevision.count({ where: { ledgerId: { in: ids.ledgers } } }), 0);
   assert.equal(await prisma.receivableLedger.count({ where: { id: { in: ids.ledgers } } }), 0);
   assert.equal(await prisma.receivableSetting.count({ where: { financeOrganizationId: { in: ids.organizations } } }), 0);

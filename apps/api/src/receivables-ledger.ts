@@ -48,11 +48,18 @@ const notFound = () => httpError(404, "RECEIVABLES_LEDGER_NOT_FOUND", "应收账
 const revisionConflict = () => httpError(409, "REVISION_CONFLICT", "台账版本已变化，请刷新后重试");
 const voided = () => httpError(409, "RECEIVABLES_LEDGER_VOIDED", "已作废台账只读");
 const reporterFieldForbidden = () => httpError(403, "RECEIVABLES_REPORTER_FIELD_NOT_ALLOWED", "报账员无权修改该字段");
+const unexpectedUniqueConflict = () => httpError(500, "INTERNAL_ERROR", "未识别的唯一约束冲突");
+const setupLockKey = 8_645_136_501n;
 const workloadSettlement = "按工作量结算";
 const textFields = ["projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "debtStatus", "collectionOwner", "collectionNotes"] as const;
 
 function snapshot(row: LedgerRow): Prisma.InputJsonObject {
   return JSON.parse(JSON.stringify(row)) as Prisma.InputJsonObject;
+}
+
+function hasExactUniqueTarget(error: Prisma.PrismaClientKnownRequestError, columns: readonly string[], indexName: string) {
+  const target = error.meta?.target;
+  return target === indexName || (Array.isArray(target) && target.length === columns.length && target.every((column, index) => column === columns[index]));
 }
 
 function decimal18_4(value: string | null, field: string): Prisma.Decimal | null {
@@ -91,9 +98,13 @@ function normalizeFields(input: LedgerFields, current?: LedgerRow): Prisma.Recei
   if (input.finalAmount !== undefined) data.finalAmount = decimal18_4(input.finalAmount, "决算金额");
   if (input.openingChargeDate !== undefined) data.openingChargeDate = dateOnly(input.openingChargeDate);
 
-  if (input.contractAmount !== undefined && input.finalAmount === undefined) {
+  const shouldConsiderAutoFinal = current
+    ? current.finalAmount === null && (input.contractAmount !== undefined || input.settlementMethod !== undefined)
+    : input.contractAmount !== undefined;
+  if (input.finalAmount === undefined && shouldConsiderAutoFinal) {
     const settlementMethod = input.settlementMethod === undefined ? current?.settlementMethod ?? null : (data.settlementMethod as string | null);
-    if (settlementMethod !== workloadSettlement && data.contractAmount !== null && data.contractAmount !== undefined) data.finalAmount = data.contractAmount;
+    const contractAmount = input.contractAmount === undefined ? current?.contractAmount : data.contractAmount;
+    if (settlementMethod !== workloadSettlement && contractAmount !== null && contractAmount !== undefined) data.finalAmount = contractAmount;
   }
   return data;
 }
@@ -107,9 +118,15 @@ function assertFieldPolicy(access: ReceivablesAccess, current: LedgerRow | null,
   }
 }
 
-async function requireActiveDepartment(tx: LedgerTx, id: string) {
-  const department = await tx.receivableDepartment.findFirst({ where: { id, active: true }, select: { id: true } });
-  if (!department) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "财务归属部门不存在或已停用");
+async function lockLedgerAuthority(tx: LedgerTx, principal: Principal) {
+  await tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
+  await tx.$queryRaw`SELECT id FROM receivable_access_grants WHERE account_id = ${principal.accountId}::uuid ORDER BY id FOR UPDATE`;
+  return resolveReceivablesAccess(principal, tx);
+}
+
+async function lockActiveDepartment(tx: LedgerTx, id: string) {
+  const [department] = await tx.$queryRaw<Array<{ id: string; active: boolean }>>`SELECT id, active FROM receivable_departments WHERE id = ${id}::uuid FOR UPDATE`;
+  if (!department?.active) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "财务归属部门不存在或已停用");
 }
 
 function writeScope(access: ReceivablesAccess) {
@@ -117,6 +134,11 @@ function writeScope(access: ReceivablesAccess) {
 }
 
 async function findWritableLedger(tx: LedgerTx, access: ReceivablesAccess, id: string) {
+  if (access.canManageAll) {
+    await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id = ${id}::uuid FOR UPDATE`;
+  } else {
+    await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id = ${id}::uuid AND finance_department_id IN (${Prisma.join(access.writeDepartmentIds.map((departmentId) => Prisma.sql`${departmentId}::uuid`))}) FOR UPDATE`;
+  }
   return tx.receivableLedger.findFirst({ where: { id, ...writeScope(access) }, select: ledgerSelect });
 }
 
@@ -138,10 +160,10 @@ const auditScope = (access: ReceivablesAccess, departmentId: string) => ({
 async function createLedger(context: ReceivablesLedgerContext, input: Extract<ReceivablesLedgerOperation, { type: "create" }>["input"]) {
   try {
     return await prisma.$transaction(async (tx) => {
-      const access = await resolveReceivablesAccess(context.principal, tx);
+      const access = await lockLedgerAuthority(tx, context.principal);
+      await lockActiveDepartment(tx, input.financeDepartmentId);
       requireReceivables(access, "create", input.financeDepartmentId);
       assertFieldPolicy(access, null, input);
-      await requireActiveDepartment(tx, input.financeDepartmentId);
       const data = normalizeFields(input);
       const created = await tx.receivableLedger.create({
         data: { ...(data as Prisma.ReceivableLedgerUncheckedCreateInput), financeDepartmentId: input.financeDepartmentId, contractNo: data.contractNo as string, contractNoNormalized: data.contractNoNormalized as string, createdBy: context.principal.accountId },
@@ -155,7 +177,10 @@ async function createLedger(context: ReceivablesLedgerContext, input: Extract<Re
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      throw httpError(409, "RECEIVABLES_CONTRACT_NO_CONFLICT", "合同编号已存在");
+      if (hasExactUniqueTarget(error, ["contract_no_normalized"], "receivable_ledgers_contract_no_normalized_key")) {
+        throw httpError(409, "RECEIVABLES_CONTRACT_NO_CONFLICT", "合同编号已存在");
+      }
+      throw unexpectedUniqueConflict();
     }
     throw error;
   }
@@ -164,8 +189,9 @@ async function createLedger(context: ReceivablesLedgerContext, input: Extract<Re
 async function updateLedger(context: ReceivablesLedgerContext, operation: Extract<ReceivablesLedgerOperation, { type: "patch" | "void" }>) {
   try {
     return await prisma.$transaction(async (tx) => {
-      const access = await resolveReceivablesAccess(context.principal, tx);
+      const access = await lockLedgerAuthority(tx, context.principal);
       requireReceivables(access, "write");
+      if (operation.type === "patch" && operation.input.financeDepartmentId !== undefined) await lockActiveDepartment(tx, operation.input.financeDepartmentId);
       const before = await findWritableLedger(tx, access, operation.id);
       if (!before) throw notFound();
       assertActive(before, operation.type);
@@ -179,8 +205,6 @@ async function updateLedger(context: ReceivablesLedgerContext, operation: Extrac
       let data: Prisma.ReceivableLedgerUncheckedUpdateManyInput;
       if (operation.type === "patch") {
         data = { ...normalizeFields(operation.input, before), updatedBy: context.principal.accountId, revision: { increment: 1 } };
-        const targetDepartmentId = operation.input.financeDepartmentId;
-        if (targetDepartmentId !== undefined && targetDepartmentId !== before.financeDepartmentId) await requireActiveDepartment(tx, targetDepartmentId);
       } else {
         data = { status: "voided", voidedAt: new Date(), voidedBy: context.principal.accountId, voidReason: reason, updatedBy: context.principal.accountId, revision: { increment: 1 } };
       }
@@ -203,9 +227,11 @@ async function updateLedger(context: ReceivablesLedgerContext, operation: Extrac
     });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const target = JSON.stringify(error.meta?.target ?? "");
-      if (target.includes("contract_no_normalized")) throw httpError(409, "RECEIVABLES_CONTRACT_NO_CONFLICT", "合同编号已存在");
-      throw revisionConflict();
+      if (hasExactUniqueTarget(error, ["contract_no_normalized"], "receivable_ledgers_contract_no_normalized_key")) {
+        throw httpError(409, "RECEIVABLES_CONTRACT_NO_CONFLICT", "合同编号已存在");
+      }
+      if (hasExactUniqueTarget(error, ["ledger_id", "revision"], "receivable_ledger_revisions_ledger_id_revision_key")) throw revisionConflict();
+      throw unexpectedUniqueConflict();
     }
     throw error;
   }
