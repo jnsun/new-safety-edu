@@ -5,6 +5,7 @@ import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import { administerReceivables } from "../receivables-admin.js";
 import { requireReceivables, resolveReceivablesAccess } from "../receivables-access.js";
+import { queryReceivables } from "../receivables-query.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type RouteDependencies = {
@@ -39,6 +40,23 @@ const dictionaryUpdateInput = z.object({ revision: z.number().int().positive(), 
 const migrationPreviewInput = z.object({ mode: z.literal("preview"), targetId: z.string().uuid() }).strict();
 const migrationApplyInput = z.object({ mode: z.literal("apply"), targetId: z.string().uuid(), token: z.string().min(1).max(2048), reason: reasonInput, confirm: z.literal(true) }).strict();
 const migrationInput = z.discriminatedUnion("mode", [migrationPreviewInput, migrationApplyInput]);
+const receivablesFilters = {
+  financeDepartmentId: z.string().uuid().optional(),
+  status: z.enum(["active", "voided", "all"]).optional(),
+  settlement: z.enum(["unsettled", "settled", "all"]).optional(),
+  debtStatus: z.string().trim().min(1).max(120).optional(),
+  creditorUnit: z.string().trim().min(1).max(120).optional(),
+  anomaly: z.enum(["over_received", "writeoff_adjustment_required", "final_amount_missing"]).optional(),
+  search: z.string().trim().min(1).max(240).optional(),
+};
+const receivablesListInput = z.object({
+  ...receivablesFilters,
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(50),
+  sort: z.enum(["updatedAt", "contractNo", "projectName", "customerName", "debtStatus", "finalAmount", "invoicedAmount", "receivedAmount", "balance", "openingChargeDate"]).default("updatedAt"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+}).strict();
+const receivablesDashboardInput = z.object(receivablesFilters).strict();
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
 const lockReceivablesSetup = (tx: Prisma.TransactionClient) => tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
@@ -96,6 +114,16 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     });
     return { data };
   });
+
+  app.get("/api/receivables/ledgers", { preHandler: deps.authenticate }, async (request) => ({
+    data: await queryReceivables(request.principal as Principal, { type: "ledger.list", input: receivablesListInput.parse(request.query) }),
+  }));
+  app.get("/api/receivables/ledgers/:id", { preHandler: deps.authenticate }, async (request) => ({
+    data: await queryReceivables(request.principal as Principal, { type: "ledger.detail", id: idParams.parse(request.params).id }),
+  }));
+  app.get("/api/receivables/dashboard", { preHandler: deps.authenticate }, async (request) => ({
+    data: await queryReceivables(request.principal as Principal, { type: "dashboard", input: receivablesDashboardInput.parse(request.query) }),
+  }));
 
   app.get("/api/receivables/grants", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "grant.list" }) }));
   app.post("/api/receivables/grants", { preHandler: deps.authenticate }, async (request, reply) => {
