@@ -50,12 +50,14 @@ function parseOpeningDateHistory(metadata: Prisma.JsonValue | null) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw openingDateHistoryInvalid();
   const before = metadata.before;
   if (!before || typeof before !== "object" || Array.isArray(before) || !Object.prototype.hasOwnProperty.call(before, "openingChargeDate")) throw openingDateHistoryInvalid();
+  const revision = before.revision;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision <= 0) throw openingDateHistoryInvalid();
   const value = before.openingChargeDate;
-  if (value === null) return null;
+  if (value === null) return { revision, openingChargeDate: null };
   if (typeof value !== "string") throw openingDateHistoryInvalid();
   const parsed = new Date(value);
   if (Number.isNaN(parsed.valueOf()) || parsed.toISOString() !== value) throw openingDateHistoryInvalid();
-  return parsed;
+  return { revision, openingChargeDate: parsed };
 }
 function decimal(value: string, invalid: () => Error, positive: boolean) {
   try {
@@ -119,13 +121,19 @@ async function openingChargeDate(tx: Tx, before: Ledger, latestInvoice: { invoic
   if (latestInvoice) return latestInvoice.invoiceDate;
   const hasInvoiceHistory = await tx.receivableInvoice.findFirst({ where: { ledgerId: before.id }, select: { id: true } });
   if (!hasInvoiceHistory) return before.openingChargeDate;
-  const firstCreateAudit = await tx.auditLog.findFirst({
+  const createAudits = await tx.auditLog.findMany({
     where: { objectType: "receivable_ledger", objectId: before.id, action: "receivables.money.invoice.create", result: "success" },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: { metadata: true },
   });
-  if (!firstCreateAudit) throw openingDateHistoryInvalid();
-  return parseOpeningDateHistory(firstCreateAudit.metadata);
+  if (!createAudits.length) throw openingDateHistoryInvalid();
+  const histories = createAudits.map(({ metadata }) => parseOpeningDateHistory(metadata));
+  const fallbacksByRevision = new Map<number, string | null>();
+  for (const history of histories) {
+    const fallback = history.openingChargeDate?.toISOString() ?? null;
+    if (fallbacksByRevision.has(history.revision) && fallbacksByRevision.get(history.revision) !== fallback) throw openingDateHistoryInvalid();
+    fallbacksByRevision.set(history.revision, fallback);
+  }
+  return histories.reduce((earliest, history) => history.revision < earliest.revision ? history : earliest).openingChargeDate;
 }
 async function updateParent(tx: Tx, context: ReceivablesMoneyContext, access: ReceivablesAccess, before: Ledger, reason: string, action: string, beforeAnomaly: string | null, nextWriteoff = before.writeoffAmount, detailAudit?: DetailAudit) {
   const detailTotals = await aggregates(tx, before.id);

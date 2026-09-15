@@ -172,13 +172,34 @@ try {
   await expect(`/api/receivables/ledgers/${nullHistoryLedger.id}/invoices/${nullHistoryInvoice.id}/void`, ownerToken, 200, { method: "POST", body: json({ ledgerRevision: 2, revision: nullHistoryInvoice.revision, reason: "restore null history" }) });
   const nullHistoryState = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${nullHistoryLedger.id}`, ownerToken, 200)).data!.ledger; assert.equal(nullHistoryState.openingChargeDate, null, "a null pre-invoice opening date must be restored as null");
 
+  const causalLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-causal`, contractNoNormalized: `${marker}-causal`, finalAmount: "40.0000", openingChargeDate: new Date("2024-05-01T00:00:00.000Z"), createdBy: owner.id } }); ids.ledgers.push(causalLedger.id);
+  const causalInvoice1 = (await expect<Detail>(`/api/receivables/ledgers/${causalLedger.id}/invoices`, ownerToken, 201, { method: "POST", body: json({ ledgerRevision: 1, invoiceDate: "2026-05-01", amount: "4" }) })).data!;
+  const causalInvoice2 = (await expect<Detail>(`/api/receivables/ledgers/${causalLedger.id}/invoices`, ownerToken, 201, { method: "POST", body: json({ ledgerRevision: 2, invoiceDate: "2026-06-01", amount: "4" }) })).data!;
+  const causalAudits = await prisma.auditLog.findMany({ where: { objectType: "receivable_ledger", objectId: causalLedger.id, action: "receivables.money.invoice.create", result: "success" } });
+  const causalAudit1 = causalAudits.find((row) => (row.metadata as { before?: { revision?: number } }).before?.revision === 1)!; const causalAudit2 = causalAudits.find((row) => (row.metadata as { before?: { revision?: number } }).before?.revision === 2)!;
+  assert.ok(causalAudit1 && causalAudit2, "two real consecutive invoice-create audits are required");
+  const tiedCreatedAt = new Date("2026-01-01T00:00:00.000Z"); const randomTail = randomUUID().replaceAll("-", "").slice(0, 12);
+  await prisma.auditLog.update({ where: { id: causalAudit1.id }, data: { id: `ffffffff-ffff-4fff-8fff-${randomTail}`, createdAt: tiedCreatedAt } });
+  await prisma.auditLog.update({ where: { id: causalAudit2.id }, data: { id: `00000000-0000-4000-8000-${randomTail}`, createdAt: tiedCreatedAt } });
+  await expect(`/api/receivables/ledgers/${causalLedger.id}/invoices/${causalInvoice2.id}/void`, ownerToken, 200, { method: "POST", body: json({ ledgerRevision: 3, revision: causalInvoice2.revision, reason: "remove second invoice" }) });
+  await expect(`/api/receivables/ledgers/${causalLedger.id}/invoices/${causalInvoice1.id}/void`, ownerToken, 200, { method: "POST", body: json({ ledgerRevision: 4, revision: causalInvoice1.revision, reason: "restore causal baseline" }) });
+  const causalState = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${causalLedger.id}`, ownerToken, 200)).data!.ledger; assert.equal(causalState.openingChargeDate?.slice(0, 10), "2024-05-01", "fallback causality must use the smallest valid parent revision, not timestamp or UUID order");
+
+  const ambiguousHistoryLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-ambiguous-history`, contractNoNormalized: `${marker}-ambiguous-history`, finalAmount: "40.0000", openingChargeDate: new Date("2025-05-01T00:00:00.000Z"), createdBy: owner.id } }); ids.ledgers.push(ambiguousHistoryLedger.id);
+  const ambiguousInvoice = (await expect<Detail>(`/api/receivables/ledgers/${ambiguousHistoryLedger.id}/invoices`, ownerToken, 201, { method: "POST", body: json({ ledgerRevision: 1, invoiceDate: "2026-07-01", amount: "4" }) })).data!;
+  await prisma.auditLog.create({ data: { actorId: owner.id, action: "receivables.money.invoice.create", objectType: "receivable_ledger", objectId: ambiguousHistoryLedger.id, result: "success", metadata: { before: { revision: 1, openingChargeDate: "2025-05-02T00:00:00.000Z" } } } });
+  await errorWithoutMutation("ambiguous first-invoice revision", `/api/receivables/ledgers/${ambiguousHistoryLedger.id}/invoices/${ambiguousInvoice.id}/void`, ownerToken, 409, "RECEIVABLES_OPENING_DATE_HISTORY_INVALID", { method: "POST", body: json({ ledgerRevision: 2, revision: 1, reason: "ambiguous history" }) });
+
   const missingHistoryLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-missing-history`, contractNoNormalized: `${marker}-missing-history`, finalAmount: "40.0000", openingChargeDate: new Date("2026-03-03T00:00:00.000Z"), createdBy: owner.id } }); ids.ledgers.push(missingHistoryLedger.id);
   const missingHistoryInvoice = await prisma.receivableInvoice.create({ data: { ledgerId: missingHistoryLedger.id, invoiceDate: new Date("2026-03-03T00:00:00.000Z"), amount: "4", createdBy: owner.id } });
   await errorWithoutMutation("missing first-invoice audit", `/api/receivables/ledgers/${missingHistoryLedger.id}/invoices/${missingHistoryInvoice.id}/void`, ownerToken, 409, "RECEIVABLES_OPENING_DATE_HISTORY_INVALID", { method: "POST", body: json({ ledgerRevision: 1, revision: 1, reason: "missing history" }) });
 
   const malformedHistoryLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-malformed-history`, contractNoNormalized: `${marker}-malformed-history`, finalAmount: "40.0000", openingChargeDate: new Date("2026-04-03T00:00:00.000Z"), createdBy: owner.id } }); ids.ledgers.push(malformedHistoryLedger.id);
   const malformedHistoryInvoice = await prisma.receivableInvoice.create({ data: { ledgerId: malformedHistoryLedger.id, invoiceDate: new Date("2026-04-03T00:00:00.000Z"), amount: "4", createdBy: owner.id } });
-  await prisma.auditLog.create({ data: { actorId: owner.id, action: "receivables.money.invoice.create", objectType: "receivable_ledger", objectId: malformedHistoryLedger.id, result: "success", metadata: { before: {} } } });
+  await prisma.auditLog.createMany({ data: [
+    { actorId: owner.id, action: "receivables.money.invoice.create", objectType: "receivable_ledger", objectId: malformedHistoryLedger.id, result: "success", metadata: { before: { revision: 1, openingChargeDate: "2025-04-03T00:00:00.000Z" } } },
+    { actorId: owner.id, action: "receivables.money.invoice.create", objectType: "receivable_ledger", objectId: malformedHistoryLedger.id, result: "success", metadata: { before: {} } },
+  ] });
   await errorWithoutMutation("malformed first-invoice audit", `/api/receivables/ledgers/${malformedHistoryLedger.id}/invoices/${malformedHistoryInvoice.id}/void`, ownerToken, 409, "RECEIVABLES_OPENING_DATE_HISTORY_INVALID", { method: "POST", body: json({ ledgerRevision: 1, revision: 1, reason: "malformed history" }) });
 
   const concurrentLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-concurrent`, contractNoNormalized: `${marker}-concurrent`, finalAmount: "10.0000", createdBy: owner.id } }); ids.ledgers.push(concurrentLedger.id); const concurrentPath = `/api/receivables/ledgers/${concurrentLedger.id}/receipts`;
