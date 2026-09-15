@@ -28,6 +28,7 @@ const voidedDetail = () => httpError(409, "RECEIVABLES_DETAIL_VOIDED", "已作�
 const amountInvalid = () => httpError(400, "RECEIVABLES_AMOUNT_INVALID", "金额必须为大于 0 的 Decimal(18,4) 字符串");
 const writeoffInvalid = () => httpError(400, "RECEIVABLES_WRITEOFF_INVALID", "核销金额必须为非负 Decimal(18,4) 字符串");
 const dateInvalid = () => httpError(400, "RECEIVABLES_DATE_INVALID", "日期格式无效");
+const openingDateHistoryInvalid = () => httpError(409, "RECEIVABLES_OPENING_DATE_HISTORY_INVALID", "首次开票前挂账日期审计缺失或损坏");
 const unexpectedDatabaseConflict = () => httpError(500, "INTERNAL_ERROR", "未识别的数据库写入异常");
 
 const ledgerSelect = {
@@ -38,9 +39,23 @@ type Ledger = Prisma.ReceivableLedgerGetPayload<{ select: typeof ledgerSelect }>
 type DetailAudit = { detailType: "invoice" | "receipt"; detailId: string; before: Prisma.InputJsonObject | null; after: Prisma.InputJsonObject };
 
 function snapshot(row: unknown): Prisma.InputJsonObject { return JSON.parse(JSON.stringify(row)) as Prisma.InputJsonObject; }
-function hasExactUniqueTarget(error: Prisma.PrismaClientKnownRequestError, columns: readonly string[], indexName: string) {
+export function classifyReceivablesMoneyDatabaseError(error: { code: string; meta?: { target?: unknown } | null }): "revision_conflict" | "internal" | null {
   const target = error.meta?.target;
-  return target === indexName || (Array.isArray(target) && target.length === columns.length && target.every((column, index) => column === columns[index]));
+  const revisionConflict = target === "receivable_ledger_revisions_ledger_id_revision_key" || (Array.isArray(target) && target.length === 2 && target[0] === "ledger_id" && target[1] === "revision");
+  if (error.code === "P2002" && revisionConflict) return "revision_conflict";
+  if (error.code === "P2002" || error.code === "P2025") return "internal";
+  return null;
+}
+function parseOpeningDateHistory(metadata: Prisma.JsonValue | null) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw openingDateHistoryInvalid();
+  const before = metadata.before;
+  if (!before || typeof before !== "object" || Array.isArray(before) || !Object.prototype.hasOwnProperty.call(before, "openingChargeDate")) throw openingDateHistoryInvalid();
+  const value = before.openingChargeDate;
+  if (value === null) return null;
+  if (typeof value !== "string") throw openingDateHistoryInvalid();
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf()) || parsed.toISOString() !== value) throw openingDateHistoryInvalid();
+  return parsed;
 }
 function decimal(value: string, invalid: () => Error, positive: boolean) {
   try {
@@ -100,12 +115,25 @@ async function notifyAnomaly(tx: Tx, ledger: Ledger, beforeAnomaly: string | nul
   const base = `receivables-anomaly:${ledger.id}:${afterAnomaly}:${ledger.revision + 1}`;
   if (recipients.length) await tx.notification.createMany({ data: recipients.map((personId) => ({ personId, title: "应收账款待核对", body: `合同台账出现${afterAnomaly === "over_received" ? "超收" : "核销待调减"}，请核对处理。`, dedupeKey: `${base}:${personId}` })), skipDuplicates: true });
 }
+async function openingChargeDate(tx: Tx, before: Ledger, latestInvoice: { invoiceDate: Date } | null) {
+  if (latestInvoice) return latestInvoice.invoiceDate;
+  const hasInvoiceHistory = await tx.receivableInvoice.findFirst({ where: { ledgerId: before.id }, select: { id: true } });
+  if (!hasInvoiceHistory) return before.openingChargeDate;
+  const firstCreateAudit = await tx.auditLog.findFirst({
+    where: { objectType: "receivable_ledger", objectId: before.id, action: "receivables.money.invoice.create", result: "success" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { metadata: true },
+  });
+  if (!firstCreateAudit) throw openingDateHistoryInvalid();
+  return parseOpeningDateHistory(firstCreateAudit.metadata);
+}
 async function updateParent(tx: Tx, context: ReceivablesMoneyContext, access: ReceivablesAccess, before: Ledger, reason: string, action: string, beforeAnomaly: string | null, nextWriteoff = before.writeoffAmount, detailAudit?: DetailAudit) {
   const detailTotals = await aggregates(tx, before.id);
   const afterAmounts = calculateReceivableAmounts({ finalAmount: before.finalAmount, writeoffAmount: nextWriteoff, invoiceAmounts: detailTotals.invoices, receiptAmounts: detailTotals.receipts });
   const latestInvoice = await tx.receivableInvoice.findFirst({ where: { ledgerId: before.id, status: "active" }, orderBy: [{ invoiceDate: "desc" }, { id: "desc" }], select: { invoiceDate: true } });
+  const nextOpeningChargeDate = await openingChargeDate(tx, before, latestInvoice);
   await tx.receivableLedgerRevision.create({ data: { ledgerId: before.id, revision: before.revision, beforeSnapshot: snapshot(before), reason, changedBy: context.principal.accountId } });
-  const changed = await tx.receivableLedger.updateMany({ where: { id: before.id, revision: before.revision, status: "active" }, data: { ...(latestInvoice ? { openingChargeDate: latestInvoice.invoiceDate } : {}), writeoffAmount: nextWriteoff, updatedBy: context.principal.accountId, revision: { increment: 1 } } });
+  const changed = await tx.receivableLedger.updateMany({ where: { id: before.id, revision: before.revision, status: "active" }, data: { openingChargeDate: nextOpeningChargeDate, writeoffAmount: nextWriteoff, updatedBy: context.principal.accountId, revision: { increment: 1 } } });
   if (changed.count !== 1) throw conflict();
   const after = await tx.receivableLedger.findUniqueOrThrow({ where: { id: before.id }, select: ledgerSelect });
   await notifyAnomaly(tx, before, beforeAnomaly, afterAmounts.anomaly);
@@ -176,8 +204,9 @@ export async function writeReceivablesMoney(context: ReceivablesMoneyContext, op
     return await (operation.type === "writeoff.patch" ? writeoffCommand(context, operation) : detailCommand(context, operation));
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      if (error.code === "P2002" && hasExactUniqueTarget(error, ["ledger_id", "revision"], "receivable_ledger_revisions_ledger_id_revision_key")) throw conflict();
-      if (error.code === "P2002" || error.code === "P2025") throw unexpectedDatabaseConflict();
+      const classification = classifyReceivablesMoneyDatabaseError(error);
+      if (classification === "revision_conflict") throw conflict();
+      if (classification === "internal") throw unexpectedDatabaseConflict();
     }
     throw error;
   }

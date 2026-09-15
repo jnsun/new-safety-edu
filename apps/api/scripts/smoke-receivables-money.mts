@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { SignJWT } from "jose";
@@ -166,7 +165,21 @@ try {
   const historicLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-historic`, contractNoNormalized: `${marker}-historic`, finalAmount: "40.0000", openingChargeDate: new Date("2025-01-02T00:00:00.000Z"), createdBy: owner.id } }); ids.ledgers.push(historicLedger.id);
   await expect(`/api/receivables/ledgers/${historicLedger.id}/receipts`, ownerToken, 201, { method: "POST", body: json({ ledgerRevision: 1, receiptDate: "2026-01-01", amount: "1" }) }); let historicState = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${historicLedger.id}`, ownerToken, 200)).data!.ledger; assert.equal(historicState.openingChargeDate?.slice(0, 10), "2025-01-02");
   const onlyInvoice = (await expect<Detail>(`/api/receivables/ledgers/${historicLedger.id}/invoices`, ownerToken, 201, { method: "POST", body: json({ ledgerRevision: 2, invoiceDate: "2026-01-03", amount: "4" }) })).data!;
-  await expect(`/api/receivables/ledgers/${historicLedger.id}/invoices/${onlyInvoice.id}/void`, ownerToken, 200, { method: "POST", body: json({ ledgerRevision: 3, revision: onlyInvoice.revision, reason: "remove only active invoice" }) }); historicState = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${historicLedger.id}`, ownerToken, 200)).data!.ledger; assert.equal(historicState.openingChargeDate?.slice(0, 10), "2026-01-03", "voiding every active invoice must preserve the last historical opening charge date");
+  await expect(`/api/receivables/ledgers/${historicLedger.id}/invoices/${onlyInvoice.id}/void`, ownerToken, 200, { method: "POST", body: json({ ledgerRevision: 3, revision: onlyInvoice.revision, reason: "remove only active invoice" }) }); historicState = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${historicLedger.id}`, ownerToken, 200)).data!.ledger; assert.equal(historicState.openingChargeDate?.slice(0, 10), "2025-01-02", "voiding every active invoice must restore the pre-invoice historical opening charge date");
+
+  const nullHistoryLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-null-history`, contractNoNormalized: `${marker}-null-history`, finalAmount: "40.0000", createdBy: owner.id } }); ids.ledgers.push(nullHistoryLedger.id);
+  const nullHistoryInvoice = (await expect<Detail>(`/api/receivables/ledgers/${nullHistoryLedger.id}/invoices`, ownerToken, 201, { method: "POST", body: json({ ledgerRevision: 1, invoiceDate: "2026-02-03", amount: "4" }) })).data!;
+  await expect(`/api/receivables/ledgers/${nullHistoryLedger.id}/invoices/${nullHistoryInvoice.id}/void`, ownerToken, 200, { method: "POST", body: json({ ledgerRevision: 2, revision: nullHistoryInvoice.revision, reason: "restore null history" }) });
+  const nullHistoryState = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${nullHistoryLedger.id}`, ownerToken, 200)).data!.ledger; assert.equal(nullHistoryState.openingChargeDate, null, "a null pre-invoice opening date must be restored as null");
+
+  const missingHistoryLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-missing-history`, contractNoNormalized: `${marker}-missing-history`, finalAmount: "40.0000", openingChargeDate: new Date("2026-03-03T00:00:00.000Z"), createdBy: owner.id } }); ids.ledgers.push(missingHistoryLedger.id);
+  const missingHistoryInvoice = await prisma.receivableInvoice.create({ data: { ledgerId: missingHistoryLedger.id, invoiceDate: new Date("2026-03-03T00:00:00.000Z"), amount: "4", createdBy: owner.id } });
+  await errorWithoutMutation("missing first-invoice audit", `/api/receivables/ledgers/${missingHistoryLedger.id}/invoices/${missingHistoryInvoice.id}/void`, ownerToken, 409, "RECEIVABLES_OPENING_DATE_HISTORY_INVALID", { method: "POST", body: json({ ledgerRevision: 1, revision: 1, reason: "missing history" }) });
+
+  const malformedHistoryLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-malformed-history`, contractNoNormalized: `${marker}-malformed-history`, finalAmount: "40.0000", openingChargeDate: new Date("2026-04-03T00:00:00.000Z"), createdBy: owner.id } }); ids.ledgers.push(malformedHistoryLedger.id);
+  const malformedHistoryInvoice = await prisma.receivableInvoice.create({ data: { ledgerId: malformedHistoryLedger.id, invoiceDate: new Date("2026-04-03T00:00:00.000Z"), amount: "4", createdBy: owner.id } });
+  await prisma.auditLog.create({ data: { actorId: owner.id, action: "receivables.money.invoice.create", objectType: "receivable_ledger", objectId: malformedHistoryLedger.id, result: "success", metadata: { before: {} } } });
+  await errorWithoutMutation("malformed first-invoice audit", `/api/receivables/ledgers/${malformedHistoryLedger.id}/invoices/${malformedHistoryInvoice.id}/void`, ownerToken, 409, "RECEIVABLES_OPENING_DATE_HISTORY_INVALID", { method: "POST", body: json({ ledgerRevision: 1, revision: 1, reason: "malformed history" }) });
 
   const concurrentLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-concurrent`, contractNoNormalized: `${marker}-concurrent`, finalAmount: "10.0000", createdBy: owner.id } }); ids.ledgers.push(concurrentLedger.id); const concurrentPath = `/api/receivables/ledgers/${concurrentLedger.id}/receipts`;
   const [concurrentA, concurrentB] = await Promise.all([request<Detail>(concurrentPath, ownerToken, { method: "POST", body: json({ ledgerRevision: 1, receiptDate: "2026-10-01", amount: "20", referenceNo: "race-a" }) }), request<Detail>(concurrentPath, ownerToken, { method: "POST", body: json({ ledgerRevision: 1, receiptDate: "2026-10-02", amount: "20", referenceNo: "race-b" }) })]);
@@ -178,7 +191,12 @@ try {
   let writeoffState = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${writeoffLedger.id}`, ownerToken, 200)).data!.ledger; const adjusted = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${writeoffLedger.id}/writeoff`, ownerToken, 200, { method: "PATCH", body: json({ ledgerRevision: writeoffState.revision, reason: "approved adjustment", writeoffAmount: "50.0000" }) })).data!.ledger; assert.equal(adjusted.finalAmount, "100.0000"); assert.equal(adjusted.writeoffAmount, "50.0000");
   await expect(`/api/receivables/ledgers/${writeoffLedger.id}/receipts`, ownerToken, 201, { method: "POST", body: json({ ledgerRevision: 2, receiptDate: "2026-09-20", amount: "60.0000" }) }); writeoffState = (await expect<{ ledger: Ledger }>(`/api/receivables/ledgers/${writeoffLedger.id}`, ownerToken, 200)).data!.ledger; assert.equal(writeoffState.anomaly, "writeoff_adjustment_required"); assert.equal(writeoffState.balance, "-10.0000");
 
-  const moneySource = await readFile(resolve(import.meta.dirname, "../src/receivables-money.ts"), "utf8"); assert.match(moneySource, /hasExactUniqueTarget\(error,[\s\S]*receivable_ledger_revisions_ledger_id_revision_key/); assert.match(moneySource, /throw unexpectedDatabaseConflict\(\)/, "unknown database errors must not be exposed as business conflicts");
+  const { classifyReceivablesMoneyDatabaseError } = await import("../src/receivables-money.js");
+  assert.equal(classifyReceivablesMoneyDatabaseError({ code: "P2002", meta: { target: ["ledger_id", "revision"] } }), "revision_conflict");
+  assert.equal(classifyReceivablesMoneyDatabaseError({ code: "P2002", meta: { target: "receivable_ledger_revisions_ledger_id_revision_key" } }), "revision_conflict");
+  assert.equal(classifyReceivablesMoneyDatabaseError({ code: "P2002", meta: { target: ["dedupe_key"] } }), "internal");
+  assert.equal(classifyReceivablesMoneyDatabaseError({ code: "P2025" }), "internal");
+  assert.equal(classifyReceivablesMoneyDatabaseError({ code: "P2034" }), null);
   completed = true;
 } finally {
   await stop(); await cleanup(); await assertClean(); const restored = await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } }); assert.deepEqual(restored, { financeOrganizationId: null, configurationConfirmedAt: null, configurationConfirmedBy: null }, "baseline receivable setting was not restored"); await prisma.$disconnect();
