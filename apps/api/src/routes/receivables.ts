@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { z } from "zod";
 import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
@@ -64,7 +63,7 @@ const receivablesListInput = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
 }).strict();
 const receivablesDashboardInput = z.object(receivablesFilters).strict();
-const receivablesExportCreateInput = z.object({ filters: z.object(receivablesFilters).strict().default({}) }).strict();
+const receivablesExportCreateInput = z.object({ idempotencyKey: z.string().uuid().optional(), filters: z.object(receivablesFilters).strict().default({}) }).strict();
 const receivablesExportListInput = z.object({ page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).strict();
 const receivablesExportTokenInput = z.object({ token: z.string().min(32).max(200) }).strict();
 const ledgerText = (max: number) => z.string().max(max).nullable().optional();
@@ -173,8 +172,8 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     data: await listReceivablesExports(request.principal as Principal, receivablesExportListInput.parse(request.query), exportEnvironment),
   }));
   app.post("/api/receivables/exports", { preHandler: deps.authenticate }, async (request, reply) => {
-    const { filters } = receivablesExportCreateInput.parse(request.body);
-    const job = await createReceivablesExportJob(request.principal as Principal, filters, exportEnvironment);
+    const { idempotencyKey, filters } = receivablesExportCreateInput.parse(request.body);
+    const job = await createReceivablesExportJob(request.principal as Principal, filters, exportEnvironment, idempotencyKey);
     return reply.code(202).send({ data: { id: job.id, status: job.status } });
   });
   app.post("/api/receivables/exports/:id/token", { preHandler: deps.authenticate }, async (request) => ({
@@ -183,9 +182,16 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.post("/api/receivables/exports/:id/download", { preHandler: deps.authenticate }, async (request, reply) => {
     const { token } = receivablesExportTokenInput.parse(request.body);
     const file = await consumeReceivablesExport(idParams.parse(request.params).id, token, request.principal as Principal, exportEnvironment);
-    reply.raw.once("finish", () => void removeConsumedReceivablesExport(file.path, exportEnvironment).catch((error) => app.log.error({ err: error }, "receivables_export_response_cleanup_failed")));
+    let cleanupStarted = false;
+    const cleanup = () => {
+      if (cleanupStarted) return;
+      cleanupStarted = true;
+      void removeConsumedReceivablesExport(file, exportEnvironment).catch((error) => app.log.error({ err: error, jobId: file.jobId }, "receivables_export_response_cleanup_failed"));
+    };
+    reply.raw.once("finish", cleanup);
+    reply.raw.once("close", cleanup);
     reply.header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);
-    return reply.send(createReadStream(file.path));
+    return reply.send(file.handle.createReadStream({ start: 0, autoClose: false }));
   });
   app.get("/api/receivables/imports", { preHandler: deps.authenticate }, async (request) => ({ data: await listReceivablesImports(request.principal as Principal) }));
   app.post("/api/receivables/imports/preview", { preHandler: deps.authenticate }, async (request, reply) => {

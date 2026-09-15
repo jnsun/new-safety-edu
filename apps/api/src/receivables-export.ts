@@ -1,15 +1,17 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { chmod, mkdir, open, rename, stat, unlink } from "node:fs/promises";
-import { basename, resolve, sep } from "node:path";
+import { constants, type Stats } from "node:fs";
+import { lstat, mkdir, open, rename, unlink, type FileHandle } from "node:fs/promises";
+import { resolve, sep } from "node:path";
 import { Prisma } from "@prisma/client";
 import ExcelJS from "exceljs";
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
 import {
-  authorizeReceivablesExportSnapshot,
+  authorizeReceivablesExportSnapshotInTransaction,
   createReceivablesExportSnapshot,
+  createReceivablesExportSnapshotInTransaction,
   queryReceivablesExportBatch,
+  resolveReceivablesExportScope,
   type NormalizedReceivablesFilters,
   type ReceivablesExportScopeSnapshot,
   type ReceivablesFiltersInput,
@@ -21,6 +23,7 @@ const jobLifetimeMs = 24 * 60 * 60 * 1_000;
 const tokenLifetimeMs = 10 * 60 * 1_000;
 const exportDirectoryName = ".receivables-exports";
 const expectedStorageKey = (jobId: string) => `${exportDirectoryName}/${jobId}.xlsx`;
+const temporaryStorageKey = (jobId: string) => `${exportDirectoryName}/${jobId}.tmp`;
 
 const exportError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
 const canonicalJson = (value: unknown): unknown => Array.isArray(value)
@@ -38,14 +41,62 @@ function exportPath(env: ReceivablesExportEnvironment, storageKey: string) {
   return path;
 }
 
-async function removeFile(path: string) {
-  try { await unlink(path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+type FileIdentity = { dev: number; ino: number; size: number };
+const identityOf = (details: Stats): FileIdentity => ({ dev: details.dev, ino: details.ino, size: details.size });
+const sameIdentity = (left: FileIdentity, right: Stats) => left.dev === right.dev && left.ino === right.ino && left.size === right.size;
+
+async function ensureStorageDirectory(env: ReceivablesExportEnvironment) {
+  const root = resolve(env.uploadRoot);
+  const rootDetails = await lstat(root);
+  if (!rootDetails.isDirectory() || rootDetails.isSymbolicLink()) throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出存储根目录无效");
+  const directory = exportPath(env, exportDirectoryName);
+  await mkdir(directory, { recursive: true });
+  const directoryDetails = await lstat(directory);
+  if (!directoryDetails.isDirectory() || directoryDetails.isSymbolicLink()) throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出存储目录无效");
+  return directory;
 }
 
-async function hashFile(path: string) {
+async function hashHandle(handle: FileHandle) {
   const hash = createHash("sha256");
-  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  for (let position = 0;;) {
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    if (!bytesRead) break;
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
   return hash.digest("hex");
+}
+
+async function openVerifiedFile(env: ReceivablesExportEnvironment, storageKey: string, expectedSize?: number, expectedSha256?: string) {
+  await ensureStorageDirectory(env);
+  const path = exportPath(env, storageKey);
+  const before = await lstat(path);
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error("not a regular file");
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const after = await handle.stat();
+    if (!after.isFile() || !sameIdentity(identityOf(before), after) || expectedSize !== undefined && after.size !== expectedSize || expectedSha256 && await hashHandle(handle) !== expectedSha256) throw new Error("integrity mismatch");
+    return { handle, path, identity: identityOf(after) };
+  } catch (error) { await handle.close(); throw error; }
+}
+
+async function removeVerifiedFile(env: ReceivablesExportEnvironment, storageKey: string, identity?: FileIdentity) {
+  await ensureStorageDirectory(env);
+  const path = exportPath(env, storageKey);
+  let current: Stats;
+  try { current = await lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  if (!current.isFile() || current.isSymbolicLink() || identity && !sameIdentity(identity, current)) throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出文件身份无效");
+  const quarantine = exportPath(env, `${exportDirectoryName}/${randomUUID()}.delete`);
+  await rename(path, quarantine);
+  try {
+    const moved = await lstat(quarantine);
+    if (!sameIdentity(identity ?? identityOf(current), moved)) throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出文件身份在删除时发生变化");
+    await unlink(quarantine);
+  } catch (error) {
+    try { await rename(quarantine, path); } catch (restoreError) { throw new AggregateError([error, restoreError], "导出文件删除失败且无法恢复"); }
+    throw error;
+  }
 }
 
 async function principalForAccount(accountId: string): Promise<Principal> {
@@ -56,20 +107,28 @@ async function principalForAccount(accountId: string): Promise<Principal> {
 
 const scopeValue = (value: Prisma.JsonValue) => value as unknown as ReceivablesExportScopeSnapshot;
 const filterValue = (value: Prisma.JsonValue) => value as unknown as NormalizedReceivablesFilters;
-const stableScope = (value: ReceivablesExportScopeSnapshot) => ({ role: value.role, all: value.all, readDepartmentIds: [...value.readDepartmentIds].sort() });
+const coversScope = (scope: ReceivablesExportScopeSnapshot, currentIds: string[] | null) => scope.all ? currentIds === null : currentIds === null || currentIds.length === scope.readDepartmentIds.length;
 
-export async function createReceivablesExportJob(principal: Principal, filters: ReceivablesFiltersInput, env: ReceivablesExportEnvironment) {
-  const snapshots = await createReceivablesExportSnapshot(principal, filters);
+export async function createReceivablesExportJob(principal: Principal, filters: ReceivablesFiltersInput, env: ReceivablesExportEnvironment, suppliedIdempotencyKey?: string) {
+  const idempotencyKey = suppliedIdempotencyKey ?? randomUUID();
   await cleanupExpiredReceivablesExports(env);
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(hashtext(${`receivables-export:${principal.accountId}`}::text))`;
-    const candidates = await tx.receivableExportJob.findMany({ where: { requestedBy: principal.accountId, status: { in: ["pending", "processing", "completed"] }, downloadedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" } });
-    const existing = candidates.find((job) => jsonEqual(stableScope(scopeValue(job.scopeSnapshot)), stableScope(snapshots.scopeSnapshot)) && jsonEqual(job.filterSnapshot, snapshots.filterSnapshot));
-    if (existing) return existing;
-    const job = await tx.receivableExportJob.create({ data: { requestedBy: principal.accountId, scopeSnapshot: snapshots.scopeSnapshot as unknown as Prisma.InputJsonValue, filterSnapshot: snapshots.filterSnapshot as unknown as Prisma.InputJsonValue, expiresAt: new Date(Date.now() + jobLifetimeMs) } });
-    await tx.auditLog.create({ data: auditData(job, "receivables.export.request", "success", { scope: snapshots.scopeSnapshot, filters: snapshots.filterSnapshot }) });
+    await lockAuthorizationFacts(tx);
+    const snapshots = await createReceivablesExportSnapshotInTransaction(tx, principal, filters);
+    const scopeSnapshot = { ...snapshots.scopeSnapshot, idempotencyKey } satisfies ReceivablesExportScopeSnapshot;
+    if (suppliedIdempotencyKey) {
+      const candidates = await tx.receivableExportJob.findMany({ where: { requestedBy: principal.accountId }, orderBy: { createdAt: "desc" } });
+      const existing = candidates.find((job) => scopeValue(job.scopeSnapshot).idempotencyKey === suppliedIdempotencyKey);
+      if (existing) {
+        if (!jsonEqual(existing.filterSnapshot, snapshots.filterSnapshot)) throw exportError(409, "RECEIVABLES_EXPORT_IDEMPOTENCY_CONFLICT", "幂等键已用于不同的导出请求");
+        return existing;
+      }
+    }
+    const job = await tx.receivableExportJob.create({ data: { requestedBy: principal.accountId, scopeSnapshot: scopeSnapshot as unknown as Prisma.InputJsonValue, filterSnapshot: snapshots.filterSnapshot as unknown as Prisma.InputJsonValue, expiresAt: new Date(Date.now() + jobLifetimeMs) } });
+    await tx.auditLog.create({ data: auditData(job, "receivables.export.request", "success", { scope: scopeSnapshot, filters: snapshots.filterSnapshot, idempotencyKey }) });
     return job;
-  });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
 
 export async function listReceivablesExports(principal: Principal, input: { page: number; pageSize: number }, env: ReceivablesExportEnvironment) {
@@ -84,7 +143,7 @@ export async function listReceivablesExports(principal: Principal, input: { page
 
 async function claimReceivablesExport(jobId: string) {
   return prisma.$transaction(async (tx) => {
-    const changed = await tx.receivableExportJob.updateMany({ where: { id: jobId, status: "pending", expiresAt: { gt: new Date() } }, data: { status: "processing", error: null } });
+    const changed = await tx.receivableExportJob.updateMany({ where: { id: jobId, status: "pending", expiresAt: { gt: new Date() } }, data: { status: "processing", storageKey: temporaryStorageKey(jobId), error: null } });
     if (!changed.count) return null;
     const job = await tx.receivableExportJob.findUniqueOrThrow({ where: { id: jobId }, select: { requestedBy: true, scopeSnapshot: true, filterSnapshot: true } });
     await tx.auditLog.create({ data: auditData({ id: jobId, requestedBy: job.requestedBy }, "receivables.export.claim", "success", { scope: job.scopeSnapshot, filters: job.filterSnapshot }) });
@@ -108,8 +167,9 @@ const columns: Array<{ header: string; key: string; width: number; money?: boole
 ];
 
 async function writeWorkbook(path: string, principal: Principal, job: ExportJobPayload) {
-  const handle = await open(path, "wx", 0o600); await handle.close();
-  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ filename: path, useStyles: true, useSharedStrings: false });
+  const outputHandle = await open(path, "wx", 0o600);
+  const initialIdentity = identityOf(await outputHandle.stat());
+  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: outputHandle.createWriteStream(), useStyles: true, useSharedStrings: false });
   const sheet = workbook.addWorksheet("应收账款台账", { views: [{ state: "frozen", ySplit: 1 }] });
   sheet.columns = columns;
   sheet.getRow(1).font = { bold: true };
@@ -127,39 +187,56 @@ async function writeWorkbook(path: string, principal: Principal, job: ExportJobP
   }
   sheet.commit();
   await workbook.commit();
-  await chmod(path, 0o600);
-  return rowCount;
+  const pathDetails = await lstat(path);
+  if (!pathDetails.isFile() || pathDetails.isSymbolicLink() || pathDetails.dev !== initialIdentity.dev || pathDetails.ino !== initialIdentity.ino) throw new Error("RECEIVABLES_EXPORT_TEMP_IDENTITY_CHANGED");
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const details = await handle.stat();
+  if (!details.isFile() || details.dev !== initialIdentity.dev || details.ino !== initialIdentity.ino || !sameIdentity(identityOf(pathDetails), details)) { await handle.close(); throw new Error("RECEIVABLES_EXPORT_NOT_REGULAR_FILE"); }
+  return { rowCount, handle, identity: identityOf(details), sha256: await hashHandle(handle) };
 }
 
 export async function processReceivablesExportJob(jobId: string, env: ReceivablesExportEnvironment) {
   const claimed = await claimReceivablesExport(jobId);
   if (!claimed) return false;
-  const directory = exportPath(env, exportDirectoryName);
-  const temporaryPath = exportPath(env, `${exportDirectoryName}/${jobId}.${randomUUID()}.tmp`);
+  const temporaryKey = temporaryStorageKey(jobId);
+  const temporaryPath = exportPath(env, temporaryKey);
   const storageKey = expectedStorageKey(jobId);
   const finalPath = exportPath(env, storageKey);
+  let artifact: { key: string; identity?: FileIdentity } = { key: temporaryKey };
+  let fileHandle: FileHandle | null = null;
   try {
     const principal = await principalForAccount(claimed.requestedBy);
-    await authorizeReceivablesExportSnapshot(principal, scopeValue(claimed.scopeSnapshot), filterValue(claimed.filterSnapshot));
-    await mkdir(directory, { recursive: true });
-    const rowCount = await writeWorkbook(temporaryPath, principal, claimed);
+    const effective = await prisma.$transaction((tx) => resolveReceivablesExportScope(tx, principal, scopeValue(claimed.scopeSnapshot), filterValue(claimed.filterSnapshot)), { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+    const effectiveSnapshot: ReceivablesExportScopeSnapshot = { ...scopeValue(claimed.scopeSnapshot), all: effective.readDepartmentIds === null, readDepartmentIds: effective.readDepartmentIds ?? [] };
+    await ensureStorageDirectory(env);
+    const written = await writeWorkbook(temporaryPath, principal, { ...claimed, scopeSnapshot: effectiveSnapshot as unknown as Prisma.JsonValue });
+    fileHandle = written.handle;
+    artifact.identity = written.identity;
     await rename(temporaryPath, finalPath);
-    const details = await stat(finalPath);
-    if (!details.isFile()) throw new Error("RECEIVABLES_EXPORT_NOT_REGULAR_FILE");
-    const sha256 = await hashFile(finalPath);
+    artifact = { key: storageKey, identity: written.identity };
+    const finalDetails = await lstat(finalPath);
+    if (!sameIdentity(written.identity, finalDetails)) throw new Error("RECEIVABLES_EXPORT_RENAME_IDENTITY_CHANGED");
     await prisma.$transaction(async (tx) => {
-      const changed = await tx.receivableExportJob.updateMany({ where: { id: jobId, status: "processing" }, data: { status: "completed", rowCount, storageKey, size: details.size, sha256, completedAt: new Date() } });
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM receivable_export_jobs WHERE id = ${jobId}::uuid FOR UPDATE`;
+      if (!locked.length) throw new Error("RECEIVABLES_EXPORT_STATE_CHANGED");
+      await lockAuthorizationFacts(tx);
+      const current = await authorizeReceivablesExportSnapshotInTransaction(tx, principal, effectiveSnapshot, filterValue(claimed.filterSnapshot));
+      if (!coversScope(effectiveSnapshot, current.readDepartmentIds)) throw exportError(403, "RECEIVABLES_FORBIDDEN", "导出生成期间权限已收缩");
+      const changed = await tx.receivableExportJob.updateMany({ where: { id: jobId, status: "processing", storageKey: temporaryKey }, data: { status: "completed", rowCount: written.rowCount, storageKey, size: written.identity.size, sha256: written.sha256, completedAt: new Date() } });
       if (!changed.count) throw new Error("RECEIVABLES_EXPORT_STATE_CHANGED");
-      await tx.auditLog.create({ data: auditData({ id: jobId, requestedBy: claimed.requestedBy }, "receivables.export.complete", "success", { scope: claimed.scopeSnapshot, filters: claimed.filterSnapshot, rowCount, size: details.size, sha256 }) });
+      await tx.auditLog.create({ data: auditData({ id: jobId, requestedBy: claimed.requestedBy }, "receivables.export.complete", "success", { scope: claimed.scopeSnapshot, effectiveScope: effectiveSnapshot, filters: claimed.filterSnapshot, rowCount: written.rowCount, size: written.identity.size, sha256: written.sha256 }) });
     });
+    await fileHandle.close(); fileHandle = null;
     return true;
   } catch (error) {
     const cleanupErrors: unknown[] = [];
-    for (const path of [temporaryPath, finalPath]) try { await removeFile(path); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    if (fileHandle) { try { await fileHandle.close(); } catch (closeError) { cleanupErrors.push(closeError); } fileHandle = null; }
+    let retainedStorageKey: string | null = artifact.key;
+    try { await removeVerifiedFile(env, artifact.key, artifact.identity); retainedStorageKey = null; } catch (cleanupError) { cleanupErrors.push(cleanupError); }
     const combined = cleanupErrors.length ? new AggregateError([error, ...cleanupErrors], "导出失败且文件清理失败") : error;
     await prisma.$transaction(async (tx) => {
-      const changed = await tx.receivableExportJob.updateMany({ where: { id: jobId, status: "processing" }, data: { status: "failed", error: combined instanceof Error ? combined.message.slice(0, 1_000) : "导出生成失败" } });
-      if (changed.count) await tx.auditLog.create({ data: auditData({ id: jobId, requestedBy: claimed.requestedBy }, "receivables.export.failed", "failed", { scope: claimed.scopeSnapshot, filters: claimed.filterSnapshot, error: combined instanceof Error ? combined.message.slice(0, 500) : "导出生成失败" }) });
+      const changed = await tx.receivableExportJob.updateMany({ where: { id: jobId, status: "processing" }, data: { status: "failed", storageKey: retainedStorageKey, error: combined instanceof Error ? combined.message.slice(0, 1_000) : "导出生成失败" } });
+      if (changed.count) await tx.auditLog.create({ data: auditData({ id: jobId, requestedBy: claimed.requestedBy }, "receivables.export.failed", "failed", { scope: claimed.scopeSnapshot, filters: claimed.filterSnapshot, storageKey: retainedStorageKey, cleanupPending: retainedStorageKey !== null, error: combined instanceof Error ? combined.message.slice(0, 500) : "导出生成失败" }) });
     });
     return false;
   }
@@ -171,19 +248,31 @@ export async function processPendingReceivablesExports(env: ReceivablesExportEnv
   return jobs.length;
 }
 
-async function authorizeJob(principal: Principal, jobId: string) {
-  const job = await prisma.receivableExportJob.findFirst({ where: { id: jobId, requestedBy: principal.accountId }, select: { id: true, requestedBy: true, status: true, scopeSnapshot: true, filterSnapshot: true, rowCount: true, storageKey: true, size: true, sha256: true, downloadTokenHash: true, downloadExpiresAt: true, downloadedAt: true, expiresAt: true } });
+async function lockAuthorizationFacts(tx: Prisma.TransactionClient) {
+  await tx.$executeRawUnsafe("LOCK TABLE accounts, persons, role_assignments, receivable_settings, receivable_access_grants, receivable_grant_departments, receivable_departments IN SHARE MODE");
+}
+
+async function authorizeLockedJob(tx: Prisma.TransactionClient, principal: Principal, jobId: string) {
+  const locked = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM receivable_export_jobs WHERE id = ${jobId}::uuid FOR UPDATE`;
+  if (!locked.length) throw exportError(404, "RECEIVABLES_EXPORT_NOT_FOUND", "导出任务不存在");
+  const job = await tx.receivableExportJob.findFirst({ where: { id: jobId, requestedBy: principal.accountId }, select: { id: true, requestedBy: true, status: true, scopeSnapshot: true, filterSnapshot: true, rowCount: true, storageKey: true, size: true, sha256: true, downloadTokenHash: true, downloadExpiresAt: true, downloadedAt: true, expiresAt: true } });
   if (!job) throw exportError(404, "RECEIVABLES_EXPORT_NOT_FOUND", "导出任务不存在");
-  await authorizeReceivablesExportSnapshot(principal, scopeValue(job.scopeSnapshot), filterValue(job.filterSnapshot));
+  await lockAuthorizationFacts(tx);
+  const completion = await tx.auditLog.findFirst({ where: { action: "receivables.export.complete", objectId: job.id }, select: { metadata: true }, orderBy: { createdAt: "desc" } });
+  const metadata = completion?.metadata && typeof completion.metadata === "object" && !Array.isArray(completion.metadata) ? completion.metadata as Record<string, Prisma.JsonValue> : null;
+  const generatedScope = metadata?.effectiveScope ? scopeValue(metadata.effectiveScope) : scopeValue(job.scopeSnapshot);
+  const current = await authorizeReceivablesExportSnapshotInTransaction(tx, principal, generatedScope, filterValue(job.filterSnapshot));
+  const currentIds = current.readDepartmentIds;
+  if (!coversScope(generatedScope, currentIds)) throw exportError(403, "RECEIVABLES_FORBIDDEN", "当前权限不足以访问已生成导出文件");
   return job;
 }
 
 export async function issueReceivablesExportToken(jobId: string, principal: Principal) {
-  const job = await authorizeJob(principal, jobId);
   const token = randomBytes(32).toString("base64url");
   const downloadTokenHash = createHash("sha256").update(token).digest("hex");
   const downloadExpiresAt = new Date(Date.now() + tokenLifetimeMs);
   await prisma.$transaction(async (tx) => {
+    const job = await authorizeLockedJob(tx, principal, jobId);
     const changed = await tx.receivableExportJob.updateMany({ where: { id: job.id, requestedBy: principal.accountId, status: "completed", downloadedAt: null, expiresAt: { gt: new Date() } }, data: { downloadTokenHash, downloadExpiresAt } });
     if (!changed.count) throw exportError(409, "RECEIVABLES_EXPORT_NOT_READY", "导出任务不可下载");
     await tx.auditLog.create({ data: auditData(job, "receivables.export.token", "success", { before: { issued: !!job.downloadTokenHash, expiresAt: job.downloadExpiresAt?.toISOString() ?? null }, after: { issued: true, expiresAt: downloadExpiresAt.toISOString() } }) });
@@ -192,36 +281,43 @@ export async function issueReceivablesExportToken(jobId: string, principal: Prin
 }
 
 export async function consumeReceivablesExport(jobId: string, token: string, principal: Principal, env: ReceivablesExportEnvironment) {
-  const job = await authorizeJob(principal, jobId);
-  if (job.status !== "completed" || job.downloadedAt || job.storageKey !== expectedStorageKey(job.id) || job.size === null || !job.sha256 || !job.downloadTokenHash || !job.downloadExpiresAt || job.downloadExpiresAt <= new Date() || job.expiresAt <= new Date()) throw exportError(409, "RECEIVABLES_EXPORT_TOKEN_INVALID", "下载令牌无效或已经使用");
-  const actualHash = createHash("sha256").update(token).digest();
-  const expectedHash = Buffer.from(job.downloadTokenHash, "hex");
-  if (expectedHash.length !== actualHash.length || !timingSafeEqual(actualHash, expectedHash)) throw exportError(409, "RECEIVABLES_EXPORT_TOKEN_INVALID", "下载令牌无效或已经使用");
-  const path = exportPath(env, job.storageKey);
+  let opened: Awaited<ReturnType<typeof openVerifiedFile>> | null = null;
   try {
-    const details = await stat(path);
-    if (!details.isFile() || details.size !== job.size || await hashFile(path) !== job.sha256) throw new Error("integrity mismatch");
-  } catch { throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出文件不存在或完整性校验失败"); }
-  await prisma.$transaction(async (tx) => {
-    const changed = await tx.receivableExportJob.updateMany({ where: { id: job.id, requestedBy: principal.accountId, status: "completed", downloadedAt: null, downloadTokenHash: job.downloadTokenHash, downloadExpiresAt: { gt: new Date() }, expiresAt: { gt: new Date() } }, data: { downloadedAt: new Date(), downloadTokenHash: null, downloadExpiresAt: null } });
-    if (!changed.count) throw exportError(409, "RECEIVABLES_EXPORT_TOKEN_INVALID", "下载令牌无效或已经使用");
-    await tx.auditLog.create({ data: auditData(job, "receivables.export.download", "success", { rowCount: job.rowCount, size: job.size, sha256: job.sha256 }) });
-  });
-  return { path, name: `应收账款-${basename(job.id)}.xlsx` };
+    const result = await prisma.$transaction(async (tx) => {
+      const job = await authorizeLockedJob(tx, principal, jobId);
+      if (job.status !== "completed" || job.downloadedAt || job.storageKey !== expectedStorageKey(job.id) || job.size === null || !job.sha256 || !job.downloadTokenHash || !job.downloadExpiresAt || job.downloadExpiresAt <= new Date() || job.expiresAt <= new Date()) throw exportError(409, "RECEIVABLES_EXPORT_TOKEN_INVALID", "下载令牌无效或已经使用");
+      const actualHash = createHash("sha256").update(token).digest();
+      const expectedHash = Buffer.from(job.downloadTokenHash, "hex");
+      if (expectedHash.length !== actualHash.length || !timingSafeEqual(actualHash, expectedHash)) throw exportError(409, "RECEIVABLES_EXPORT_TOKEN_INVALID", "下载令牌无效或已经使用");
+      try { opened = await openVerifiedFile(env, job.storageKey, job.size, job.sha256); }
+      catch { throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出文件不存在或完整性校验失败"); }
+      const changed = await tx.receivableExportJob.updateMany({ where: { id: job.id, requestedBy: principal.accountId, status: "completed", downloadedAt: null, downloadTokenHash: job.downloadTokenHash, downloadExpiresAt: { gt: new Date() }, expiresAt: { gt: new Date() } }, data: { downloadedAt: new Date(), downloadTokenHash: null, downloadExpiresAt: null } });
+      if (!changed.count) throw exportError(409, "RECEIVABLES_EXPORT_TOKEN_INVALID", "下载令牌无效或已经使用");
+      await tx.auditLog.create({ data: auditData(job, "receivables.export.download", "success", { rowCount: job.rowCount, size: job.size, sha256: job.sha256 }) });
+      return { job, file: opened! };
+    });
+    return { ...result.file, jobId: result.job.id, storageKey: result.job.storageKey!, requestedBy: result.job.requestedBy, name: `应收账款-${result.job.id}.xlsx` };
+  } catch (error) { if (opened) await (opened as Awaited<ReturnType<typeof openVerifiedFile>>).handle.close(); throw error; }
 }
 
 export async function cleanupExpiredReceivablesExports(env: ReceivablesExportEnvironment) {
-  const jobs = await prisma.receivableExportJob.findMany({ where: { status: { in: ["pending", "processing", "completed", "failed"] }, expiresAt: { lte: new Date() } }, select: { id: true, requestedBy: true, status: true, storageKey: true, rowCount: true, size: true, sha256: true } });
+  const now = new Date();
+  const jobs = await prisma.receivableExportJob.findMany({ where: { OR: [{ status: { in: ["pending", "processing", "completed", "failed"] }, expiresAt: { lte: now } }, { status: "failed", storageKey: { not: null } }, { status: "completed", downloadedAt: { not: null }, storageKey: { not: null } }] }, select: { id: true, requestedBy: true, status: true, storageKey: true, rowCount: true, size: true, sha256: true, expiresAt: true, downloadedAt: true } });
   const errors: unknown[] = [];
   for (const job of jobs) {
     try {
       if (job.storageKey) {
-        if (job.storageKey !== expectedStorageKey(job.id)) throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出文件关联无效");
-        await removeFile(exportPath(env, job.storageKey));
+        if (![expectedStorageKey(job.id), temporaryStorageKey(job.id)].includes(job.storageKey)) throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出文件关联无效");
+        try {
+          const opened = await openVerifiedFile(env, job.storageKey, job.storageKey === expectedStorageKey(job.id) && job.size !== null ? job.size : undefined, job.storageKey === expectedStorageKey(job.id) && job.sha256 ? job.sha256 : undefined);
+          await opened.handle.close();
+          await removeVerifiedFile(env, job.storageKey, opened.identity);
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       }
       await prisma.$transaction(async (tx) => {
-        const changed = await tx.receivableExportJob.updateMany({ where: { id: job.id, status: job.status, expiresAt: { lte: new Date() } }, data: { status: "expired", downloadTokenHash: null, downloadExpiresAt: null } });
-        if (changed.count) await tx.auditLog.create({ data: auditData(job, "receivables.export.expire", "success", { previousStatus: job.status, rowCount: job.rowCount, size: job.size, sha256: job.sha256 }) });
+        const shouldExpire = job.expiresAt <= now;
+        const changed = await tx.receivableExportJob.updateMany({ where: { id: job.id, status: job.status, storageKey: job.storageKey }, data: { ...(shouldExpire ? { status: "expired" as const } : {}), storageKey: null, downloadTokenHash: null, downloadExpiresAt: null } });
+        if (changed.count) await tx.auditLog.create({ data: auditData(job, shouldExpire ? "receivables.export.expire" : "receivables.export.cleanup", "success", { previousStatus: job.status, rowCount: job.rowCount, size: job.size, sha256: job.sha256 }) });
       });
     } catch (error) { errors.push(error); }
   }
@@ -229,9 +325,12 @@ export async function cleanupExpiredReceivablesExports(env: ReceivablesExportEnv
   return jobs.length;
 }
 
-export async function removeConsumedReceivablesExport(path: string, env: ReceivablesExportEnvironment) {
-  const expectedRoot = exportPath(env, exportDirectoryName);
-  const resolvedPath = resolve(path);
-  if (!resolvedPath.startsWith(`${expectedRoot}${sep}`)) throw exportError(409, "RECEIVABLES_EXPORT_FILE_INVALID", "导出文件路径无效");
-  await removeFile(resolvedPath);
+export async function removeConsumedReceivablesExport(file: { jobId: string; storageKey: string; requestedBy: string; handle: FileHandle; identity: FileIdentity }, env: ReceivablesExportEnvironment) {
+  await file.handle.close();
+  await removeVerifiedFile(env, file.storageKey, file.identity);
+  await prisma.$transaction(async (tx) => {
+    const changed = await tx.receivableExportJob.updateMany({ where: { id: file.jobId, requestedBy: file.requestedBy, downloadedAt: { not: null }, storageKey: file.storageKey }, data: { storageKey: null } });
+    if (!changed.count) throw exportError(409, "RECEIVABLES_EXPORT_CLEANUP_CONFLICT", "导出清理状态发生变化");
+    await tx.auditLog.create({ data: auditData({ id: file.jobId, requestedBy: file.requestedBy }, "receivables.export.cleanup", "success") });
+  });
 }

@@ -47,6 +47,7 @@ export type ReceivablesExportScopeSnapshot = {
   all: boolean;
   readDepartmentIds: string[];
   cutoffAt: string;
+  idempotencyKey?: string;
 };
 type QueryTx = Prisma.TransactionClient;
 type Facet = { value: string | null; count: number };
@@ -153,7 +154,7 @@ function queryWhere(scope: QueryScope): Prisma.Sql {
       ? Prisma.sql`q.finance_department_id IN (${Prisma.join(scope.readDepartmentIds.map((id) => Prisma.sql`${id}::uuid`))})`
       : Prisma.sql`FALSE`);
   }
-  if (scope.cutoffAt) clauses.push(Prisma.sql`q.created_at <= ${scope.cutoffAt}`);
+  if (scope.cutoffAt) clauses.push(Prisma.sql`q.created_at <= ${scope.cutoffAt.toISOString()}::timestamp`);
   if (scope.financeDepartmentId) clauses.push(Prisma.sql`q.finance_department_id = ${scope.financeDepartmentId}::uuid`);
   if (scope.status !== "all") clauses.push(Prisma.sql`q.status = ${scope.status}::"ReceivableRecordStatus"`);
   if (scope.settlement === "unsettled") clauses.push(Prisma.sql`(q.balance IS NULL OR q.balance <> 0)`);
@@ -367,26 +368,31 @@ export async function queryReceivables(principal: Principal, operation: Receivab
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 
-export async function createReceivablesExportSnapshot(principal: Principal, input: ReceivablesFiltersInput) {
-  return prisma.$transaction(async (tx) => {
-    const access = await resolveReceivablesAccess(principal, tx);
-    requireReceivables(access, "export", input.financeDepartmentId);
-    const scope = await resolveQueryScope(tx, access, input);
-    if (scope.readDepartmentIds !== null && scope.readDepartmentIds.length === 0) throw forbiddenDepartment();
-    if (!access.role) throw forbiddenDepartment();
-    return {
-      scopeSnapshot: {
-        role: access.role,
-        all: scope.readDepartmentIds === null,
-        readDepartmentIds: scope.readDepartmentIds ?? [],
-        cutoffAt: new Date().toISOString(),
-      } satisfies ReceivablesExportScopeSnapshot,
-      filterSnapshot: normalizeReceivablesFilters(input),
-    };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+export async function createReceivablesExportSnapshotInTransaction(tx: QueryTx, principal: Principal, input: ReceivablesFiltersInput) {
+  const access = await resolveReceivablesAccess(principal, tx);
+  requireReceivables(access, "export", input.financeDepartmentId);
+  const scope = await resolveQueryScope(tx, access, input);
+  if (scope.readDepartmentIds !== null && scope.readDepartmentIds.length === 0) throw forbiddenDepartment();
+  if (!access.role) throw forbiddenDepartment();
+  const cutoffRows = await tx.$queryRaw<Array<{ cutoffAt: Date }>>`SELECT clock_timestamp() AS "cutoffAt"`;
+  const cutoffAt = cutoffRows[0]?.cutoffAt;
+  if (!cutoffAt) throw new Error("RECEIVABLES_EXPORT_CUTOFF_UNAVAILABLE");
+  return {
+    scopeSnapshot: {
+      role: access.role,
+      all: scope.readDepartmentIds === null,
+      readDepartmentIds: scope.readDepartmentIds ?? [],
+      cutoffAt: cutoffAt!.toISOString(),
+    } satisfies ReceivablesExportScopeSnapshot,
+    filterSnapshot: normalizeReceivablesFilters(input),
+  };
 }
 
-async function resolveReceivablesExportScope(tx: QueryTx, principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters) {
+export async function createReceivablesExportSnapshot(principal: Principal, input: ReceivablesFiltersInput) {
+  return prisma.$transaction((tx) => createReceivablesExportSnapshotInTransaction(tx, principal, input), { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+export async function resolveReceivablesExportScope(tx: QueryTx, principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters) {
   const access = await resolveReceivablesAccess(principal, tx);
   requireReceivables(access, "export", filters.financeDepartmentId ?? undefined);
   const current = await resolveQueryScope(tx, access, {
@@ -403,12 +409,15 @@ async function resolveReceivablesExportScope(tx: QueryTx, principal: Principal, 
     : current.readDepartmentIds === null
       ? saved
       : saved.filter((id) => current.readDepartmentIds!.includes(id));
-  if (snapshot.all && current.readDepartmentIds !== null || saved !== null && readDepartmentIds !== null && readDepartmentIds.length !== saved.length) throw forbiddenDepartment();
   if (readDepartmentIds !== null && readDepartmentIds.length === 0) throw forbiddenDepartment();
   if (filters.financeDepartmentId && readDepartmentIds !== null && !readDepartmentIds.includes(filters.financeDepartmentId)) throw forbiddenDepartment();
   const cutoffAt = new Date(snapshot.cutoffAt);
   if (Number.isNaN(cutoffAt.valueOf())) throw Object.assign(new Error("导出范围快照无效"), { statusCode: 409, code: "RECEIVABLES_EXPORT_SNAPSHOT_INVALID" });
   return { ...current, readDepartmentIds, cutoffAt };
+}
+
+export async function authorizeReceivablesExportSnapshotInTransaction(tx: QueryTx, principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters) {
+  return resolveReceivablesExportScope(tx, principal, snapshot, filters);
 }
 
 export async function authorizeReceivablesExportSnapshot(principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters) {
@@ -422,8 +431,9 @@ export async function queryReceivablesExportBatch(principal: Principal, snapshot
   return prisma.$transaction(async (tx) => {
     const scope = await resolveReceivablesExportScope(tx, principal, snapshot, filters);
     const cte = filteredCte(scope);
-    const cursor = afterId ? Prisma.sql`WHERE f.id > ${afterId}::uuid` : Prisma.empty;
-    const rows = await tx.$queryRaw<RawRow[]>(Prisma.sql`${cte} SELECT ${rowColumns} FROM filtered f ${cursor} ORDER BY f.id ASC LIMIT ${batchSize}`);
+    const cursor = afterId ? Prisma.sql`AND f.id > ${afterId}::uuid` : Prisma.empty;
+    const statement = Prisma.sql`${cte} SELECT ${rowColumns} FROM filtered f WHERE f.created_at <= ${scope.cutoffAt!.toISOString()}::timestamp ${cursor} ORDER BY f.id ASC LIMIT ${batchSize}`;
+    const rows = await tx.$queryRaw<RawRow[]>(statement);
     return rows.map(mapRow);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }

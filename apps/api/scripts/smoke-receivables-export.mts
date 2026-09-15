@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import ExcelJS from "exceljs";
@@ -105,10 +105,12 @@ async function startServer() {
 }
 
 async function stopServer() {
-  if (!server || server.exitCode !== null) return;
+  if (!server || server.exitCode !== null || server.signalCode !== null) return false;
   server.kill();
   await Promise.race([once(server, "exit"), delay(2_000)]);
-  if (server.exitCode === null) { server.kill("SIGKILL"); await Promise.race([once(server, "exit"), delay(2_000)]); }
+  const forced = server.exitCode === null && server.signalCode === null;
+  if (forced) { server.kill("SIGKILL"); await Promise.race([once(server, "exit"), delay(2_000)]); }
+  return forced;
 }
 
 async function cleanup() {
@@ -157,6 +159,7 @@ try {
   const revokedAtProcess = await identity("revoked-process");
   const revokedAtToken = await identity("revoked-token");
   const revokedAtDownload = await identity("revoked-download");
+  const partiallyRevoked = await identity("partial-revoke");
   const recovery = await identity("recovery", "company_admin");
   const departmentA = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-a` } });
   const departmentB = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-b` } });
@@ -170,6 +173,7 @@ try {
   const processGrant = await grant(revokedAtProcess.id, owner.id, "readonly", [departmentA.id], true);
   const tokenGrant = await grant(revokedAtToken.id, owner.id, "readonly", [departmentA.id], true);
   const downloadGrant = await grant(revokedAtDownload.id, owner.id, "readonly", [departmentA.id], true);
+  const partialGrant = await grant(partiallyRevoked.id, owner.id, "readonly", [departmentA.id, departmentB.id], true);
 
   const rows = Array.from({ length: 5_001 }, (_, index) => ({ financeDepartmentId: departmentA.id, contractNo: `${marker}-bulk-${index}`, contractNoNormalized: `${marker}-bulk-${index}`, projectName: index === 0 ? `${marker}-needle` : `${marker}-project-${index}`, finalAmount: "99999999999999.1234", createdBy: owner.id }));
   for (let offset = 0; offset < rows.length; offset += 500) await prisma.receivableLedger.createMany({ data: rows.slice(offset, offset + 500) });
@@ -178,16 +182,18 @@ try {
   await prisma.receivableInvoice.create({ data: { ledgerId: ledgerA.id, invoiceDate: new Date("2026-01-02T00:00:00Z"), amount: "80.0000", createdBy: owner.id } });
   await prisma.receivableReceipt.create({ data: { ledgerId: ledgerA.id, receiptDate: new Date("2026-02-03T00:00:00Z"), amount: "30.0000", createdBy: owner.id } });
 
-  const [ownerToken, adminToken, reporterToken, deniedToken, processToken, tokenToken, downloadToken, recoveryToken] = await Promise.all([owner.id, admin.id, reporter.id, denied.id, revokedAtProcess.id, revokedAtToken.id, revokedAtDownload.id, recovery.id].map(bearer));
+  const [ownerToken, adminToken, reporterToken, deniedToken, processToken, tokenToken, downloadToken, recoveryToken, partialToken] = await Promise.all([owner.id, admin.id, reporter.id, denied.id, revokedAtProcess.id, revokedAtToken.id, revokedAtDownload.id, recovery.id, partiallyRevoked.id].map(bearer));
   await startServer();
+  const { cleanupExpiredReceivablesExports, consumeReceivablesExport, processReceivablesExportJob, removeConsumedReceivablesExport } = await import("../src/receivables-export.js");
 
   await post("/api/receivables/exports", deniedToken, { filters: {} }, 403);
   await post("/api/receivables/exports", recoveryToken, { filters: {} }, 403);
   await post("/api/receivables/exports", reporterToken, { filters: { financeDepartmentId: departmentB.id } }, 403);
 
-  const scopedCreate = await post<{ id: string; status: string }>("/api/receivables/exports", reporterToken, { filters: { financeDepartmentId: departmentA.id, search: `${marker}-needle`, settlement: "all" } }, 202);
+  const scopedIdempotencyKey = randomUUID();
+  const scopedCreate = await post<{ id: string; status: string }>("/api/receivables/exports", reporterToken, { idempotencyKey: scopedIdempotencyKey, filters: { financeDepartmentId: departmentA.id, search: `${marker}-needle`, settlement: "all" } }, 202);
   const scopedId = scopedCreate.body!.data!.id;
-  const duplicate = await post<{ id: string }>("/api/receivables/exports", reporterToken, { filters: { financeDepartmentId: departmentA.id, search: `${marker}-needle`, settlement: "all" } }, 202);
+  const duplicate = await post<{ id: string }>("/api/receivables/exports", reporterToken, { idempotencyKey: scopedIdempotencyKey, filters: { financeDepartmentId: departmentA.id, search: `${marker}-needle`, settlement: "all" } }, 202);
   assert.equal(duplicate.body!.data!.id, scopedId, "identical active export was not reused");
   const scopedDb = await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: scopedId } });
   assert.deepEqual(scopedDb.filterSnapshot, { financeDepartmentId: departmentA.id, status: "active", settlement: "all", debtStatus: null, creditorUnit: null, anomaly: null, search: `${marker}-needle` });
@@ -215,20 +221,70 @@ try {
   const adminCreated = await post<{ id: string }>("/api/receivables/exports", adminToken, { filters: { financeDepartmentId: departmentB.id, settlement: "all" } }, 202);
   assert.equal((await waitForJob(adminCreated.body!.data!.id, ["completed", "failed"])).rowCount, 1);
 
+  const idempotencyKey = randomUUID();
+  const idempotentFirst = await post<{ id: string }>("/api/receivables/exports", adminToken, { idempotencyKey, filters: { financeDepartmentId: departmentB.id, search: `${marker}-idempotent`, settlement: "all" } }, 202);
+  const afterCutoff = await prisma.receivableLedger.create({ data: { financeDepartmentId: departmentB.id, contractNo: `${marker}-idempotent-new`, contractNoNormalized: `${marker}-idempotent-new`, projectName: `${marker}-idempotent`, finalAmount: "2.0000", createdBy: owner.id } });
+  const idempotentSnapshot = await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: idempotentFirst.body!.data!.id }, select: { scopeSnapshot: true } });
+  assert.ok(afterCutoff.createdAt > new Date((idempotentSnapshot.scopeSnapshot as any).cutoffAt), `fixture row ${afterCutoff.createdAt.toISOString()} was not after cutoff ${(idempotentSnapshot.scopeSnapshot as any).cutoffAt}`);
+  const directCutoff = await prisma.receivableLedger.count({ where: { id: afterCutoff.id, createdAt: { lte: new Date((idempotentSnapshot.scopeSnapshot as any).cutoffAt) } } });
+  const idempotentReady = await waitForJob(idempotentFirst.body!.data!.id, ["completed", "failed"]);
+  const idempotentAudit = await prisma.auditLog.findFirst({ where: { action: "receivables.export.complete", objectId: idempotentReady.id }, select: { metadata: true } });
+  const idempotentWorkbook = new ExcelJS.Workbook(); await idempotentWorkbook.xlsx.readFile(resolve(uploadRoot, idempotentReady.storageKey!));
+  const idempotentValues = idempotentWorkbook.worksheets[0]!.getRow(2).values;
+  assert.equal(idempotentReady.rowCount, 0, `snapshot cutoff included a row created after the request: ${JSON.stringify({ scope: idempotentSnapshot.scopeSnapshot, audit: idempotentAudit?.metadata, createdAt: afterCutoff.createdAt, directCutoff, values: idempotentValues })}\n${serverOutput}`);
+  const idempotentRetry = await post<{ id: string }>("/api/receivables/exports", adminToken, { idempotencyKey, filters: { financeDepartmentId: departmentB.id, search: `${marker}-idempotent`, settlement: "all" } }, 202);
+  assert.equal(idempotentRetry.body!.data!.id, idempotentFirst.body!.data!.id, "explicit idempotency key did not reuse the original immutable snapshot");
+  const refreshed = await post<{ id: string }>("/api/receivables/exports", adminToken, { idempotencyKey: randomUUID(), filters: { financeDepartmentId: departmentB.id, search: `${marker}-idempotent`, settlement: "all" } }, 202);
+  assert.notEqual(refreshed.body!.data!.id, idempotentFirst.body!.data!.id, "a new request key reused a completed scope/filter cache");
+  assert.equal((await waitForJob(refreshed.body!.data!.id, ["completed", "failed"])).rowCount, 1);
+  assert.ok(afterCutoff.id);
+
+  await prisma.receivableLedger.createMany({ data: [
+    { financeDepartmentId: departmentA.id, contractNo: `${marker}-partial-a`, contractNoNormalized: `${marker}-partial-a`, projectName: `${marker}-partial`, finalAmount: "3.0000", createdBy: owner.id },
+    { financeDepartmentId: departmentB.id, contractNo: `${marker}-partial-b`, contractNoNormalized: `${marker}-partial-b`, projectName: `${marker}-partial`, finalAmount: "4.0000", createdBy: owner.id },
+  ] });
+  const partialCreate = await post<{ id: string }>("/api/receivables/exports", partialToken, { filters: { search: `${marker}-partial`, settlement: "all" } }, 202);
+  await prisma.receivableGrantDepartment.delete({ where: { grantId_financeDepartmentId: { grantId: partialGrant.id, financeDepartmentId: departmentB.id } } });
+  const partialReady = await waitForJob(partialCreate.body!.data!.id, ["completed", "failed"]);
+  assert.equal(partialReady.status, "completed", partialReady.error ?? undefined);
+  assert.equal(partialReady.rowCount, 1, "processing did not reduce the snapshot to the nonempty current-scope intersection");
+  const partialWorkbook = new ExcelJS.Workbook(); await partialWorkbook.xlsx.readFile(resolve(uploadRoot, partialReady.storageKey!));
+  assert.equal((partialWorkbook.worksheets[0]!.getRow(2).values as unknown[]).includes(`${marker}-partial-a`), true);
+  assert.equal((partialWorkbook.worksheets[0]!.getRow(2).values as unknown[]).includes(`${marker}-partial-b`), false);
+  await post(`/api/receivables/exports/${partialReady.id}/token`, partialToken, {}, 200);
+  await prisma.receivableGrantDepartment.delete({ where: { grantId_financeDepartmentId: { grantId: partialGrant.id, financeDepartmentId: departmentA.id } } });
+  await post(`/api/receivables/exports/${partialReady.id}/token`, partialToken, {}, 403);
+
   const processCreated = await post<{ id: string }>("/api/receivables/exports", processToken, { filters: { settlement: "all" } }, 202);
   await prisma.receivableAccessGrant.update({ where: { id: processGrant.id }, data: { active: false, revokedAt: new Date(), revokedBy: owner.id, revokeReason: "process revoke" } });
   const processFailed = await waitForJob(processCreated.body!.data!.id, ["failed"]); assert.match(processFailed.error ?? "", /权限|RECEIVABLES/i);
 
   const tokenCreated = await post<{ id: string }>("/api/receivables/exports", tokenToken, { filters: { search: `${marker}-needle`, settlement: "all" } }, 202);
   await waitForJob(tokenCreated.body!.data!.id, ["completed"]);
+  let releaseTokenLock!: () => void; let tokenLocked!: () => void;
+  const tokenRelease = new Promise<void>((done) => { releaseTokenLock = done; });
+  const tokenLockReady = new Promise<void>((done) => { tokenLocked = done; });
+  const tokenBlocker = prisma.$transaction(async (tx) => { await tx.$queryRaw`SELECT id FROM receivable_export_jobs WHERE id = ${tokenCreated.body!.data!.id}::uuid FOR UPDATE`; tokenLocked(); await tokenRelease; });
+  await tokenLockReady;
+  const racingTokenRequest = request(`/api/receivables/exports/${tokenCreated.body!.data!.id}/token`, tokenToken, { method: "POST", body: JSON.stringify({}) });
+  await delay(100);
   await prisma.receivableAccessGrant.update({ where: { id: tokenGrant.id }, data: { active: false, revokedAt: new Date(), revokedBy: owner.id, revokeReason: "token revoke" } });
-  await post(`/api/receivables/exports/${tokenCreated.body!.data!.id}/token`, tokenToken, {}, 403);
+  releaseTokenLock(); await tokenBlocker;
+  assert.equal((await racingTokenRequest).response.status, 403, "token issuance authorized stale permissions before acquiring the job lock");
 
   const downloadCreated = await post<{ id: string }>("/api/receivables/exports", downloadToken, { filters: { search: `${marker}-needle`, settlement: "all" } }, 202);
   await waitForJob(downloadCreated.body!.data!.id, ["completed"]);
   const issuedBeforeRevoke = await post<{ token: string }>(`/api/receivables/exports/${downloadCreated.body!.data!.id}/token`, downloadToken, {});
+  let releaseDownloadLock!: () => void; let downloadLocked!: () => void;
+  const downloadRelease = new Promise<void>((done) => { releaseDownloadLock = done; });
+  const downloadLockReady = new Promise<void>((done) => { downloadLocked = done; });
+  const downloadBlocker = prisma.$transaction(async (tx) => { await tx.$queryRaw`SELECT id FROM receivable_export_jobs WHERE id = ${downloadCreated.body!.data!.id}::uuid FOR UPDATE`; downloadLocked(); await downloadRelease; });
+  await downloadLockReady;
+  const racingDownloadRequest = request(`/api/receivables/exports/${downloadCreated.body!.data!.id}/download`, downloadToken, { method: "POST", body: JSON.stringify({ token: issuedBeforeRevoke.body!.data!.token }) });
+  await delay(100);
   await prisma.receivableAccessGrant.update({ where: { id: downloadGrant.id }, data: { active: false, revokedAt: new Date(), revokedBy: owner.id, revokeReason: "download revoke" } });
-  await post(`/api/receivables/exports/${downloadCreated.body!.data!.id}/download`, downloadToken, { token: issuedBeforeRevoke.body!.data!.token }, 403);
+  releaseDownloadLock(); await downloadBlocker;
+  assert.equal((await racingDownloadRequest).response.status, 403, "download consumed a token using stale permissions before acquiring the job lock");
 
   const replacedToken = await post<{ token: string }>(`/api/receivables/exports/${scopedId}/token`, reporterToken, {});
   const oneUse = await post<{ token: string }>(`/api/receivables/exports/${scopedId}/token`, reporterToken, {});
@@ -238,6 +294,21 @@ try {
   await Promise.all(concurrent.map(({ response }) => response.arrayBuffer().catch(() => new ArrayBuffer(0))));
   for (let attempt = 0; attempt < 100 && (await files()).some((path) => path === scopedPath); attempt += 1) await delay(25);
   assert.equal((await files()).includes(scopedPath), false, "download response did not clean the export artifact");
+  for (let attempt = 0; attempt < 100 && (await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: scopedId } })).storageKey !== null; attempt += 1) await delay(25);
+  assert.equal((await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: scopedId } })).storageKey, null, "response cleanup deleted the file without confirming durable cleanup state");
+
+  const handleCreate = await post<{ id: string }>("/api/receivables/exports", reporterToken, { filters: { search: `${marker}-project-3`, settlement: "all" } }, 202);
+  const handleJob = await waitForJob(handleCreate.body!.data!.id, ["completed"]);
+  const handleToken = await post<{ token: string }>(`/api/receivables/exports/${handleJob.id}/token`, reporterToken, {});
+  const fixedFile = await consumeReceivablesExport(handleJob.id, handleToken.body!.data!.token, { accountId: reporter.id, personId: reporter.personId, mustChangePassword: false, sessionId: null, roles: [] }, { uploadRoot });
+  const handlePath = resolve(uploadRoot, handleJob.storageKey!); const heldPath = `${handlePath}.held`; const originalBytes = await readFile(handlePath);
+  await rename(handlePath, heldPath); await writeFile(handlePath, Buffer.alloc(originalBytes.length, 0x78));
+  const delivered: Buffer[] = []; for await (const chunk of fixedFile.handle.createReadStream({ start: 0, autoClose: false })) delivered.push(chunk as Buffer);
+  assert.equal(Buffer.concat(delivered).equals(originalBytes), true, "download stream reopened a replaced path instead of reading the verified handle");
+  await assert.rejects(() => removeConsumedReceivablesExport(fixedFile, { uploadRoot }), /身份无效/, "cleanup deleted a replacement path instead of the verified artifact");
+  assert.equal((await readFile(handlePath)).equals(Buffer.alloc(originalBytes.length, 0x78)), true);
+  await rm(handlePath); await rename(heldPath, handlePath); await cleanupExpiredReceivablesExports({ uploadRoot });
+  assert.equal((await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: handleJob.id } })).storageKey, null);
 
   const tamperCreate = await post<{ id: string }>("/api/receivables/exports", reporterToken, { filters: { search: `${marker}-project-1`, settlement: "all" } }, 202);
   const tamperJob = await waitForJob(tamperCreate.body!.data!.id, ["completed"]);
@@ -256,7 +327,6 @@ try {
   const cleanupCreate = await post<{ id: string }>("/api/receivables/exports", adminToken, { filters: { financeDepartmentId: departmentB.id, search: ledgerB.contractNo, settlement: "all" } }, 202);
   const cleanupJob = await waitForJob(cleanupCreate.body!.data!.id, ["completed"]);
   await prisma.receivableExportJob.update({ where: { id: cleanupJob.id }, data: { expiresAt: new Date(0) } });
-  const { cleanupExpiredReceivablesExports } = await import("../src/receivables-export.js");
   await cleanupExpiredReceivablesExports({ uploadRoot });
   assert.equal((await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: cleanupJob.id } })).status, "expired");
   await assert.rejects(() => stat(resolve(uploadRoot, cleanupJob.storageKey!)));
@@ -270,13 +340,23 @@ try {
   assert.equal((await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: blockedCleanup.id } })).status, "completed", "file deletion failure was silently marked expired");
   await rm(blockedPath, { recursive: true }); await cleanupExpiredReceivablesExports({ uploadRoot });
   assert.equal((await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: blockedCleanup.id } })).status, "expired");
+  const retryId = randomUUID(); const retryKey = `.receivables-exports/${retryId}.tmp`; const retryPath = resolve(uploadRoot, retryKey); await mkdir(retryPath, { recursive: true });
+  const retryCleanup = await prisma.receivableExportJob.create({ data: { id: retryId, requestedBy: admin.id, status: "failed", scopeSnapshot: cleanupJob.scopeSnapshot as any, filterSnapshot: cleanupJob.filterSnapshot as any, storageKey: retryKey, error: "generation and cleanup failed", expiresAt: new Date(Date.now() + 60_000) } });
+  await assert.rejects(() => cleanupExpiredReceivablesExports({ uploadRoot }), /清理失败/);
+  assert.equal((await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: retryCleanup.id } })).storageKey, retryKey, "failed generation lost its retryable storage identity");
+  await rm(retryPath, { recursive: true }); await cleanupExpiredReceivablesExports({ uploadRoot });
+  assert.deepEqual(await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: retryCleanup.id }, select: { status: true, storageKey: true } }), { status: "failed", storageKey: null });
 
   const listed = await expect<{ rows: Job[] }>("/api/receivables/exports?page=1&pageSize=100", reporterToken, 200);
   assert.ok(listed.body!.data!.rows.every((job) => ![ownerCreated.body!.data!.id, adminCreated.body!.data!.id].includes(job.id)), "export list leaked another requester's job");
   const actions = await prisma.auditLog.groupBy({ by: ["action"], where: { actorId: { in: ids.accounts }, action: { startsWith: "receivables.export." } }, _count: true });
   for (const action of ["receivables.export.request", "receivables.export.claim", "receivables.export.complete", "receivables.export.failed", "receivables.export.token", "receivables.export.download", "receivables.export.expire"]) assert.ok(actions.some((row) => row.action === action), `${action} audit missing`);
   const auditMetadata = JSON.stringify((await prisma.auditLog.findMany({ where: { action: { startsWith: "receivables.export." }, actorId: { in: ids.accounts } }, select: { metadata: true } })).map(({ metadata }) => metadata));
-  for (const rawToken of [issuedBeforeRevoke.body!.data!.token, replacedToken.body!.data!.token, oneUse.body!.data!.token, tamperToken.body!.data!.token, traversalToken.body!.data!.token]) assert.equal(auditMetadata.includes(rawToken), false, "raw download token leaked into audit metadata");
+  for (const rawToken of [issuedBeforeRevoke.body!.data!.token, replacedToken.body!.data!.token, oneUse.body!.data!.token, handleToken.body!.data!.token, tamperToken.body!.data!.token, traversalToken.body!.data!.token]) assert.equal(auditMetadata.includes(rawToken), false, "raw download token leaked into audit metadata");
+  assert.equal(await stopServer(), false, "server shutdown did not finish after stopping timers and awaiting export work");
+  const concurrentClaim = await prisma.receivableExportJob.create({ data: { requestedBy: admin.id, status: "pending", scopeSnapshot: cleanupJob.scopeSnapshot as any, filterSnapshot: cleanupJob.filterSnapshot as any, expiresAt: new Date(Date.now() + 60_000) } });
+  assert.deepEqual((await Promise.all([processReceivablesExportJob(concurrentClaim.id, { uploadRoot }), processReceivablesExportJob(concurrentClaim.id, { uploadRoot })])).sort(), [false, true]);
+  assert.equal(await prisma.auditLog.count({ where: { action: "receivables.export.claim", objectId: concurrentClaim.id } }), 1, "true concurrent claim created more than one claim audit");
 } catch (error) {
   failure = error;
 } finally {

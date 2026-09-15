@@ -79,10 +79,6 @@ if (existsSync(adminDist)) {
     : reply.sendFile("index.html"));
 }
 
-const shutdown = async () => { await app.close(); await prisma.$disconnect(); };
-process.on("SIGINT", () => void shutdown());
-process.on("SIGTERM", () => void shutdown());
-
 const reminderTimer = setInterval(() => void generateScheduledReminders(env).catch((error) => app.log.error({ err: error }, "reminder_generation_failed")), 6 * 60 * 60 * 1000);
 reminderTimer.unref();
 void generateScheduledReminders(env).catch((error) => app.log.error({ err: error }, "reminder_generation_failed"));
@@ -93,19 +89,19 @@ const sensitiveExportCleanupTimer = setInterval(() => void cleanupExpiredSensiti
 sensitiveExportCleanupTimer.unref();
 void cleanupExpiredSensitiveExports(env).catch((error) => app.log.error({ err: error }, "sensitive_export_cleanup_failed"));
 const receivablesExportEnvironment = { uploadRoot: env.UPLOAD_ROOT };
-let receivablesExportProcessing = false;
-let receivablesExportCleaning = false;
-const processReceivablesExports = async () => {
-  if (receivablesExportProcessing) return;
-  receivablesExportProcessing = true;
-  try { await processPendingReceivablesExports(receivablesExportEnvironment, 2); }
-  finally { receivablesExportProcessing = false; }
+let receivablesExportProcessRun: Promise<void> | null = null;
+let receivablesExportCleanupRun: Promise<void> | null = null;
+const processReceivablesExports = () => {
+  if (receivablesExportProcessRun) return receivablesExportProcessRun;
+  const run = processPendingReceivablesExports(receivablesExportEnvironment, 2).then(() => undefined).finally(() => { if (receivablesExportProcessRun === run) receivablesExportProcessRun = null; });
+  receivablesExportProcessRun = run;
+  return run;
 };
-const cleanReceivablesExports = async () => {
-  if (receivablesExportCleaning) return;
-  receivablesExportCleaning = true;
-  try { await cleanupExpiredReceivablesExports(receivablesExportEnvironment); }
-  finally { receivablesExportCleaning = false; }
+const cleanReceivablesExports = () => {
+  if (receivablesExportCleanupRun) return receivablesExportCleanupRun;
+  const run = cleanupExpiredReceivablesExports(receivablesExportEnvironment).then(() => undefined).finally(() => { if (receivablesExportCleanupRun === run) receivablesExportCleanupRun = null; });
+  receivablesExportCleanupRun = run;
+  return run;
 };
 const receivablesExportProcessorTimer = setInterval(() => void processReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_processor_failed")), 1_000);
 receivablesExportProcessorTimer.unref();
@@ -113,6 +109,25 @@ void processReceivablesExports().catch((error) => app.log.error({ err: error }, 
 const receivablesExportCleanupTimer = setInterval(() => void cleanReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_cleanup_failed")), 10 * 60 * 1_000);
 receivablesExportCleanupTimer.unref();
 void cleanReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_cleanup_failed"));
+
+let shutdownRun: Promise<void> | null = null;
+const shutdown = () => {
+  if (shutdownRun) return shutdownRun;
+  clearInterval(reminderTimer);
+  clearInterval(outboxTimer);
+  clearInterval(sensitiveExportCleanupTimer);
+  clearInterval(receivablesExportProcessorTimer);
+  clearInterval(receivablesExportCleanupTimer);
+  shutdownRun = (async () => {
+    await app.close();
+    await Promise.all([receivablesExportProcessRun, receivablesExportCleanupRun].filter((run): run is Promise<void> => run !== null));
+    await prisma.$disconnect();
+  })();
+  return shutdownRun;
+};
+const shutdownFromSignal = () => void shutdown().then(() => process.exit(0)).catch((error) => { app.log.error({ err: error }, "shutdown_failed"); process.exit(1); });
+process.on("SIGINT", shutdownFromSignal);
+process.on("SIGTERM", shutdownFromSignal);
 
 const listenHost = env.NODE_ENV === "test" && process.env.RECEIVABLES_TEST_LISTEN_HOST === "127.0.0.1" ? "127.0.0.1" : "0.0.0.0";
 await app.listen({ port: env.PORT, host: listenHost });
