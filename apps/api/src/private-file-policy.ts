@@ -14,9 +14,11 @@ export type PrivateFileFacts = {
   trainingAttachments: Array<{ projectId: string | null; organizationId: string | null; personIds: string[] }>;
   requestAttachments: Array<{ accountId: string | null; personId: string | null; organizationId: string | null; projectId: string | null }>;
   receivableAttachments: Array<{ financeDepartmentId: string; status: "active" | "voided" }>;
+  receivableImportBatches: Array<Record<string, never>>;
 };
 
 export function canReadPrivateFile(reader: Reader, facts: PrivateFileFacts) {
+  if (facts.receivableImportBatches.length) return reader.receivablesAccess?.role === "owner" || reader.receivablesAccess?.role === "admin";
   if (facts.receivableAttachments.length) {
     const access = reader.receivablesAccess;
     if (!access) return false;

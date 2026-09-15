@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
 import ExcelJS from "exceljs";
 import type { Principal } from "./auth.js";
@@ -24,6 +24,7 @@ export type ReceivablesImportIssue = {
 };
 
 export type ReceivablesImportData = {
+  presentFields: string[];
   financeDepartmentId: string | null;
   contractNo: string | null;
   projectName: string | null;
@@ -45,6 +46,7 @@ export type ReceivablesImportData = {
   openingReceiptAmount: string | null;
   openingReceiptDate: string | null;
 };
+type ReceivablesImportField = Exclude<keyof ReceivablesImportData, "presentFields">;
 
 export type ReceivablesImportParsedRow = {
   rowNumber: number;
@@ -52,9 +54,11 @@ export type ReceivablesImportParsedRow = {
   errors: ReceivablesImportIssue[];
   ledgerId: string | null;
   targetRevision: number | null;
+  allowedDecisions: readonly ("create" | "skip" | "update")[];
+  warnings: ReceivablesImportIssue[];
 };
 
-const aliases: Record<keyof ReceivablesImportData, readonly string[]> = {
+const aliases: Record<ReceivablesImportField, readonly string[]> = {
   financeDepartmentId: ["财务归属部门", "归属部门", "finance_department", "financeDepartment"],
   contractNo: ["合同编号", "合同号", "contract_no", "contractNo"],
   projectName: ["项目名称", "project_name", "projectName"],
@@ -147,7 +151,7 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
   const worksheet = workbook.worksheets[0]!;
   const headerRow = worksheet.getRow(1);
   const aliasToField = new Map<string, keyof ReceivablesImportData>();
-  for (const [field, names] of Object.entries(aliases) as Array<[keyof ReceivablesImportData, readonly string[]]>) {
+  for (const [field, names] of Object.entries(aliases) as Array<[ReceivablesImportField, readonly string[]]>) {
     for (const name of names) aliasToField.set(name, field);
   }
   const columns = new Map<keyof ReceivablesImportData, number>();
@@ -168,10 +172,12 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     if (!columns.has(field)) errors.push(issue("REQUIRED_COLUMN_MISSING", "缺少必填列", { field }));
   }
 
-  const departmentByName = new Map<string, ReceivablesImportReference["departments"][number]>();
+  const departmentByName = new Map<string, ReceivablesImportReference["departments"][number][]>();
   for (const department of references.departments) {
-    departmentByName.set(department.name.trim(), department);
-    if (department.code) departmentByName.set(department.code.trim(), department);
+    for (const key of [department.name.trim(), ...(department.code ? [department.code.trim()] : [])]) {
+      const matches = departmentByName.get(key) ?? [];
+      if (!matches.some(({ id }) => id === department.id)) departmentByName.set(key, [...matches, department]);
+    }
   }
   const dictionaries = new Map<string, Map<string, boolean>>();
   for (const option of references.dictionaryOptions) {
@@ -187,8 +193,8 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     if (!columns.size || [...columns.values()].every((column) => !cellText(row.getCell(column)))) continue;
     const rowErrors: ReceivablesImportIssue[] = [];
     const raw = Object.fromEntries([...columns].map(([field, column]) => [field, cellText(row.getCell(column))])) as Partial<Record<keyof ReceivablesImportData, string>>;
-    const normalizedData = Object.fromEntries(Object.keys(aliases).map((field) => [field, null])) as ReceivablesImportData;
-    for (const field of Object.keys(aliases) as Array<keyof ReceivablesImportData>) {
+    const normalizedData = { ...Object.fromEntries(Object.keys(aliases).map((field) => [field, null])), presentFields: [...columns.keys()] } as ReceivablesImportData;
+    for (const field of Object.keys(aliases) as ReceivablesImportField[]) {
       const value = raw[field]?.trim() ?? "";
       if (!value) continue;
       if ((amountFields as readonly string[]).includes(field)) normalizedData[field] = decimal(value, rowNumber, field, rowErrors) as never;
@@ -202,12 +208,14 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     if (!contractNo) rowErrors.push(issue("CONTRACT_NO_REQUIRED", "合同编号不能为空", { rowNumber, field: "contractNo" }));
 
     const departmentName = raw.financeDepartmentId?.trim() ?? "";
-    const department = departmentByName.get(departmentName);
+    const departmentCandidates = departmentByName.get(departmentName) ?? [];
+    const department = departmentCandidates.length === 1 ? departmentCandidates[0] : undefined;
     normalizedData.financeDepartmentId = department?.id ?? null;
-    if (!department) rowErrors.push(issue("DEPARTMENT_NOT_FOUND", "财务归属部门不存在", { rowNumber, field: "financeDepartmentId" }));
+    if (departmentCandidates.length > 1) rowErrors.push(issue("DEPARTMENT_AMBIGUOUS", "财务归属部门名称或编码映射不唯一", { rowNumber, field: "financeDepartmentId" }));
+    else if (!department) rowErrors.push(issue("DEPARTMENT_NOT_FOUND", "财务归属部门不存在", { rowNumber, field: "financeDepartmentId" }));
     else if (!department.active) rowErrors.push(issue("DEPARTMENT_INACTIVE", "财务归属部门已停用", { rowNumber, field: "financeDepartmentId" }));
 
-    for (const [field, category] of Object.entries(dictionaryCategories) as Array<[keyof ReceivablesImportData, string]>) {
+    for (const [field, category] of Object.entries(dictionaryCategories) as Array<[ReceivablesImportField, string]>) {
       const value = normalizedData[field];
       if (value && dictionaries.get(category)?.get(value) !== true) rowErrors.push(issue("DICTIONARY_VALUE_INVALID", "字典值不存在或已停用", { rowNumber, field }));
     }
@@ -221,7 +229,9 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
       rowErrors.push(issue("OPENING_RECEIPT_DATE_REQUIRED", "期初到账金额大于零时必须提供到账日期", { rowNumber, field: "openingReceiptDate" }));
     }
     const target = contractNo ? ledgerByContract.get(contractNo) : undefined;
-    rows.push({ rowNumber, normalizedData, errors: rowErrors, ledgerId: target?.id ?? null, targetRevision: target?.revision ?? null });
+    const openingTotals = [normalizedData.openingInvoiceAmount, normalizedData.openingReceiptAmount].some((amount) => amount !== null && new Prisma.Decimal(amount).gt(0));
+    const rowWarnings = target && openingTotals ? [issue("EXISTING_OPENING_TOTALS_SKIP_ONLY", "已有合同含非零期初开票或到账金额，只能跳过", { rowNumber })] : [];
+    rows.push({ rowNumber, normalizedData, errors: rowErrors, ledgerId: target?.id ?? null, targetRevision: target?.revision ?? null, allowedDecisions: target ? openingTotals ? ["skip"] : ["skip", "update"] : ["create"], warnings: rowWarnings });
   }
 
   const contracts = new Map<string, ReceivablesImportParsedRow[]>();
@@ -234,6 +244,7 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     for (const row of duplicateRows) row.errors.push(issue("DUPLICATE_CONTRACT_IN_FILE", "同一文件合同编号重复", { rowNumber: row.rowNumber, field: "contractNo" }));
   }
   errors.push(...rows.flatMap((row) => row.errors));
+  warnings.push(...rows.flatMap((row) => row.warnings));
   return { rows, errors, warnings };
 }
 
@@ -275,6 +286,7 @@ export async function authorizeReceivablesImport(principal: Principal) {
 
 export async function previewReceivablesImport(context: ReceivablesImportContext, file: ReceivablesImportFile, env: ReceivablesImportEnvironment) {
   await authorizeReceivablesImport(context.principal);
+  if (file.mimeType !== "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || !file.originalName.toLowerCase().endsWith(".xlsx")) throw httpError(400, "INVALID_IMPORT_FILE_TYPE", "导入仅支持 XLSX 文件");
   await validateReceivableAttachment(file.originalName, file.mimeType, file.content);
   const parsed = parseReceivablesImportWorkbook(await loadWorkbook(file.content), await references(prisma));
   const checksum = createHash("sha256").update(file.content).digest("hex");
@@ -292,17 +304,21 @@ export async function previewReceivablesImport(context: ReceivablesImportContext
     return { batchId: batch.id, revision: batch.revision, checksum, rows: batch.items, errors: parsed.errors, warnings: parsed.warnings };
   } catch (error) {
     await removeReceivableAttachmentFiles(env.uploadRoot, storageKey);
-    throw error;
+    throwReceivablesImportDatabaseError(error);
   }
 }
 
-async function verifiedFile(batchId: string, uploadRoot: string) {
-  const batch = await prisma.receivableImportBatch.findUnique({ where: { id: batchId }, include: { originalFile: true } });
-  if (!batch) throw batchNotFound();
+async function verifiedFile(tx: Tx, batch: { checksum: string; originalFileId: string; originalFile: { storageKey: string; originalName: string; mimeType: string; size: number; sha256: string } }, uploadRoot: string) {
+  await tx.$queryRaw`SELECT id FROM files WHERE id = ${batch.originalFileId}::uuid FOR UPDATE`;
   const path = receivableAttachmentStoragePath(uploadRoot, batch.originalFile.storageKey);
-  const stat = await lstat(path).catch(() => { throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换"); });
-  if (!stat.isFile() || stat.size !== batch.originalFile.size) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
-  const content = await readFile(path);
+  const handle = await open(path, "r").catch(() => { throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换"); });
+  let content: Buffer;
+  try {
+    const before = await handle.stat();
+    content = await handle.readFile();
+    const [after, currentPath] = await Promise.all([handle.stat(), lstat(path)]);
+    if (!before.isFile() || !after.isFile() || !currentPath.isFile() || before.size !== after.size || after.size !== currentPath.size || after.size !== batch.originalFile.size || before.dev !== currentPath.dev || before.ino !== currentPath.ino) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
+  } finally { await handle.close(); }
   const checksum = createHash("sha256").update(content).digest("hex");
   if (checksum !== batch.checksum || checksum !== batch.originalFile.sha256) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
   await validateReceivableAttachment(batch.originalFile.originalName, batch.originalFile.mimeType, content).catch(() => { throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换"); });
@@ -316,8 +332,8 @@ async function lockAuthority(tx: Tx, principal: Principal) {
 }
 
 const ledgerFields = ["financeDepartmentId", "contractNo", "projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "contractAmount", "finalAmount", "openingChargeDate", "debtStatus", "collectionOwner", "collectionNotes"] as const;
-function ledgerData(data: ReceivablesImportData) {
-  return {
+function ledgerData(data: ReceivablesImportData, mode: "create" | "update") {
+  const values = {
     financeDepartmentId: data.financeDepartmentId!, contractNo: data.contractNo!, contractNoNormalized: data.contractNo!,
     projectName: data.projectName, customerName: data.customerName, customerType: data.customerType, creditorUnit: data.creditorUnit,
     workNature: data.workNature, sector: data.sector, projectStatus: data.projectStatus, settlementMethod: data.settlementMethod,
@@ -325,6 +341,9 @@ function ledgerData(data: ReceivablesImportData) {
     openingChargeDate: data.openingChargeDate === null ? null : new Date(`${data.openingChargeDate}T00:00:00.000Z`),
     debtStatus: data.debtStatus, collectionOwner: data.collectionOwner, collectionNotes: data.collectionNotes,
   };
+  if (mode === "create") return values;
+  const present = new Set(data.presentFields);
+  return Object.fromEntries(Object.entries(values).filter(([field]) => present.has(field) || field === "contractNoNormalized" && present.has("contractNo")));
 }
 
 async function importedDetail(tx: Tx, context: ReceivablesImportContext, access: ReceivablesAccess, ledgerId: string, batchId: string, kind: "invoice" | "receipt", amount: string, date: string) {
@@ -342,22 +361,43 @@ function exactTarget(error: Prisma.PrismaClientKnownRequestError, columns: reado
   return target === index || Array.isArray(target) && target.length === columns.length && target.every((value, i) => value === columns[i]);
 }
 
+export function classifyReceivablesImportDatabaseError(error: { code: string; meta?: { target?: unknown } | null }): "contract_conflict" | "revision_conflict" | "internal" | null {
+  if (error.code === "P2002" && exactTarget(error as Prisma.PrismaClientKnownRequestError, ["contract_no_normalized"], "receivable_ledgers_contract_no_normalized_key")) return "contract_conflict";
+  if (error.code === "P2002" && exactTarget(error as Prisma.PrismaClientKnownRequestError, ["ledger_id", "revision"], "receivable_ledger_revisions_ledger_id_revision_key")) return "revision_conflict";
+  if (error.code === "P2002" || error.code === "P2025") return "internal";
+  return null;
+}
+function throwReceivablesImportDatabaseError(error: unknown): never {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    const classification = classifyReceivablesImportDatabaseError(error);
+    if (classification === "contract_conflict") throw conflict("IMPORT_CONTRACT_CONFLICT", "合同编号已存在");
+    if (classification === "revision_conflict") throw conflict();
+    if (classification === "internal") throw httpError(500, "INTERNAL_ERROR", "未识别的数据库写入异常");
+  }
+  throw error;
+}
+
 export async function applyReceivablesImport(context: ReceivablesImportContext, batchId: string, decisions: ReceivablesImportDecisions, env: ReceivablesImportEnvironment) {
   await authorizeReceivablesImport(context.principal);
-  const verified = await verifiedFile(batchId, env.uploadRoot);
   try {
     return await prisma.$transaction(async (tx) => {
       const access = await lockAuthority(tx, context.principal); requireReceivables(access, "import");
       await tx.$queryRaw`SELECT id FROM receivable_import_batches WHERE id = ${batchId}::uuid FOR UPDATE`;
-      const batch = await tx.receivableImportBatch.findUnique({ where: { id: batchId }, include: { items: { orderBy: { rowNumber: "asc" } } } });
+      const batch = await tx.receivableImportBatch.findUnique({ where: { id: batchId }, include: { originalFile: true, items: { orderBy: { rowNumber: "asc" } } } });
       if (!batch) throw batchNotFound();
       if (batch.status !== "previewed" || batch.revision !== decisions.revision) throw conflict();
       if (batch.errorCount > 0) throw invalid("IMPORT_HAS_BLOCKING_ERRORS", "导入预览存在阻断错误");
+      const verified = await verifiedFile(tx, batch, env.uploadRoot);
       const reparsed = parseReceivablesImportWorkbook(await loadWorkbook(verified.content), await references(tx));
       if (reparsed.errors.length || reparsed.rows.length !== batch.items.length) throw conflict("IMPORT_PREVIEW_STALE", "导入预览已失效");
       const choice = new Map(decisions.rows.map((row) => [row.rowNumber, row.decision]));
       if (choice.size !== decisions.rows.length || decisions.rows.some((row) => !batch.items.some((item) => item.rowNumber === row.rowNumber && item.ledgerId))) throw invalid("IMPORT_DECISION_INVALID", "重复决策无效");
       for (const item of batch.items) if (item.ledgerId && !choice.has(item.rowNumber)) throw invalid("IMPORT_DECISION_REQUIRED", "已有合同必须选择跳过或更新");
+      for (const item of batch.items) {
+        const data = item.normalizedData as unknown as ReceivablesImportData;
+        const hasOpeningTotals = [data.openingInvoiceAmount, data.openingReceiptAmount].some((amount) => amount !== null && new Prisma.Decimal(amount).gt(0));
+        if (item.ledgerId && choice.get(item.rowNumber) === "update" && hasOpeningTotals) throw invalid("IMPORT_OPENING_TOTALS_UPDATE_FORBIDDEN", "已有合同含非零期初金额，只能跳过");
+      }
       for (const [index, item] of batch.items.entries()) {
         const row = reparsed.rows[index]!;
         if (stableJson(item.normalizedData) !== stableJson(row.normalizedData) || item.ledgerId !== row.ledgerId || item.targetRevision !== row.targetRevision) throw conflict("IMPORT_PREVIEW_STALE", "导入预览已失效");
@@ -378,19 +418,21 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
         const decision = item.ledgerId ? choice.get(item.rowNumber)! : "create";
         if (decision === "skip") { await tx.receivableImportItem.update({ where: { id: item.id }, data: { decision, result: "skipped", appliedRevision: item.targetRevision } }); continue; }
         let ledger;
+        let ledgerBefore: Prisma.InputJsonObject | null = null;
         if (!item.ledgerId) {
-          ledger = await tx.receivableLedger.create({ data: { ...ledgerData(data), createdBy: context.principal.accountId, updatedBy: context.principal.accountId, createdByImportBatchId: batchId } });
+          ledger = await tx.receivableLedger.create({ data: { ...ledgerData(data, "create"), createdBy: context.principal.accountId, updatedBy: context.principal.accountId, createdByImportBatchId: batchId } as Prisma.ReceivableLedgerUncheckedCreateInput });
         } else {
           const before = await tx.receivableLedger.findUnique({ where: { id: item.ledgerId } });
           if (!before || before.revision !== item.targetRevision || before.status !== "active") throw conflict("IMPORT_TARGET_CHANGED", "目标台账已变化");
+          ledgerBefore = snapshot(before);
           await tx.receivableLedgerRevision.create({ data: { ledgerId: before.id, revision: before.revision, beforeSnapshot: snapshot(before), reason: "批次导入更新", changedBy: context.principal.accountId, importBatchId: batchId } });
-          ledger = await tx.receivableLedger.update({ where: { id: before.id }, data: { ...ledgerData(data), updatedBy: context.principal.accountId, revision: { increment: 1 } } });
+          ledger = await tx.receivableLedger.update({ where: { id: before.id }, data: { ...ledgerData(data, "update"), updatedBy: context.principal.accountId, revision: { increment: 1 } } });
         }
         if (!item.ledgerId && data.openingInvoiceAmount && new Prisma.Decimal(data.openingInvoiceAmount).gt(0)) await importedDetail(tx, context, access, ledger.id, batchId, "invoice", data.openingInvoiceAmount, data.openingInvoiceDate!);
         if (!item.ledgerId && data.openingReceiptAmount && new Prisma.Decimal(data.openingReceiptAmount).gt(0)) await importedDetail(tx, context, access, ledger.id, batchId, "receipt", data.openingReceiptAmount, data.openingReceiptDate!);
         ledger = await tx.receivableLedger.findUniqueOrThrow({ where: { id: ledger.id } });
         await tx.receivableImportItem.update({ where: { id: item.id }, data: { decision: item.ledgerId ? "update" : null, result: item.ledgerId ? "updated" : "created", ledgerId: ledger.id, appliedRevision: ledger.revision } });
-        await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: item.ledgerId ? "receivables.import.item.update" : "receivables.import.item.create", objectType: "receivable_ledger", objectId: ledger.id, requestId: context.requestId, ...auditScope(access), metadata: { batchId, rowNumber: item.rowNumber, appliedRevision: ledger.revision } });
+        await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: item.ledgerId ? "receivables.import.item.update" : "receivables.import.item.create", objectType: "receivable_ledger", objectId: ledger.id, requestId: context.requestId, ...auditScope(access), metadata: { batchId, rowNumber: item.rowNumber, targetRevision: item.targetRevision, appliedRevision: ledger.revision, before: ledgerBefore, after: snapshot(ledger) } });
       }
       const changed = await tx.receivableImportBatch.updateMany({ where: { id: batchId, revision: decisions.revision, status: "previewed" }, data: { status: "applied", revision: { increment: 1 }, appliedAt: new Date(), appliedBy: context.principal.accountId } });
       if (changed.count !== 1) throw conflict();
@@ -399,17 +441,12 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
       return result;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      if (exactTarget(error, ["contract_no_normalized"], "receivable_ledgers_contract_no_normalized_key")) throw conflict("IMPORT_CONTRACT_CONFLICT", "合同编号已存在");
-      if (exactTarget(error, ["ledger_id", "revision"], "receivable_ledger_revisions_ledger_id_revision_key")) throw conflict();
-      throw httpError(500, "INTERNAL_ERROR", "未识别的唯一约束冲突");
-    }
-    throw error;
+    throwReceivablesImportDatabaseError(error);
   }
 }
 
 export async function rollbackReceivablesImport(context: ReceivablesImportContext, batchId: string, input: { revision: number; reason: string }) {
-  return prisma.$transaction(async (tx) => {
+  try { return await prisma.$transaction(async (tx) => {
     const access = await lockAuthority(tx, context.principal); requireReceivables(access, "import");
     await tx.$queryRaw`SELECT id FROM receivable_import_batches WHERE id = ${batchId}::uuid FOR UPDATE`;
     const batch = await tx.receivableImportBatch.findUnique({ where: { id: batchId }, include: { items: { orderBy: { rowNumber: "asc" } } } });
@@ -431,17 +468,22 @@ export async function rollbackReceivablesImport(context: ReceivablesImportContex
         const revision = await tx.receivableLedgerRevision.findFirst({ where: { ledgerId: before.id, importBatchId: batchId, revision: item.targetRevision! } });
         if (!revision || !revision.beforeSnapshot || typeof revision.beforeSnapshot !== "object" || Array.isArray(revision.beforeSnapshot)) throw conflict("IMPORT_ROLLBACK_CONFLICT", "导入前快照缺失");
         const old = revision.beforeSnapshot as Record<string, unknown>;
-        data = Object.fromEntries(ledgerFields.map((field) => [field, old[field] ?? null])); data.contractNoNormalized = old.contractNoNormalized as string; data.updatedBy = context.principal.accountId; data.revision = { increment: 1 };
+        const imported = item.normalizedData as unknown as ReceivablesImportData;
+        const restoredFields = ledgerFields.filter((field) => imported.presentFields.includes(field));
+        data = Object.fromEntries(restoredFields.map((field) => [field, old[field] ?? null]));
+        if (restoredFields.includes("contractNo")) data.contractNoNormalized = old.contractNoNormalized as string;
+        data.updatedBy = context.principal.accountId; data.revision = { increment: 1 };
       }
       const after = await tx.receivableLedger.update({ where: { id: before.id }, data });
-      await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.item.rollback", objectType: "receivable_ledger", objectId: before.id, requestId: context.requestId, ...auditScope(access), reason: input.reason, metadata: { batchId, before: snapshot(before), after: snapshot(after) } });
+      await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.item.rollback", objectType: "receivable_ledger", objectId: before.id, requestId: context.requestId, ...auditScope(access), reason: input.reason, metadata: { batchId, rowNumber: item.rowNumber, targetRevision: item.targetRevision, appliedRevision: item.appliedRevision, rollbackRevision: after.revision, before: snapshot(before), after: snapshot(after) } });
     }
     const changed = await tx.receivableImportBatch.updateMany({ where: { id: batchId, revision: input.revision, status: "applied" }, data: { status: "rolled_back", revision: { increment: 1 }, rolledBackAt: new Date(), rolledBackBy: context.principal.accountId, rollbackReason: input.reason } });
     if (changed.count !== 1) throw conflict();
     const result = await tx.receivableImportBatch.findUniqueOrThrow({ where: { id: batchId }, include: { items: { orderBy: { rowNumber: "asc" } } } });
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.rollback", objectType: "receivable_import_batch", objectId: batchId, requestId: context.requestId, ...auditScope(access), reason: input.reason, metadata: { before: { status: batch.status, revision: batch.revision }, after: { status: result.status, revision: result.revision } } });
     return result;
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }); }
+  catch (error) { throwReceivablesImportDatabaseError(error); }
 }
 
 export async function listReceivablesImports(principal: Principal) {

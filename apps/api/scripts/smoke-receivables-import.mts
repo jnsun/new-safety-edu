@@ -1,19 +1,29 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { rm, mkdir, writeFile } from "node:fs/promises";
+import { rm, mkdir, writeFile, lstat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createConnection } from "node:net";
 import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import ExcelJS from "exceljs";
 import { SignJWT } from "jose";
+import { orphanPrivateFiles } from "../src/private-file-retention.js";
 
 const root = resolve(import.meta.dirname, "../../..");
-const databaseUrl = process.env.DATABASE_URL ?? "postgresql://postgres@127.0.0.1:55432/receivables_test";
+const databaseUrl = process.env.DATABASE_URL ?? "";
 const baseUrl = process.env.RECEIVABLES_API_BASE_URL ?? "http://127.0.0.1:55448";
 const uploadRoot = resolve(root, "var/receivables-import-smoke");
 const jwtSecret = "receivables-import-smoke-jwt-secret";
 const marker = `rxa-import-${randomUUID().slice(0, 8)}`;
+function assertSmokeEnvironment(input: { databaseUrl: string; baseUrl: string; uploadRoot: string }) {
+  if (input.databaseUrl !== "postgresql://postgres@127.0.0.1:55432/receivables_test") throw new Error("IMPORT_SMOKE_DATABASE_URL_UNSAFE");
+  const api = new URL(input.baseUrl);
+  if (api.protocol !== "http:" || api.hostname !== "127.0.0.1" || api.port !== "55448") throw new Error("IMPORT_SMOKE_API_URL_UNSAFE");
+  if (resolve(input.uploadRoot) !== resolve(root, "var/receivables-import-smoke")) throw new Error("IMPORT_SMOKE_UPLOAD_ROOT_UNSAFE");
+}
+assert.throws(() => assertSmokeEnvironment({ databaseUrl: "postgresql://postgres@example.com:5432/production", baseUrl, uploadRoot }), /IMPORT_SMOKE_DATABASE_URL_UNSAFE/);
+assertSmokeEnvironment({ databaseUrl, baseUrl, uploadRoot });
 const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 const ids = { organizations: [] as string[], people: [] as string[], accounts: [] as string[], roles: [] as string[], sessions: [] as string[], departments: [] as string[], grants: [] as string[] };
 let server: ChildProcess | undefined;
@@ -55,8 +65,11 @@ async function stop() {
 }
 
 async function workbook(rows: unknown[][]) {
+  return customWorkbook(["归属部门", "合同编号", "项目名称", "决算方式", "合同金额", "决算金额", "开票金额", "开票日期", "到账金额", "到账日期"], rows);
+}
+async function customWorkbook(headers: string[], rows: unknown[][]) {
   const book = new ExcelJS.Workbook();
-  book.addWorksheet("台账").addRows([["归属部门", "合同编号", "项目名称", "决算方式", "合同金额", "决算金额", "开票金额", "开票日期", "到账金额", "到账日期"], ...rows]);
+  book.addWorksheet("台账").addRows([headers, ...rows]);
   return Buffer.from(await book.xlsx.writeBuffer());
 }
 
@@ -73,47 +86,55 @@ async function post(path: string, bearer: string, body: unknown) {
 }
 
 async function cleanup() {
-  const batches = await prisma.receivableImportBatch.findMany({ where: { requestedBy: { in: ids.accounts } }, select: { id: true, originalFileId: true } });
-  await prisma.receivableImportItem.deleteMany({ where: { batchId: { in: batches.map(({ id }) => id) } } });
-  const ledgers = await prisma.receivableLedger.findMany({ where: { OR: [{ contractNoNormalized: { startsWith: marker } }, { createdByImportBatchId: { in: batches.map(({ id }) => id) } }] }, select: { id: true } });
+  const errors: unknown[] = [];
+  const attempt = async (action: () => Promise<unknown>) => { try { await action(); } catch (error) { errors.push(error); } };
+  const batches = await prisma.receivableImportBatch.findMany({ where: { requestedBy: { in: ids.accounts } }, select: { id: true, originalFileId: true } }).catch((error) => { errors.push(error); return []; });
+  await attempt(() => prisma.receivableImportItem.deleteMany({ where: { batchId: { in: batches.map(({ id }) => id) } } }));
+  const ledgers = await prisma.receivableLedger.findMany({ where: { OR: [{ contractNoNormalized: { startsWith: marker } }, { createdByImportBatchId: { in: batches.map(({ id }) => id) } }] }, select: { id: true } }).catch((error) => { errors.push(error); return []; });
   const ledgerIds = ledgers.map(({ id }) => id);
-  await prisma.receivableInvoice.deleteMany({ where: { ledgerId: { in: ledgerIds } } });
-  await prisma.receivableReceipt.deleteMany({ where: { ledgerId: { in: ledgerIds } } });
-  await prisma.receivableLedgerRevision.deleteMany({ where: { ledgerId: { in: ledgerIds } } });
-  await prisma.receivableLedger.deleteMany({ where: { id: { in: ledgerIds } } });
-  await prisma.receivableImportBatch.deleteMany({ where: { id: { in: batches.map(({ id }) => id) } } });
-  await prisma.privateFile.deleteMany({ where: { id: { in: batches.map(({ originalFileId }) => originalFileId) } } });
-  await prisma.auditLog.deleteMany({ where: { actorId: { in: ids.accounts } } });
-  await prisma.refreshSession.deleteMany({ where: { id: { in: ids.sessions } } });
+  await attempt(() => prisma.receivableInvoice.deleteMany({ where: { ledgerId: { in: ledgerIds } } }));
+  await attempt(() => prisma.receivableReceipt.deleteMany({ where: { ledgerId: { in: ledgerIds } } }));
+  await attempt(() => prisma.receivableLedgerRevision.deleteMany({ where: { ledgerId: { in: ledgerIds } } }));
+  await attempt(() => prisma.receivableLedger.deleteMany({ where: { id: { in: ledgerIds } } }));
+  await attempt(() => prisma.receivableImportBatch.deleteMany({ where: { id: { in: batches.map(({ id }) => id) } } }));
+  await attempt(() => prisma.privateFile.deleteMany({ where: { id: { in: batches.map(({ originalFileId }) => originalFileId) } } }));
+  await attempt(() => prisma.auditLog.deleteMany({ where: { actorId: { in: ids.accounts } } }));
+  await attempt(() => prisma.refreshSession.deleteMany({ where: { id: { in: ids.sessions } } }));
   if (settingCaptured) {
-    if (originalSetting) await prisma.receivableSetting.update({ where: { id: 1 }, data: originalSetting });
-    else await prisma.receivableSetting.deleteMany({ where: { id: 1 } });
+    if (originalSetting) await attempt(() => prisma.receivableSetting.update({ where: { id: 1 }, data: originalSetting! }));
+    else await attempt(() => prisma.receivableSetting.deleteMany({ where: { id: 1 } }));
   }
-  await prisma.receivableGrantDepartment.deleteMany({ where: { grantId: { in: ids.grants } } });
-  await prisma.receivableAccessGrant.deleteMany({ where: { id: { in: ids.grants } } });
-  await prisma.receivableDepartment.deleteMany({ where: { id: { in: ids.departments } } });
-  await prisma.roleAssignment.deleteMany({ where: { id: { in: ids.roles } } });
-  await prisma.account.deleteMany({ where: { id: { in: ids.accounts } } });
-  await prisma.person.deleteMany({ where: { id: { in: ids.people } } });
-  await prisma.organization.deleteMany({ where: { id: { in: ids.organizations } } });
-  await rm(uploadRoot, { recursive: true, force: true });
+  await attempt(() => prisma.receivableGrantDepartment.deleteMany({ where: { grantId: { in: ids.grants } } }));
+  await attempt(() => prisma.receivableAccessGrant.deleteMany({ where: { id: { in: ids.grants } } }));
+  await attempt(() => prisma.receivableDepartment.deleteMany({ where: { id: { in: ids.departments } } }));
+  await attempt(() => prisma.roleAssignment.deleteMany({ where: { id: { in: ids.roles } } }));
+  await attempt(() => prisma.account.deleteMany({ where: { id: { in: ids.accounts } } }));
+  await attempt(() => prisma.person.deleteMany({ where: { id: { in: ids.people } } }));
+  await attempt(() => prisma.organization.deleteMany({ where: { id: { in: ids.organizations } } }));
+  await attempt(() => rm(uploadRoot, { recursive: true, force: true }));
+  if (errors.length) throw new AggregateError(errors, "receivables import fixture cleanup failed");
 }
 
 async function assertClean() {
-  const [people, accounts, departments, ledgers, batches, files, sessions, setting] = await Promise.all([
+  const [people, accounts, departments, ledgers, batches, files, sessions, invoices, receipts, revisions, audits, setting] = await Promise.all([
     prisma.person.count({ where: { name: { startsWith: marker } } }), prisma.account.count({ where: { username: { startsWith: marker } } }),
     prisma.receivableDepartment.count({ where: { name: { startsWith: marker } } }), prisma.receivableLedger.count({ where: { contractNoNormalized: { startsWith: marker } } }),
     prisma.receivableImportBatch.count({ where: { requestedBy: { in: ids.accounts } } }), prisma.privateFile.count({ where: { uploadedBy: { in: ids.accounts } } }),
-    prisma.refreshSession.count({ where: { clientKind: "rxa-import-smoke" } }), prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } }),
+    prisma.refreshSession.count({ where: { clientKind: "rxa-import-smoke" } }),
+    prisma.receivableInvoice.count({ where: { ledger: { contractNoNormalized: { startsWith: marker } } } }), prisma.receivableReceipt.count({ where: { ledger: { contractNoNormalized: { startsWith: marker } } } }),
+    prisma.receivableLedgerRevision.count({ where: { ledger: { contractNoNormalized: { startsWith: marker } } } }), prisma.auditLog.count({ where: { actorId: { in: ids.accounts } } }),
+    prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } }),
   ]);
-  assert.deepEqual({ people, accounts, departments, ledgers, batches, files, sessions }, { people: 0, accounts: 0, departments: 0, ledgers: 0, batches: 0, files: 0, sessions: 0 }, "import smoke left database residue");
+  assert.deepEqual({ people, accounts, departments, ledgers, batches, files, sessions, invoices, receipts, revisions, audits }, { people: 0, accounts: 0, departments: 0, ledgers: 0, batches: 0, files: 0, sessions: 0, invoices: 0, receipts: 0, revisions: 0, audits: 0 }, "import smoke left database residue");
   assert.deepEqual(setting, originalSetting, "import smoke did not restore settings baseline");
+  await assert.rejects(lstat(uploadRoot), (error: NodeJS.ErrnoException) => error.code === "ENOENT", "import smoke upload root still exists");
+  assert.equal(await new Promise<boolean>((resolveClosed) => { const socket = createConnection({ host: "127.0.0.1", port: 55448 }); socket.once("connect", () => { socket.destroy(); resolveClosed(false); }); socket.once("error", () => resolveClosed(true)); }), true, "import smoke API port still listens");
 }
 
 try {
   const finance = await prisma.organization.create({ data: { name: `${marker}-finance`, type: "department" } }); ids.organizations.push(finance.id);
   const owner = await identity("owner", "org_leader", finance.id);
-  const admin = await identity("admin"); const reporter = await identity("reporter"); const recovery = await identity("recovery", "company_admin");
+  const admin = await identity("admin"); const reporter = await identity("reporter"); const readonly = await identity("readonly"); const viewAll = await identity("view-all"); const recovery = await identity("recovery", "company_admin");
   originalSetting = await prisma.receivableSetting.findUniqueOrThrow({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
   settingCaptured = true;
   await prisma.receivableSetting.update({ where: { id: 1 }, data: { financeOrganizationId: finance.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
@@ -121,13 +142,19 @@ try {
   const inactive = await prisma.receivableDepartment.create({ data: { name: `${marker}-inactive`, active: false } }); ids.departments.push(department.id, inactive.id);
   const adminGrant = await prisma.receivableAccessGrant.create({ data: { accountId: admin.id, grantedBy: owner.id, role: "admin" } });
   const reporterGrant = await prisma.receivableAccessGrant.create({ data: { accountId: reporter.id, grantedBy: owner.id, role: "reporter", departments: { create: { financeDepartmentId: department.id, canRead: true, canWrite: true } } } }); ids.grants.push(adminGrant.id, reporterGrant.id);
-  const existing = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-existing`, contractNoNormalized: `${marker}-existing`, projectName: "before", contractAmount: "5.0000", finalAmount: "5.0000", createdBy: owner.id } });
+  const readonlyGrant = await prisma.receivableAccessGrant.create({ data: { accountId: readonly.id, grantedBy: owner.id, role: "readonly", departments: { create: { financeDepartmentId: department.id, canRead: true } } } });
+  const viewAllGrant = await prisma.receivableAccessGrant.create({ data: { accountId: viewAll.id, grantedBy: owner.id, role: "readonly", canViewAll: true } }); ids.grants.push(readonlyGrant.id, viewAllGrant.id);
+  const existing = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-existing`, contractNoNormalized: `${marker}-existing`, projectName: "before", collectionNotes: "preserve", contractAmount: "5.0000", finalAmount: "5.0000", createdBy: owner.id } });
   const skipped = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-skipped`, contractNoNormalized: `${marker}-skipped`, projectName: "unchanged", createdBy: owner.id } });
-  const [bearer, adminBearer, reporterBearer, recoveryBearer] = await Promise.all([token(owner.id), token(admin.id), token(reporter.id), token(recovery.id)]);
+  const openingExisting = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-opening-existing`, contractNoNormalized: `${marker}-opening-existing`, projectName: "opening-before", createdBy: owner.id } });
+  const [bearer, adminBearer, reporterBearer, readonlyBearer, viewAllBearer, recoveryBearer] = await Promise.all([token(owner.id), token(admin.id), token(reporter.id), token(readonly.id), token(viewAll.id), token(recovery.id)]);
   await start();
 
   const malformed = { method: "POST", headers: { authorization: `Bearer ${reporterBearer}`, "content-type": "multipart/form-data; boundary=broken" }, body: "broken" };
   for (const denied of [reporterBearer, recoveryBearer]) assert.equal((await fetch(`${baseUrl}/api/receivables/imports/preview`, { ...malformed, headers: { ...malformed.headers, authorization: `Bearer ${denied}` } })).status, 403, "unauthorized import parsed multipart or was allowed");
+
+  const pdf = new FormData(); pdf.set("file", new Blob([Buffer.from("%PDF-1.4")], { type: "application/pdf" }), "not-import.pdf");
+  const pdfResponse = await fetch(`${baseUrl}/api/receivables/imports/preview`, { method: "POST", headers: { authorization: `Bearer ${bearer}` }, body: pdf }); assert.equal(pdfResponse.status, 400, await pdfResponse.text());
 
   const bad = await preview(bearer, await workbook([[department.name, "", "bad"], [inactive.name, `${marker}-bad`, "bad"]]));
   assert.equal(bad.response.status, 201); assert.ok(bad.body.data.errors.length >= 2);
@@ -154,6 +181,7 @@ try {
   const invoiceAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.money.invoice.create", objectId: newLedger.id, result: "success" } });
   assert.equal((invoiceAudit.metadata as any).before.revision, 1); assert.ok(Object.prototype.hasOwnProperty.call((invoiceAudit.metadata as any).before, "openingChargeDate"));
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: existing.id } })).projectName, "after");
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: existing.id } })).collectionNotes, "preserve", "omitted update field was cleared");
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: skipped.id } })).projectName, "unchanged");
   const success = applied.find(({ response }) => response.status === 200)!.body.data;
   const deniedRollback = await post(`/api/receivables/imports/${valid.body.data.batchId}/rollback`, reporterBearer, { revision: success.revision, reason: "越权" }); assert.equal(deniedRollback.response.status, 403);
@@ -162,11 +190,51 @@ try {
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: newLedger.id } })).status, "voided");
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: existing.id } })).projectName, "before");
 
+  const itemAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.import.item.update", objectId: existing.id } });
+  assert.equal((itemAudit.metadata as any).before.projectName, "before"); assert.equal((itemAudit.metadata as any).after.projectName, "after"); assert.equal((itemAudit.metadata as any).batchId, valid.body.data.batchId); assert.equal((itemAudit.metadata as any).rowNumber, 3); assert.equal((itemAudit.metadata as any).targetRevision, 1); assert.equal((itemAudit.metadata as any).appliedRevision, 2);
+  const rollbackAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.import.item.rollback", objectId: existing.id } });
+  assert.equal((rollbackAudit.metadata as any).before.projectName, "after"); assert.equal((rollbackAudit.metadata as any).after.projectName, "before"); assert.equal((rollbackAudit.metadata as any).rowNumber, 3); assert.equal((rollbackAudit.metadata as any).appliedRevision, 2); assert.equal((rollbackAudit.metadata as any).rollbackRevision, 3);
+  const createAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.import.item.create", objectId: newLedger.id } });
+  assert.equal((createAudit.metadata as any).before, null); assert.equal((createAudit.metadata as any).after.id, newLedger.id); assert.equal((createAudit.metadata as any).rowNumber, 2);
+
+  const openingPreview = await preview(bearer, await workbook([[department.name, openingExisting.contractNo, "drop", "合同金额", "1", "", "2", "2026-09-01", "", ""]]));
+  assert.deepEqual(openingPreview.body.data.rows[0].normalizedData.presentFields.includes("openingInvoiceAmount"), true);
+  assert.ok(openingPreview.body.data.warnings.some((warning: any) => warning.code === "EXISTING_OPENING_TOTALS_SKIP_ONLY"));
+  const openingUpdate = await post(`/api/receivables/imports/${openingPreview.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [{ rowNumber: 2, decision: "update" }] });
+  assert.equal(openingUpdate.response.status, 422); assert.equal(openingUpdate.body.error?.code, "IMPORT_OPENING_TOTALS_UPDATE_FORBIDDEN");
+  const openingSkip = await post(`/api/receivables/imports/${openingPreview.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [{ rowNumber: 2, decision: "skip" }] });
+  assert.equal(openingSkip.response.status, 200); assert.equal(openingSkip.body.data.items[0].result, "skipped");
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: openingExisting.id } })).projectName, "opening-before");
+
+  const importFileId = (await prisma.receivableImportBatch.findUniqueOrThrow({ where: { id: valid.body.data.batchId } })).originalFileId;
+  await prisma.privateFile.update({ where: { id: importFileId }, data: { createdAt: new Date("2000-01-01T00:00:00.000Z") } });
+  assert.equal((await orphanPrivateFiles(prisma, new Date("2001-01-01T00:00:00.000Z"))).some(({ id }) => id === importFileId), false, "linked import file was classified as orphan");
+  const download = (tokenValue: string) => fetch(`${baseUrl}/api/files/${importFileId}`, { headers: { authorization: `Bearer ${tokenValue}` } });
+  assert.equal((await download(bearer)).status, 200); assert.equal((await download(adminBearer)).status, 200);
+  const readAudits = () => prisma.auditLog.count({ where: { action: "file.read", objectId: importFileId, result: "success" } });
+  assert.equal(await readAudits(), 2);
+  for (const denied of [reporterBearer, readonlyBearer, viewAllBearer, recoveryBearer]) assert.equal((await download(denied)).status, 403);
+  assert.equal(await readAudits(), 2, "denied import-file read wrote success audit");
+
+  const adminOwnedPreview = await preview(adminBearer, await workbook([[department.name, `${marker}-revoked-uploader`, "revoked uploader", "合同金额", "1", "", "", "", "", ""]]));
+  const adminOwnedFileId = (await prisma.receivableImportBatch.findUniqueOrThrow({ where: { id: adminOwnedPreview.body.data.batchId } })).originalFileId;
+  assert.equal((await fetch(`${baseUrl}/api/files/${adminOwnedFileId}`, { headers: { authorization: `Bearer ${adminBearer}` } })).status, 200);
+  await prisma.receivableAccessGrant.update({ where: { id: adminGrant.id }, data: { active: false, revokedAt: new Date(), revokedBy: owner.id, revokeReason: "smoke revoke" } });
+  assert.equal((await fetch(`${baseUrl}/api/files/${adminOwnedFileId}`, { headers: { authorization: `Bearer ${adminBearer}` } })).status, 403, "revoked uploader retained generic uploader access");
+  assert.equal(await readAudits(), 2);
+
   const tampered = await preview(bearer, await workbook([[department.name, `${marker}-tamper`, "tamper", "合同金额", "1", "", "", "", "", ""]]));
   const tamperBatch = await prisma.receivableImportBatch.findUniqueOrThrow({ where: { id: tampered.body.data.batchId }, include: { originalFile: true } });
   await writeFile(resolve(uploadRoot, tamperBatch.originalFile.storageKey), Buffer.alloc(tamperBatch.originalFile.size, 1));
   const tamperApply = await post(`/api/receivables/imports/${tampered.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [] });
   assert.equal(tamperApply.response.status, 409); assert.equal(tamperApply.body.error?.code, "IMPORT_FILE_CHANGED");
+
+  const missing = await preview(bearer, await workbook([[department.name, `${marker}-missing-file`, "missing", "合同金额", "1", "", "", "", "", ""]]));
+  const missingBatch = await prisma.receivableImportBatch.findUniqueOrThrow({ where: { id: missing.body.data.batchId }, include: { originalFile: true } });
+  await rm(resolve(uploadRoot, missingBatch.originalFile.storageKey));
+  const missingApply = await post(`/api/receivables/imports/${missing.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [] });
+  assert.equal(missingApply.response.status, 409); assert.equal(missingApply.body.error?.code, "IMPORT_FILE_CHANGED");
+  assert.equal(await prisma.receivableLedger.count({ where: { contractNoNormalized: `${marker}-missing-file` } }), 0);
 
   const conflictPreview = await preview(bearer, await workbook([[department.name, `${marker}-rollback-conflict`, "conflict", "合同金额", "1", "", "", "", "", ""]]));
   const conflictApply = await post(`/api/receivables/imports/${conflictPreview.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [] }); assert.equal(conflictApply.response.status, 200);
@@ -178,12 +246,11 @@ try {
   assert.equal((await prisma.receivableImportBatch.findUniqueOrThrow({ where: { id: conflictPreview.body.data.batchId } })).status, "applied");
   assert.equal(await prisma.receivableLedgerRevision.count({ where: { ledgerId: conflictLedger.id } }), beforeConflictRevisions, "rollback conflict wrote correction facts");
 
-  const listed = await fetch(`${baseUrl}/api/receivables/imports`, { headers: { authorization: `Bearer ${adminBearer}` } }); assert.equal(listed.status, 200);
+  const listed = await fetch(`${baseUrl}/api/receivables/imports`, { headers: { authorization: `Bearer ${bearer}` } }); assert.equal(listed.status, 200);
   completed = true;
 } finally {
-  await stop();
-  await cleanup();
-  await assertClean();
-  await prisma.$disconnect();
+  const cleanupErrors: unknown[] = [];
+  for (const action of [stop, cleanup, assertClean, () => prisma.$disconnect()]) { try { await action(); } catch (error) { cleanupErrors.push(error); } }
+  if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "receivables import smoke cleanup failed");
 }
 if (completed) console.log("RECEIVABLES_IMPORT_SMOKE=PASS");

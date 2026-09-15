@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { canReadPrivateFile, type PrivateFileFacts } from "../src/private-file-policy.js";
 
 const principal = (personId: string | null, roles: Array<{ role: string; scopeType: string; scopeId: string | null }> = []) => ({ accountId: "account-reader", personId, roles });
-const base: PrivateFileFacts = { uploadedBy: "account-uploader", linked: true, photos: [], signatures: [], personCertificates: [], organizationQualifications: [], monthlyReports: [], coursewares: [], trainingAttachments: [], requestAttachments: [], receivableAttachments: [] };
+const base: PrivateFileFacts = { uploadedBy: "account-uploader", linked: true, photos: [], signatures: [], personCertificates: [], organizationQualifications: [], monthlyReports: [], coursewares: [], trainingAttachments: [], requestAttachments: [], receivableAttachments: [], receivableImportBatches: [] };
 
 assert.equal(canReadPrivateFile(principal("person-a"), { ...base, photos: [{ personId: "person-a", organizationIds: [], projectIds: [] }] }), true);
 assert.equal(canReadPrivateFile(principal(null, [{ role: "project_admin", scopeType: "project", scopeId: "project-a" }]), { ...base, signatures: [{ personId: "person-a", organizationIds: ["org-a"], projectId: "project-a" }] }), true);
@@ -25,5 +25,12 @@ assert.equal(canReadPrivateFile(receivablesReader({ role: null, canReadLedger: f
 assert.equal(canReadPrivateFile(receivablesReader({ role: "readonly", canReadLedger: true, canViewAll: true, readDepartmentIds: [] }), { ...base, receivableAttachments: [activeReceivable] }), true);
 assert.equal(canReadPrivateFile(receivablesReader({ role: "reporter", canReadLedger: true, canViewAll: true, readDepartmentIds: [] }), { ...base, receivableAttachments: [{ ...activeReceivable, status: "voided" }] }), false);
 assert.equal(canReadPrivateFile(receivablesReader({ role: "owner", canReadLedger: true, canViewAll: true, readDepartmentIds: [] }), { ...base, receivableAttachments: [{ ...activeReceivable, status: "voided" }] }), true);
+
+const importOriginal = { ...base, uploadedBy: "account-reader", receivableImportBatches: [{}] };
+assert.equal(canReadPrivateFile(receivablesReader({ role: "owner", canReadLedger: true, canViewAll: true, readDepartmentIds: [] }), importOriginal), true);
+assert.equal(canReadPrivateFile(receivablesReader({ role: "admin", canReadLedger: true, canViewAll: true, readDepartmentIds: [] }), importOriginal), true);
+assert.equal(canReadPrivateFile(receivablesReader({ role: "reporter", canReadLedger: true, canViewAll: true, readDepartmentIds: [] }), importOriginal), false);
+assert.equal(canReadPrivateFile(receivablesReader({ role: "readonly", canReadLedger: true, canViewAll: true, readDepartmentIds: [] }), importOriginal), false);
+assert.equal(canReadPrivateFile(receivablesReader({ role: null, canReadLedger: false, canViewAll: false, readDepartmentIds: [] }), importOriginal), false);
 
 console.log("PRIVATE_FILE_POLICY_OK");

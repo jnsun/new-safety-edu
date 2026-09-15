@@ -26,6 +26,7 @@ export async function readablePrivateFile(principal: Principal, id: string) {
     requestAttachments: { select: { changeRequest: { select: { accountId: true, personId: true, projectId: true, payload: true } } } },
     versions: { select: { courseware: { select: { scopeType: true, scopeId: true } }, progress: { select: { assignment: { select: { personId: true } } } } } },
     receivableAttachments: { select: { status: true, ledger: { select: { financeDepartmentId: true } } } },
+    receivableImportBatches: { select: { id: true } },
   } });
   if (!file) throw Object.assign(new Error("文件不存在"), { statusCode: 404, code: "NOT_FOUND" });
 
@@ -42,7 +43,7 @@ export async function readablePrivateFile(principal: Principal, id: string) {
   const attachedCertificates = file.certificateAttachments.flatMap((row) => row.personCertificate ? [{ personId: row.personCertificate.personId, organizationIds: organizationIds(row.personCertificate.person), projectIds: projectIds(row.personCertificate.person) }] : []);
   const facts: PrivateFileFacts = {
     uploadedBy: file.uploadedBy,
-    linked: !!(file.personPhotos.length || file.signatures.length || directCertificates.length || attachedCertificates.length || file.organizationQualifications.length || file.certificateAttachments.length || file.monthlyReportAttachments.length || file.versions.length || trainingAttachments.length || requestAttachments.length),
+    linked: !!(file.personPhotos.length || file.signatures.length || directCertificates.length || attachedCertificates.length || file.organizationQualifications.length || file.certificateAttachments.length || file.monthlyReportAttachments.length || file.versions.length || trainingAttachments.length || requestAttachments.length || file.receivableAttachments.length || file.receivableImportBatches.length),
     photos: file.personPhotos.map((row) => ({ personId: row.id, organizationIds: organizationIds(row), projectIds: projectIds(row) })),
     signatures: file.signatures.map((row) => ({ personId: row.personId, organizationIds: organizationIds(row.person), projectId: row.assignment.batch.projectId })),
     personCertificates: [...directCertificates, ...attachedCertificates],
@@ -52,8 +53,9 @@ export async function readablePrivateFile(principal: Principal, id: string) {
     trainingAttachments,
     requestAttachments,
     receivableAttachments: file.receivableAttachments.map(({ status, ledger }) => ({ financeDepartmentId: ledger.financeDepartmentId, status })),
+    receivableImportBatches: file.receivableImportBatches.map(() => ({})),
   };
-  const receivablesAccess = facts.receivableAttachments.length ? await resolveReceivablesAccess(principal) : undefined;
+  const receivablesAccess = facts.receivableAttachments.length || facts.receivableImportBatches.length ? await resolveReceivablesAccess(principal) : undefined;
   if (!canReadPrivateFile({ ...principal, ...(receivablesAccess ? { receivablesAccess } : {}) }, facts)) throw Object.assign(new Error("无权读取该私有文件"), { statusCode: 403, code: "SCOPE_FORBIDDEN" });
   return { storageKey: file.storageKey, originalName: file.originalName, mimeType: file.mimeType, size: file.size, sha256: file.sha256 };
 }

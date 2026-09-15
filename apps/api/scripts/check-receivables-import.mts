@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { parseReceivablesImportWorkbook } from "../src/receivables-import.js";
+import { classifyReceivablesImportDatabaseError, parseReceivablesImportWorkbook } from "../src/receivables-import.js";
 
 const references = {
   departments: [
@@ -40,7 +40,7 @@ const valid = parseReceivablesImportWorkbook(workbook([
   "完工", "合同金额", "100.1234", "", "2026-09-01", "10.0000", "2026-09-01", "3.2000", "2026-09-02", "正常", "ignored",
 ]]), references);
 assert.deepEqual(codes(valid), []);
-assert.deepEqual(valid.warnings.map(({ code }) => code), ["UNKNOWN_COLUMN"]);
+assert.deepEqual(valid.warnings.map(({ code }) => code), ["UNKNOWN_COLUMN", "EXISTING_OPENING_TOTALS_SKIP_ONLY"]);
 assert.equal(valid.rows[0]?.rowNumber, 2);
 assert.equal(valid.rows[0]?.normalizedData.contractNo, "HT-EXISTING");
 assert.equal(valid.rows[0]?.normalizedData.financeDepartmentId, "department-active");
@@ -50,6 +50,9 @@ assert.equal(valid.rows[0]?.normalizedData.openingInvoiceAmount, "10.0000");
 assert.equal(valid.rows[0]?.normalizedData.openingReceiptAmount, "3.2000");
 assert.equal(valid.rows[0]?.ledgerId, "existing-ledger");
 assert.equal(valid.rows[0]?.targetRevision, 7);
+assert.deepEqual(valid.rows[0]?.normalizedData.presentFields, ["financeDepartmentId", "contractNo", "projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "contractAmount", "finalAmount", "openingChargeDate", "openingInvoiceAmount", "openingInvoiceDate", "openingReceiptAmount", "openingReceiptDate", "debtStatus"]);
+assert.deepEqual(valid.rows[0]?.allowedDecisions, ["skip"], "existing opening totals must be skip-only");
+assert.ok(valid.rows[0]?.warnings.some(({ code }) => code === "EXISTING_OPENING_TOTALS_SKIP_ONLY"));
 
 const workload = parseReceivablesImportWorkbook(workbook(
   ["财务归属部门", "合同编号", "决算方式", "合同金额", "决算金额"],
@@ -79,6 +82,18 @@ const duplicate = parseReceivablesImportWorkbook(workbook(
 ), references);
 assert.equal(duplicate.rows.length, 2, "empty rows must be ignored");
 assert.equal(codes(duplicate).filter((code) => code === "DUPLICATE_CONTRACT_IN_FILE").length, 2);
+
+const ambiguousDepartment = parseReceivablesImportWorkbook(workbook(["合同编号", "归属部门"], [["HT-AMBIGUOUS", "D001"]]), {
+  ...references,
+  departments: [{ id: "by-name", name: "D001", code: null, active: true }, { id: "by-code", name: "二所", code: "D001", active: true }],
+});
+assert.ok(codes(ambiguousDepartment).includes("DEPARTMENT_AMBIGUOUS"));
+
+assert.equal(classifyReceivablesImportDatabaseError({ code: "P2002", meta: { target: ["contract_no_normalized"] } }), "contract_conflict");
+assert.equal(classifyReceivablesImportDatabaseError({ code: "P2002", meta: { target: ["ledger_id", "revision"] } }), "revision_conflict");
+assert.equal(classifyReceivablesImportDatabaseError({ code: "P2002", meta: { target: ["other"] } }), "internal");
+assert.equal(classifyReceivablesImportDatabaseError({ code: "P2025" }), "internal");
+assert.equal(classifyReceivablesImportDatabaseError({ code: "P2024" }), null);
 
 const bounded = new ExcelJS.Workbook();
 bounded.addWorksheet("too-many-rows").getCell("A200001").value = "x";
