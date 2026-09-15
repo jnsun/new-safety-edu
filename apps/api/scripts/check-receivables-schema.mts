@@ -29,6 +29,7 @@ type IndexFact = {
   tableName: string;
   unique: boolean;
   columns: string[];
+  includedColumns: string[];
   predicate: string | null;
 };
 
@@ -53,6 +54,7 @@ function assertExactIndex(indexes: IndexFact[], expected: IndexFact): void {
   assert.equal(actual.unique, expected.unique, `Wrong uniqueness: ${expected.indexName}`);
   assert.equal(actual.tableName, expected.tableName, `Wrong index table or columns: ${expected.indexName}`);
   assert.deepEqual(actual.columns, expected.columns, `Wrong index table or columns: ${expected.indexName}`);
+  assert.deepEqual(actual.includedColumns, expected.includedColumns, `Wrong included columns: ${expected.indexName}`);
   assert.equal(normalizeSql(actual.predicate), normalizeSql(expected.predicate), `Wrong index predicate: ${expected.indexName}`);
 }
 
@@ -83,12 +85,14 @@ assert.throws(
     tableName: "wrong_table",
     unique: true,
     columns: ["wrong_column"],
+    includedColumns: [],
     predicate: null,
   }], {
     indexName: "receivable_ledgers_contract_no_normalized_key",
     tableName: "receivable_ledgers",
     unique: true,
     columns: ["contract_no_normalized"],
+    includedColumns: [],
     predicate: null,
   }),
   /Wrong index table or columns/,
@@ -100,15 +104,36 @@ assert.throws(
     tableName: "receivable_access_grants",
     unique: true,
     columns: ["account_id"],
+    includedColumns: [],
     predicate: "active = false",
   }], {
     indexName: "receivable_access_grants_one_active_account",
     tableName: "receivable_access_grants",
     unique: true,
     columns: ["account_id"],
+    includedColumns: [],
     predicate: "active = true",
   }),
   /Wrong index predicate/,
+);
+
+assert.throws(
+  () => assertExactIndex([{
+    indexName: "receivable_invoices_ledger_id_status_invoice_date_idx",
+    tableName: "receivable_invoices",
+    unique: false,
+    columns: ["ledger_id", "status", "invoice_date"],
+    includedColumns: ["amount"],
+    predicate: null,
+  }], {
+    indexName: "receivable_invoices_ledger_id_status_invoice_date_idx",
+    tableName: "receivable_invoices",
+    unique: false,
+    columns: ["ledger_id", "status", "invoice_date"],
+    includedColumns: [],
+    predicate: null,
+  }),
+  /Wrong included columns/,
 );
 
 assert.throws(
@@ -144,10 +169,10 @@ assert.throws(
 );
 
 const expectedIndexes: IndexFact[] = [
-  { indexName: "receivable_ledgers_contract_no_normalized_key", tableName: "receivable_ledgers", unique: true, columns: ["contract_no_normalized"], predicate: null },
-  { indexName: "receivable_access_grants_one_active_account", tableName: "receivable_access_grants", unique: true, columns: ["account_id"], predicate: "(active = true)" },
-  { indexName: "receivable_invoices_ledger_id_status_invoice_date_idx", tableName: "receivable_invoices", unique: false, columns: ["ledger_id", "status", "invoice_date"], predicate: null },
-  { indexName: "receivable_receipts_ledger_id_status_receipt_date_idx", tableName: "receivable_receipts", unique: false, columns: ["ledger_id", "status", "receipt_date"], predicate: null },
+  { indexName: "receivable_ledgers_contract_no_normalized_key", tableName: "receivable_ledgers", unique: true, columns: ["contract_no_normalized"], includedColumns: [], predicate: null },
+  { indexName: "receivable_access_grants_one_active_account", tableName: "receivable_access_grants", unique: true, columns: ["account_id"], includedColumns: [], predicate: "(active = true)" },
+  { indexName: "receivable_invoices_ledger_id_status_invoice_date_idx", tableName: "receivable_invoices", unique: false, columns: ["ledger_id", "status", "invoice_date"], includedColumns: [], predicate: null },
+  { indexName: "receivable_receipts_ledger_id_status_receipt_date_idx", tableName: "receivable_receipts", unique: false, columns: ["ledger_id", "status", "receipt_date"], includedColumns: [], predicate: null },
 ];
 
 const expectedChecks: CheckFact[] = [
@@ -224,6 +249,15 @@ try {
              WHERE index_key.ordinal_position <= index_catalog.indnkeyatts
              ORDER BY index_key.ordinal_position
            ) AS columns,
+           ARRAY(
+             SELECT attribute.attname
+             FROM unnest(index_catalog.indkey) WITH ORDINALITY AS index_key(attribute_number, ordinal_position)
+             JOIN pg_attribute attribute
+               ON attribute.attrelid = index_catalog.indrelid
+              AND attribute.attnum = index_key.attribute_number
+             WHERE index_key.ordinal_position > index_catalog.indnkeyatts
+             ORDER BY index_key.ordinal_position
+           ) AS "includedColumns",
            pg_get_expr(index_catalog.indpred, index_catalog.indrelid) AS predicate
     FROM pg_index index_catalog
     JOIN pg_class index_relation ON index_relation.oid = index_catalog.indexrelid
