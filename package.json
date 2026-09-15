@@ -58,6 +58,7 @@
     "smoke:receivables-admin": "pnpm --filter @safety/api smoke:receivables-admin",
     "smoke:receivables-query": "pnpm --filter @safety/api smoke:receivables-query",
     "smoke:receivables-ledger": "pnpm --filter @safety/api smoke:receivables-ledger",
+    "smoke:receivables-money": "pnpm --filter @safety/api smoke:receivables-money",
     "smoke:phase1-identity": "tsx scripts/phase1-identity-smoke.ts",
     "smoke:phase1-api": "tsx scripts/phase1-api-smoke.mts",
     "smoke:account-lifecycle": "pnpm --filter @safety/api smoke:account-lifecycle",
