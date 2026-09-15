@@ -128,11 +128,21 @@ function maliciousEndOfCentralDirectory(overrides: Partial<{ diskNumber: number;
   const content = Buffer.alloc(22 + values.commentLength); content.writeUInt32LE(0x06054b50, 0); content.writeUInt16LE(values.diskNumber, 4); content.writeUInt16LE(values.diskStart, 6); content.writeUInt16LE(values.entriesOnDisk, 8); content.writeUInt16LE(values.entries, 10); content.writeUInt32LE(values.centralSize, 12); content.writeUInt32LE(values.centralOffset, 16); content.writeUInt16LE(values.commentLength, 20); return content;
 }
 
+function downstreamDivergentEndOfCentralDirectory() {
+  const content = Buffer.alloc(200);
+  maliciousEndOfCentralDirectory({ commentLength: 78 }).copy(content, 100);
+  maliciousEndOfCentralDirectory({ entriesOnDisk: 0xffff, entries: 0xffff }).copy(content, 150, 0, 22);
+  return content;
+}
+
 async function checkBoundedEndOfCentralDirectory() {
   const workbook = await validXlsx();
   const parsed = parseReceivableWorkbookEndOfCentralDirectory(workbook);
   assert.ok(parsed.entries > 0 && parsed.entries <= 256); assert.ok(parsed.centralOffset + parsed.centralSize <= parsed.endOffset);
   for (const content of [
+    Buffer.alloc(200),
+    downstreamDivergentEndOfCentralDirectory(),
+    (() => { const content = maliciousEndOfCentralDirectory({ commentLength: 58 }); maliciousEndOfCentralDirectory().copy(content, 40, 0, 22); return content; })(),
     maliciousEndOfCentralDirectory({ entriesOnDisk: 0xffff, entries: 0xffff, centralSize: 0xffffffff, centralOffset: 0xffffffff }),
     maliciousEndOfCentralDirectory({ entriesOnDisk: 257, entries: 257 }),
     maliciousEndOfCentralDirectory({ diskNumber: 1 }),
@@ -146,7 +156,7 @@ async function checkBoundedEndOfCentralDirectory() {
   for (const content of [Buffer.concat([zip64Locator, maliciousEndOfCentralDirectory()]), Buffer.concat([zip64Record, maliciousEndOfCentralDirectory()])]) assert.throws(() => parseReceivableWorkbookEndOfCentralDirectory(content), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
   const open = unzipper.Open as typeof unzipper.Open & { buffer: typeof unzipper.Open.buffer }; const original = open.buffer; let thirdPartyCalled = false;
   open.buffer = (() => { thirdPartyCalled = true; throw new Error("unzipper must not receive rejected metadata"); }) as typeof open.buffer;
-  try { await assert.rejects(() => preflightReceivableWorkbookArchive(maliciousEndOfCentralDirectory({ entriesOnDisk: 0xffff, entries: 0xffff })), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT"); }
+  try { for (const content of [maliciousEndOfCentralDirectory({ entriesOnDisk: 0xffff, entries: 0xffff }), downstreamDivergentEndOfCentralDirectory()]) await assert.rejects(() => preflightReceivableWorkbookArchive(content), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT"); }
   finally { open.buffer = original; }
   assert.equal(thirdPartyCalled, false, "malicious EOCD reached unzipper");
 }
