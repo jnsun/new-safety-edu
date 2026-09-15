@@ -294,6 +294,7 @@ function AccountsPanel({
   const [accountOrgId, setAccountOrgId] = useState<string>();
   const [roleOpen, setRoleOpen] = useState(false);
   const [roleName, setRoleName] = useState("learner");
+  const [resetAccount, setResetAccount] = useState<Account>();
   const accountCreate = useMutation({
     mutationFn: (v: Record<string, unknown>) => {
       const { organizationId: _, ...input } = v;
@@ -324,6 +325,15 @@ function AccountsPanel({
     onSuccess: () => {
       setRoleOpen(false);
       void qc.invalidateQueries({ queryKey: ["accounts"] });
+    },
+    onError: (e) => message.error(e.message),
+  });
+  const passwordReset = useMutation({
+    mutationFn: ({ accountId, newPassword }: { accountId: string; newPassword: string }) =>
+      api(`/api/accounts/${accountId}/reset-password`, json("POST", { newPassword })),
+    onSuccess: () => {
+      message.success("密码已重置，该账号现有会话已失效");
+      setResetAccount(undefined);
     },
     onError: (e) => message.error(e.message),
   });
@@ -397,8 +407,67 @@ function AccountsPanel({
                   </Tag>
                 )),
           },
+          ...(companyAdmin
+            ? [{
+                title: "操作",
+                render: (_: unknown, row: Account) =>
+                  row.id !== principal.accountId && row.username ? (
+                    <Button type="link" onClick={() => setResetAccount(row)}>
+                      重置密码
+                    </Button>
+                  ) : "—",
+              }]
+            : []),
         ]}
       />
+      <Modal
+        title={`重置密码${resetAccount?.username ? `：${resetAccount.username}` : ""}`}
+        open={Boolean(resetAccount)}
+        footer={null}
+        destroyOnHidden
+        onCancel={() => setResetAccount(undefined)}
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="重置后，该账号所有已登录会话将立即失效。"
+          style={{ marginBottom: 16 }}
+        />
+        <Form
+          layout="vertical"
+          onFinish={(values: { newPassword: string }) => {
+            if (resetAccount) passwordReset.mutate({ accountId: resetAccount.id, newPassword: values.newPassword });
+          }}
+        >
+          <Form.Item
+            name="newPassword"
+            label="新的临时密码"
+            rules={[{ required: true, min: 12, message: "临时密码至少 12 位" }]}
+          >
+            <Input.Password autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item
+            name="confirmPassword"
+            label="再次输入临时密码"
+            dependencies={["newPassword"]}
+            rules={[
+              { required: true, message: "请再次输入临时密码" },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  return !value || getFieldValue("newPassword") === value
+                    ? Promise.resolve()
+                    : Promise.reject(new Error("两次输入的密码不一致"));
+                },
+              }),
+            ]}
+          >
+            <Input.Password autoComplete="new-password" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={passwordReset.isPending}>
+            确认重置
+          </Button>
+        </Form>
+      </Modal>
       <Modal
         title="创建管理员/人员账号"
         open={accountOpen}

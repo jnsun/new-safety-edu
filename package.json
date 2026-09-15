@@ -15,6 +15,7 @@
     "check:phase1-invariants": "pnpm --filter @safety/api check:phase1-invariants",
     "check:phase1-policy": "pnpm --filter @safety/api check:phase1-policy",
     "check:phases2-7": "pnpm --filter @safety/api check:phases2-7",
+    "check:account-password-reset": "pnpm --filter @safety/api check:account-password-reset",
     "smoke:phase1-identity": "tsx scripts/phase1-identity-smoke.ts",
     "smoke:phase1-api": "tsx scripts/phase1-api-smoke.mts",
     "smoke:phases2-4-api": "tsx scripts/phases2-4-api-smoke.mts",

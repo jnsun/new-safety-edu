@@ -24,7 +24,7 @@ import { registerQualificationRoutes } from "./routes/qualifications.js";
 import { registerProjectReportingRoutes } from "./routes/project-reporting.js";
 
 const env = loadEnv();
-const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.code", "body.refreshToken", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
+const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.newPassword", "body.code", "body.refreshToken", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
 
 app.decorateRequest("principal", null);
 await app.register(cookie, { secret: env.COOKIE_SECRET });

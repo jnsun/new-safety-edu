@@ -346,6 +346,21 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     return reply.code(201).send({ data: account });
   });
 
+  app.post("/api/accounts/:id/reset-password", manager, async (request, reply) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以重置其他账号密码");
+    const { id } = idParam.parse(request.params);
+    if (id === principal.accountId) throw Object.assign(new Error("请使用修改密码功能变更本人密码"), { statusCode: 409, code: "USE_CHANGE_PASSWORD" });
+    const input = z.object({ newPassword: z.string().min(12).max(200) }).parse(request.body);
+    const passwordHash = await argon2.hash(input.newPassword);
+    await prisma.$transaction([
+      prisma.account.update({ where: { id }, data: { passwordHash, sessionVersion: { increment: 1 } } }),
+      prisma.refreshSession.updateMany({ where: { accountId: id, revokedAt: null }, data: { revokedAt: new Date() } })
+    ]);
+    await auditCritical(principal.accountId, "account.password_reset", "account", id, undefined, "var/audit-fallback.ndjson");
+    return reply.code(204).send();
+  });
+
   app.post("/api/roles", manager, async (request, reply) => {
     const principal = principalOf(request);
     const input = roleAssignmentCreateSchema.parse(request.body);

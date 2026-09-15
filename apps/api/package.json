@@ -12,6 +12,7 @@
     "check:phase1-invariants": "tsx scripts/check-phase1-invariants.mts",
     "check:phase1-policy": "tsx scripts/check-phase1-policy.mts",
     "check:phases2-7": "tsx scripts/check-phases2-7.mts",
+    "check:account-password-reset": "tsx scripts/check-account-password-reset.mts",
     "smoke:person-import": "tsx scripts/smoke-person-import.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
