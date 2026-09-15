@@ -36,7 +36,11 @@ type NormalizedFilters = {
   search: string | null;
 };
 
-type QueryScope = NormalizedFilters & { readDepartmentIds: string[] | null };
+type QueryScope = NormalizedFilters & {
+  readDepartmentIds: string[] | null;
+  capabilityReadDepartmentIds: string[];
+  capabilityWriteDepartmentIds: string[];
+};
 type QueryTx = Prisma.TransactionClient;
 type Facet = { value: string | null; count: number };
 type RawFacet = { value: string | null; count: number };
@@ -123,13 +127,16 @@ function normalizeFilters(input: ReceivablesFiltersInput): NormalizedFilters {
 
 async function resolveQueryScope(tx: QueryTx, access: ReceivablesAccess, input: ReceivablesFiltersInput): Promise<QueryScope> {
   const filters = normalizeFilters(input);
-  if (access.canManageAll || access.canViewAll) return { ...filters, readDepartmentIds: null };
-  const activeDepartments = access.readDepartmentIds.length
-    ? await tx.receivableDepartment.findMany({ where: { id: { in: access.readDepartmentIds }, active: true }, select: { id: true } })
+  const grantedDepartmentIds = [...new Set([...access.readDepartmentIds, ...access.writeDepartmentIds])];
+  const activeDepartments = grantedDepartmentIds.length
+    ? await tx.receivableDepartment.findMany({ where: { id: { in: grantedDepartmentIds }, active: true }, select: { id: true } })
     : [];
-  const readDepartmentIds = activeDepartments.map(({ id }) => id).sort();
-  if (filters.financeDepartmentId && !readDepartmentIds.includes(filters.financeDepartmentId)) throw forbiddenDepartment();
-  return { ...filters, readDepartmentIds };
+  const activeDepartmentIds = new Set(activeDepartments.map(({ id }) => id));
+  const capabilityReadDepartmentIds = access.readDepartmentIds.filter((id) => activeDepartmentIds.has(id)).sort();
+  const capabilityWriteDepartmentIds = access.writeDepartmentIds.filter((id) => activeDepartmentIds.has(id)).sort();
+  const readDepartmentIds = access.canManageAll || access.canViewAll ? null : capabilityReadDepartmentIds;
+  if (filters.financeDepartmentId && readDepartmentIds !== null && !readDepartmentIds.includes(filters.financeDepartmentId)) throw forbiddenDepartment();
+  return { ...filters, readDepartmentIds, capabilityReadDepartmentIds, capabilityWriteDepartmentIds };
 }
 
 function queryWhere(scope: QueryScope): Prisma.Sql {
@@ -267,8 +274,11 @@ async function statusFacets(tx: QueryTx, cte: Prisma.Sql) {
   return facet(tx, cte, Prisma.sql`f.status::text`);
 }
 
-async function anomalyFacets(tx: QueryTx, cte: Prisma.Sql) {
-  return facet(tx, cte, Prisma.sql`f.anomaly`);
+async function anomalyFacets(tx: QueryTx, cte: Prisma.Sql, activeOnly = false) {
+  if (!activeOnly) return facet(tx, cte, Prisma.sql`f.anomaly`);
+  return tx.$queryRaw<RawFacet[]>(Prisma.sql`${cte}
+    SELECT f.anomaly AS value, COUNT(*)::int AS count FROM filtered f WHERE f.status = 'active'
+    GROUP BY f.anomaly ORDER BY f.anomaly ASC NULLS FIRST`);
 }
 
 async function listLedgers(tx: QueryTx, scope: QueryScope, input: ReceivablesListInput) {
@@ -297,7 +307,7 @@ async function listLedgers(tx: QueryTx, scope: QueryScope, input: ReceivablesLis
 
 async function dashboard(tx: QueryTx, scope: QueryScope) {
   const cte = filteredCte(scope);
-  const [dashboardAmounts, statuses, anomalies] = await Promise.all([amounts(tx, cte), statusFacets(tx, cte), anomalyFacets(tx, cte)]);
+  const [dashboardAmounts, statuses, anomalies] = await Promise.all([amounts(tx, cte), statusFacets(tx, cte), anomalyFacets(tx, cte, true)]);
   return { amounts: dashboardAmounts, statuses, anomalies };
 }
 
@@ -329,7 +339,11 @@ async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: Query
     receipts: receipts.map((receipt) => ({ ...receipt, amount: money(receipt.amount)! })),
     attachments,
     revisions,
-    capabilities: access,
+    capabilities: {
+      ...access,
+      readDepartmentIds: scope.capabilityReadDepartmentIds,
+      writeDepartmentIds: scope.capabilityWriteDepartmentIds,
+    },
   };
 }
 

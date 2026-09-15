@@ -42,7 +42,7 @@ type DetailResponse = {
   receipts: Array<{ id: string; status: "active" | "voided"; amount: string }>;
   attachments: Array<{ id: string; status: "active" | "voided"; file: { id: string; originalName: string } }>;
   revisions: Array<{ id: string; reason: string }>;
-  capabilities: { role: string | null; canViewAll: boolean; canManageMoney: boolean; readDepartmentIds: string[] };
+  capabilities: { role: string | null; canViewAll: boolean; canManageMoney: boolean; readDepartmentIds: string[]; writeDepartmentIds: string[] };
 };
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
@@ -177,6 +177,7 @@ try {
   const admin = await createIdentity("admin");
   const reporterA = await createIdentity("reporter-a");
   const reporterB = await createIdentity("reporter-b");
+  const readonlyScoped = await createIdentity("readonly-scoped");
   const readonlyAll = await createIdentity("readonly-all");
   const companyAdmin = await createIdentity("company-admin", "company_admin");
   await prisma.receivableSetting.create({ data: { id: 1, financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
@@ -187,6 +188,7 @@ try {
   await createGrant({ accountId: admin.id, grantedBy: owner.id, role: "admin" });
   await createGrant({ accountId: reporterA.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentA.id, inactiveDepartment.id] });
   const reporterBGrant = await createGrant({ accountId: reporterB.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentB.id] });
+  await createGrant({ accountId: readonlyScoped.id, grantedBy: owner.id, role: "readonly", departmentIds: [departmentA.id, inactiveDepartment.id] });
   await createGrant({ accountId: readonlyAll.id, grantedBy: owner.id, role: "readonly", canViewAll: true });
 
   const pending = await createLedger({ departmentId: departmentA.id, createdBy: owner.id, label: "pending-final", finalAmount: null, debtStatus: "review" });
@@ -197,17 +199,18 @@ try {
   const stableB = await createLedger({ departmentId: departmentA.id, createdBy: owner.id, label: "stable-b", finalAmount: "50", debtStatus: "stable" });
   const voided = await createLedger({ departmentId: departmentA.id, createdBy: owner.id, label: "voided", finalAmount: "999", debtStatus: "review", status: "voided" });
   const otherDepartment = await createLedger({ departmentId: departmentB.id, createdBy: owner.id, label: "other-department", finalAmount: "200", debtStatus: "other" });
+  const inactiveDepartmentLedger = await createLedger({ departmentId: inactiveDepartment.id, createdBy: owner.id, label: "inactive-department", finalAmount: "300", debtStatus: "inactive" });
 
   await addInvoice(pending.id, "80", owner.id); await addInvoice(pending.id, "999", owner.id, "voided"); await addReceipt(pending.id, "30", owner.id); await addReceipt(pending.id, "777", owner.id, "voided");
   await addReceipt(settled.id, "100", owner.id);
   await addInvoice(over.id, "80", owner.id); await addReceipt(over.id, "120", owner.id); await addReceipt(over.id, "888", owner.id, "voided");
   await addReceipt(writeoff.id, "95", owner.id);
-  await addInvoice(voided.id, "999", owner.id); await addReceipt(voided.id, "999", owner.id);
+  await addInvoice(voided.id, "999", owner.id); await addReceipt(voided.id, "1200", owner.id);
   await addInvoice(otherDepartment.id, "150", owner.id); await addReceipt(otherDepartment.id, "50", owner.id);
   await addAttachment(pending.id, owner.id, "active-attachment", "active"); await addAttachment(pending.id, owner.id, "voided-attachment", "voided");
   const revision = await prisma.receivableLedgerRevision.create({ data: { ledgerId: pending.id, revision: 1, beforeSnapshot: {}, reason: "fixture correction", changedBy: owner.id } }); ids.revisions.push(revision.id);
 
-  const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterB, readonlyAll, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
+  const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterB, readonlyScoped, readonlyAll, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
   await startServer();
 
   const listA = (await expectStatus<ListResponse>("/api/receivables/ledgers?page=1&pageSize=50", tokens.reporterA!, 200)).data!;
@@ -215,9 +218,17 @@ try {
   assert.ok(listA.rows.every((row) => row.financeDepartmentId === departmentA.id));
   assert.ok(!listA.rows.some((row) => row.id === settled.id || row.id === voided.id || row.id === otherDepartment.id));
   assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.reporterB!, 200)).data?.total, 1);
-  assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.readonlyAll!, 200)).data?.total, 6);
-  assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.admin!, 200)).data?.total, 6);
-  assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.owner!, 200)).data?.total, 6);
+  const readonlyScopedList = (await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.readonlyScoped!, 200)).data!;
+  assert.equal(readonlyScopedList.total, 5);
+  assert.ok(readonlyScopedList.rows.every((row) => row.financeDepartmentId === departmentA.id));
+  assert.ok(!readonlyScopedList.rows.some((row) => row.id === inactiveDepartmentLedger.id));
+  const readonlyScopedDetail = (await expectStatus<DetailResponse>(`/api/receivables/ledgers/${pending.id}`, tokens.readonlyScoped!, 200)).data!;
+  assert.deepEqual(readonlyScopedDetail.capabilities.readDepartmentIds, [departmentA.id], "response must not advertise inactive read departments");
+  assert.deepEqual(readonlyScopedDetail.capabilities.writeDepartmentIds, []);
+  await expectStatus(`/api/receivables/ledgers/${inactiveDepartmentLedger.id}`, tokens.readonlyScoped!, 404);
+  assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.readonlyAll!, 200)).data?.total, 7);
+  assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.admin!, 200)).data?.total, 7);
+  assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.owner!, 200)).data?.total, 7);
   await expectStatus("/api/receivables/ledgers", tokens.companyAdmin!, 403);
   await expectStatus(`/api/receivables/ledgers?financeDepartmentId=${inactiveDepartment.id}`, tokens.reporterA!, 403);
   await expectStatus(`/api/receivables/ledgers?financeDepartmentId=${departmentB.id}`, tokens.reporterA!, 403);
@@ -266,6 +277,21 @@ try {
   const onlyVoided = (await expectStatus<ListResponse>(`/api/receivables/ledgers?financeDepartmentId=${departmentA.id}&status=voided&settlement=all`, tokens.owner!, 200)).data!;
   assert.equal(onlyVoided.total, 1);
   assert.deepEqual({ activeLedgerCount: onlyVoided.totals.activeLedgerCount, finalAmount: onlyVoided.totals.finalAmount, invoicedAmount: onlyVoided.totals.invoicedAmount }, { activeLedgerCount: 0, finalAmount: null, invoicedAmount: "0.0000" });
+  const allStatusDashboard = (await expectStatus<DashboardResponse>(`/api/receivables/dashboard?financeDepartmentId=${departmentA.id}&status=all&settlement=all`, tokens.owner!, 200)).data!;
+  assert.deepEqual(allStatusDashboard.anomalies, [
+    { value: null, count: 3 }, { value: "final_amount_missing", count: 1 }, { value: "over_received", count: 1 }, { value: "writeoff_adjustment_required", count: 1 },
+  ], "voided anomalies must not inflate dashboard business facts");
+  const voidedDashboard = (await expectStatus<DashboardResponse>(`/api/receivables/dashboard?financeDepartmentId=${departmentA.id}&status=voided&settlement=all`, tokens.owner!, 200)).data!;
+  assert.deepEqual(voidedDashboard.anomalies, [], "voided-only dashboard has no active anomaly facts");
+  assert.equal(voidedDashboard.amounts.activeLedgerCount, 0);
+
+  const invoiceSorted = (await expectStatus<ListResponse>(`/api/receivables/ledgers?financeDepartmentId=${departmentA.id}&settlement=all&sort=invoicedAmount&order=asc&pageSize=20`, tokens.owner!, 200)).data!.rows;
+  assert.deepEqual(invoiceSorted.slice(0, 4).map(({ id }) => id), [settled.id, writeoff.id, stableA.id, stableB.id].sort(), "zero-invoice ties use ascending id");
+  assert.deepEqual(invoiceSorted.slice(4).map(({ id }) => id), [pending.id, over.id].sort(), "equal invoice totals use ascending id");
+  const receiptSorted = (await expectStatus<ListResponse>(`/api/receivables/ledgers?financeDepartmentId=${departmentA.id}&settlement=all&sort=receivedAmount&order=desc&pageSize=20`, tokens.owner!, 200)).data!.rows;
+  assert.deepEqual(receiptSorted.map(({ id }) => id), [over.id, settled.id, writeoff.id, pending.id, ...[stableA.id, stableB.id].sort().reverse()]);
+  const balanceSorted = (await expectStatus<ListResponse>(`/api/receivables/ledgers?financeDepartmentId=${departmentA.id}&settlement=all&sort=balance&order=asc&pageSize=20`, tokens.owner!, 200)).data!.rows;
+  assert.deepEqual(balanceSorted.map(({ id }) => id), [over.id, writeoff.id, settled.id, ...[stableA.id, stableB.id].sort(), pending.id], "null balance sorts last and equal balances use id");
 
   const firstPage = (await expectStatus<ListResponse>(`/api/receivables/ledgers?financeDepartmentId=${departmentA.id}&settlement=all&sort=debtStatus&order=asc&page=1&pageSize=2`, tokens.owner!, 200)).data!;
   const secondPage = (await expectStatus<ListResponse>(`/api/receivables/ledgers?financeDepartmentId=${departmentA.id}&settlement=all&sort=debtStatus&order=asc&page=2&pageSize=2`, tokens.owner!, 200)).data!;
@@ -283,6 +309,8 @@ try {
   assert.deepEqual(detail.attachments.map(({ status }) => status).sort(), ["active", "voided"]);
   assert.equal(detail.revisions[0]?.reason, "fixture correction");
   assert.deepEqual({ role: detail.capabilities.role, canViewAll: detail.capabilities.canViewAll, canManageMoney: detail.capabilities.canManageMoney }, { role: "reporter", canViewAll: false, canManageMoney: false });
+  assert.deepEqual(detail.capabilities.readDepartmentIds, [departmentA.id]);
+  assert.deepEqual(detail.capabilities.writeDepartmentIds, [departmentA.id]);
   const hidden = await request(`/api/receivables/ledgers/${pending.id}`, tokens.reporterB!);
   const absent = await request(`/api/receivables/ledgers/${randomUUID()}`, tokens.reporterB!);
   assert.equal(hidden.response.status, 404);
