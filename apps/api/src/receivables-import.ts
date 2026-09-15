@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, open } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { lstat, open, type FileHandle } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
 import ExcelJS from "exceljs";
 import type { Principal } from "./auth.js";
@@ -264,6 +265,11 @@ const stableJson = (value: unknown): string => value && typeof value === "object
   : JSON.stringify(value);
 const importStorageKey = () => `receivables/imports/${new Date().getUTCFullYear()}/${randomUUID()}.xlsx`;
 const auditScope = (access: ReceivablesAccess) => ({ actorRole: access.role, actorScopeType: "receivables" });
+export const receivablesImportBatchTransactionOptions = {
+  isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+  maxWait: 10_000,
+  timeout: 120_000,
+} as const;
 
 async function references(db: Tx | typeof prisma): Promise<ReceivablesImportReference> {
   const [departments, dictionaryOptions, ledgers] = await Promise.all([
@@ -308,21 +314,73 @@ export async function previewReceivablesImport(context: ReceivablesImportContext
   }
 }
 
-async function verifiedFile(tx: Tx, batch: { checksum: string; originalFileId: string; originalFile: { storageKey: string; originalName: string; mimeType: string; size: number; sha256: string } }, uploadRoot: string) {
-  await tx.$queryRaw`SELECT id FROM files WHERE id = ${batch.originalFileId}::uuid FOR UPDATE`;
-  const path = receivableAttachmentStoragePath(uploadRoot, batch.originalFile.storageKey);
-  const handle = await open(path, "r").catch(() => { throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换"); });
-  let content: Buffer;
+type ImportFileClassification = "changed" | "io" | null;
+export function classifyReceivablesImportFileError(error: unknown): ImportFileClassification {
+  if (!error || typeof error !== "object" || !("code" in error) || typeof error.code !== "string") return null;
+  return error.code === "ENOENT" ? "changed" : "io";
+}
+
+function throwReceivablesImportFileError(error: unknown): never {
+  const classification = classifyReceivablesImportFileError(error);
+  if (classification === "changed") throw Object.assign(conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换"), { cause: error });
+  if (classification === "io") throw Object.assign(httpError(500, "IMPORT_FILE_IO_ERROR", "读取导入原文件失败"), { cause: error });
+  throw error;
+}
+
+async function fileOperation<T>(operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); }
+  catch (error) { throwReceivablesImportFileError(error); }
+}
+
+function sameFileIdentity(expected: Stats, actual: Stats) {
+  const devIno = expected.dev !== 0 && expected.ino !== 0 && actual.dev !== 0 && actual.ino !== 0;
+  return {
+    mode: devIno ? "dev_ino" : "size_mtime",
+    same: expected.isFile() && actual.isFile() && expected.size === actual.size && expected.mtimeMs === actual.mtimeMs && (!devIno || expected.dev === actual.dev && expected.ino === actual.ino),
+  } as const;
+}
+
+type PreparedImportFile = {
+  handle: FileHandle;
+  path: string;
+  stat: Stats;
+  content: Buffer;
+  checksum: string;
+  reparsed: ReturnType<typeof parseReceivablesImportWorkbook>;
+};
+
+async function prepareReceivablesImportFile(batchId: string, uploadRoot: string): Promise<PreparedImportFile> {
+  const snapshotBatch = await prisma.receivableImportBatch.findUnique({ where: { id: batchId }, include: { originalFile: true } });
+  if (!snapshotBatch) throw batchNotFound();
+  const path = receivableAttachmentStoragePath(uploadRoot, snapshotBatch.originalFile.storageKey);
+  const handle = await fileOperation(() => open(path, "r"));
   try {
-    const before = await handle.stat();
-    content = await handle.readFile();
-    const [after, currentPath] = await Promise.all([handle.stat(), lstat(path)]);
-    if (!before.isFile() || !after.isFile() || !currentPath.isFile() || before.size !== after.size || after.size !== currentPath.size || after.size !== batch.originalFile.size || before.dev !== currentPath.dev || before.ino !== currentPath.ino) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
-  } finally { await handle.close(); }
-  const checksum = createHash("sha256").update(content).digest("hex");
-  if (checksum !== batch.checksum || checksum !== batch.originalFile.sha256) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
-  await validateReceivableAttachment(batch.originalFile.originalName, batch.originalFile.mimeType, content).catch(() => { throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换"); });
-  return { batch, content };
+    const before = await fileOperation(() => handle.stat());
+    const content = await fileOperation(() => handle.readFile());
+    const after = await fileOperation(() => handle.stat());
+    if (!sameFileIdentity(before, after).same) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
+    const checksum = createHash("sha256").update(content).digest("hex");
+    if (after.size !== snapshotBatch.originalFile.size || checksum !== snapshotBatch.checksum || checksum !== snapshotBatch.originalFile.sha256) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
+    await validateReceivableAttachment(snapshotBatch.originalFile.originalName, snapshotBatch.originalFile.mimeType, content).catch(() => { throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换"); });
+    const reparsed = parseReceivablesImportWorkbook(await loadWorkbook(content), await references(prisma));
+    return { handle, path, stat: after, content, checksum, reparsed };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function verifyPreparedImportFile(prepared: PreparedImportFile, batch: { checksum: string }, originalFile: { size: number; sha256: string }) {
+  const [handleStat, pathStat] = await Promise.all([
+    fileOperation(() => prepared.handle.stat()),
+    fileOperation(() => lstat(prepared.path)),
+  ]);
+  const handleIdentity = sameFileIdentity(prepared.stat, handleStat);
+  const pathIdentity = sameFileIdentity(handleStat, pathStat);
+  if (!handleIdentity.same || !pathIdentity.same || handleStat.size !== prepared.content.length || handleStat.size !== originalFile.size || prepared.checksum !== batch.checksum || prepared.checksum !== originalFile.sha256) {
+    throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
+  }
+  return handleIdentity.mode === "size_mtime" || pathIdentity.mode === "size_mtime" ? "size_mtime" : "dev_ino";
 }
 
 async function lockAuthority(tx: Tx, principal: Principal) {
@@ -379,16 +437,25 @@ function throwReceivablesImportDatabaseError(error: unknown): never {
 
 export async function applyReceivablesImport(context: ReceivablesImportContext, batchId: string, decisions: ReceivablesImportDecisions, env: ReceivablesImportEnvironment) {
   await authorizeReceivablesImport(context.principal);
+  const prepared = await prepareReceivablesImportFile(batchId, env.uploadRoot);
+  let primaryError: unknown;
   try {
     return await prisma.$transaction(async (tx) => {
       const access = await lockAuthority(tx, context.principal); requireReceivables(access, "import");
       await tx.$queryRaw`SELECT id FROM receivable_import_batches WHERE id = ${batchId}::uuid FOR UPDATE`;
-      const batch = await tx.receivableImportBatch.findUnique({ where: { id: batchId }, include: { originalFile: true, items: { orderBy: { rowNumber: "asc" } } } });
+      const batch = await tx.receivableImportBatch.findUnique({ where: { id: batchId }, include: { items: { orderBy: { rowNumber: "asc" } } } });
       if (!batch) throw batchNotFound();
       if (batch.status !== "previewed" || batch.revision !== decisions.revision) throw conflict();
       if (batch.errorCount > 0) throw invalid("IMPORT_HAS_BLOCKING_ERRORS", "导入预览存在阻断错误");
-      const verified = await verifiedFile(tx, batch, env.uploadRoot);
-      const reparsed = parseReceivablesImportWorkbook(await loadWorkbook(verified.content), await references(tx));
+      await tx.$queryRaw`SELECT id FROM files WHERE id = ${batch.originalFileId}::uuid FOR UPDATE`;
+      const originalFile = await tx.privateFile.findUnique({ where: { id: batch.originalFileId }, select: { size: true, sha256: true } });
+      if (!originalFile) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
+      const departmentIds = [...new Set(batch.items.map((item) => (item.normalizedData as ReceivablesImportData).financeDepartmentId!))].sort();
+      if (departmentIds.length) await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id IN (${Prisma.join(departmentIds.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
+      const targets = batch.items.filter((item) => item.ledgerId).map((item) => item.ledgerId!).sort();
+      if (targets.length) await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id IN (${Prisma.join(targets.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
+      const fileIdentityMode = await verifyPreparedImportFile(prepared, batch, originalFile);
+      const reparsed = prepared.reparsed;
       if (reparsed.errors.length || reparsed.rows.length !== batch.items.length) throw conflict("IMPORT_PREVIEW_STALE", "导入预览已失效");
       const choice = new Map(decisions.rows.map((row) => [row.rowNumber, row.decision]));
       if (choice.size !== decisions.rows.length || decisions.rows.some((row) => !batch.items.some((item) => item.rowNumber === row.rowNumber && item.ledgerId))) throw invalid("IMPORT_DECISION_INVALID", "重复决策无效");
@@ -402,10 +469,6 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
         const row = reparsed.rows[index]!;
         if (stableJson(item.normalizedData) !== stableJson(row.normalizedData) || item.ledgerId !== row.ledgerId || item.targetRevision !== row.targetRevision) throw conflict("IMPORT_PREVIEW_STALE", "导入预览已失效");
       }
-      const departmentIds = [...new Set(batch.items.map((item) => (item.normalizedData as ReceivablesImportData).financeDepartmentId!))].sort();
-      if (departmentIds.length) await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id IN (${Prisma.join(departmentIds.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
-      const targets = batch.items.filter((item) => item.ledgerId).map((item) => item.ledgerId!).sort();
-      if (targets.length) await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id IN (${Prisma.join(targets.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
       const lockedTargets = new Map((await tx.receivableLedger.findMany({ where: { id: { in: targets } }, select: { id: true, contractNoNormalized: true, revision: true, status: true } })).map((ledger) => [ledger.id, ledger]));
       for (const item of batch.items.filter((candidate) => candidate.ledgerId)) {
         const target = lockedTargets.get(item.ledgerId!);
@@ -437,11 +500,15 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
       const changed = await tx.receivableImportBatch.updateMany({ where: { id: batchId, revision: decisions.revision, status: "previewed" }, data: { status: "applied", revision: { increment: 1 }, appliedAt: new Date(), appliedBy: context.principal.accountId } });
       if (changed.count !== 1) throw conflict();
       const result = await tx.receivableImportBatch.findUniqueOrThrow({ where: { id: batchId }, include: { items: { orderBy: { rowNumber: "asc" } } } });
-      await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.apply", objectType: "receivable_import_batch", objectId: batchId, requestId: context.requestId, ...auditScope(access), metadata: { before: { status: batch.status, revision: batch.revision }, after: { status: result.status, revision: result.revision }, checksum: batch.checksum } });
+      await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.apply", objectType: "receivable_import_batch", objectId: batchId, requestId: context.requestId, ...auditScope(access), metadata: { before: { status: batch.status, revision: batch.revision }, after: { status: result.status, revision: result.revision }, checksum: batch.checksum, fileIdentityMode } });
       return result;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    }, receivablesImportBatchTransactionOptions);
   } catch (error) {
+    primaryError = error;
     throwReceivablesImportDatabaseError(error);
+  } finally {
+    try { await prepared.handle.close(); }
+    catch (error) { if (!primaryError) throwReceivablesImportFileError(error); }
   }
 }
 
@@ -482,7 +549,7 @@ export async function rollbackReceivablesImport(context: ReceivablesImportContex
     const result = await tx.receivableImportBatch.findUniqueOrThrow({ where: { id: batchId }, include: { items: { orderBy: { rowNumber: "asc" } } } });
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.rollback", objectType: "receivable_import_batch", objectId: batchId, requestId: context.requestId, ...auditScope(access), reason: input.reason, metadata: { before: { status: batch.status, revision: batch.revision }, after: { status: result.status, revision: result.revision } } });
     return result;
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted }); }
+  }, receivablesImportBatchTransactionOptions); }
   catch (error) { throwReceivablesImportDatabaseError(error); }
 }
 

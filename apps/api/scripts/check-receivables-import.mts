@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { classifyReceivablesImportDatabaseError, parseReceivablesImportWorkbook } from "../src/receivables-import.js";
+import { classifyReceivablesImportDatabaseError, classifyReceivablesImportFileError, parseReceivablesImportWorkbook, receivablesImportBatchTransactionOptions } from "../src/receivables-import.js";
 
 const references = {
   departments: [
@@ -94,6 +94,13 @@ assert.equal(classifyReceivablesImportDatabaseError({ code: "P2002", meta: { tar
 assert.equal(classifyReceivablesImportDatabaseError({ code: "P2002", meta: { target: ["other"] } }), "internal");
 assert.equal(classifyReceivablesImportDatabaseError({ code: "P2025" }), "internal");
 assert.equal(classifyReceivablesImportDatabaseError({ code: "P2024" }), null);
+
+assert.equal(receivablesImportBatchTransactionOptions.maxWait, 10_000);
+assert.ok(receivablesImportBatchTransactionOptions.timeout >= 120_000);
+assert.equal(receivablesImportBatchTransactionOptions.isolationLevel, "ReadCommitted");
+for (const code of ["ENOENT"] as const) assert.equal(classifyReceivablesImportFileError(Object.assign(new Error(code), { code })), "changed");
+for (const code of ["EACCES", "EPERM", "EMFILE", "ENFILE", "EIO"] as const) assert.equal(classifyReceivablesImportFileError(Object.assign(new Error(code), { code })), "io");
+assert.equal(classifyReceivablesImportFileError(new Error("not a filesystem error")), null);
 
 const bounded = new ExcelJS.Workbook();
 bounded.addWorksheet("too-many-rows").getCell("A200001").value = "x";

@@ -206,6 +206,13 @@ try {
   assert.equal(openingSkip.response.status, 200); assert.equal(openingSkip.body.data.items[0].result, "skipped");
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: openingExisting.id } })).projectName, "opening-before");
 
+  const bulkRows = Array.from({ length: 50 }, (_, index) => [department.name, `${marker}-bulk-${index.toString().padStart(2, "0")}`, `bulk ${index}`, "合同金额", "1.0000", "", "", "", "", ""]);
+  const bulkPreview = await preview(bearer, await workbook(bulkRows));
+  assert.equal(bulkPreview.response.status, 201, JSON.stringify(bulkPreview.body)); assert.equal(bulkPreview.body.data.rows.length, 50);
+  const bulkApply = await post(`/api/receivables/imports/${bulkPreview.body.data.batchId}/apply`, bearer, { revision: bulkPreview.body.data.revision, decisions: [] });
+  assert.equal(bulkApply.response.status, 200, JSON.stringify(bulkApply.body)); assert.equal(bulkApply.body.data.items.filter((item: any) => item.result === "created").length, 50);
+  assert.equal(await prisma.receivableLedger.count({ where: { contractNoNormalized: { startsWith: `${marker}-bulk-` } } }), 50);
+
   const importFileId = (await prisma.receivableImportBatch.findUniqueOrThrow({ where: { id: valid.body.data.batchId } })).originalFileId;
   await prisma.privateFile.update({ where: { id: importFileId }, data: { createdAt: new Date("2000-01-01T00:00:00.000Z") } });
   assert.equal((await orphanPrivateFiles(prisma, new Date("2001-01-01T00:00:00.000Z"))).some(({ id }) => id === importFileId), false, "linked import file was classified as orphan");
