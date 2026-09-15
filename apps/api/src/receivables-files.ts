@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { isAbsolute, relative, resolve } from "node:path";
+import { chmod, lstat, mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { Prisma } from "@prisma/client";
+import ExcelJS from "exceljs";
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
 import { requireReceivables, resolveReceivablesAccess, type ReceivablesAccess } from "./receivables-access.js";
@@ -21,7 +23,7 @@ const conflict = () => httpError(409, "REVISION_CONFLICT", "版本已变化，�
 const ledgerVoided = () => httpError(409, "RECEIVABLES_LEDGER_VOIDED", "已作废台账只读");
 const attachmentVoided = () => httpError(409, "RECEIVABLES_ATTACHMENT_VOIDED", "财务附件已作废");
 
-export function validateReceivableAttachment(filename: string, mimeType: string, content: Buffer) {
+export async function validateReceivableAttachment(filename: string, mimeType: string, content: Buffer) {
   const suffix = filename.slice(filename.lastIndexOf(".")).toLowerCase();
   if (!allowed.get(mimeType)?.includes(suffix)) throw httpError(400, "INVALID_MIME", "附件只支持 PDF/PNG/JPG/WebP/XLSX");
   if (content.length > maxAttachmentSize) throw httpError(413, "FILE_TOO_LARGE", "附件不得超过 10 MiB");
@@ -29,7 +31,7 @@ export function validateReceivableAttachment(filename: string, mimeType: string,
     : mimeType === "image/png" ? content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
       : mimeType === "image/jpeg" ? content[0] === 0xff && content[1] === 0xd8
         : mimeType === "image/webp" ? content.subarray(0, 4).equals(Buffer.from("RIFF")) && content.subarray(8, 12).equals(Buffer.from("WEBP"))
-          : content.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+          : await new ExcelJS.Workbook().xlsx.load(content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer).then((workbook) => workbook.worksheets.length > 0).catch(() => false);
   if (!validContent) throw httpError(400, "INVALID_FILE_CONTENT", "文件内容与声明类型不匹配");
 }
 
@@ -42,6 +44,30 @@ export function receivableAttachmentStoragePath(uploadRoot: string, storageKey: 
 }
 
 export const newReceivableAttachmentStorageKey = () => `receivables/${new Date().getUTCFullYear()}/${randomUUID()}`;
+function containedTemporaryPath(uploadRoot: string, temporaryPath: string) {
+  const root = resolve(uploadRoot); const path = resolve(temporaryPath); const outside = relative(root, path);
+  if (!isAbsolute(temporaryPath) || !outside || outside === ".." || outside.startsWith("../") || outside.startsWith("..\\") || isAbsolute(outside)) throw httpError(500, "FILE_PATH_INVALID", "私有文件路径越界");
+  return path;
+}
+export async function storeReceivableAttachment(uploadRoot: string, storageKey: string, content: Buffer) {
+  const finalPath = receivableAttachmentStoragePath(uploadRoot, storageKey); const temporaryPath = containedTemporaryPath(uploadRoot, `${finalPath}.${randomUUID()}.uploading`);
+  await mkdir(dirname(finalPath), { recursive: true });
+  try { await writeFile(temporaryPath, content, { mode: 0o600 }); await chmod(temporaryPath, 0o600); await rename(temporaryPath, finalPath); }
+  catch (error) {
+    try { await removeReceivableAttachmentFiles(uploadRoot, storageKey, temporaryPath); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], "附件落盘失败且清理失败"); }
+    throw error;
+  }
+}
+export async function removeReceivableAttachmentFiles(uploadRoot: string, storageKey: string, temporaryPath?: string) {
+  const paths = [receivableAttachmentStoragePath(uploadRoot, storageKey), ...(temporaryPath ? [containedTemporaryPath(uploadRoot, temporaryPath)] : [])];
+  const errors: unknown[] = [];
+  for (const path of paths) {
+    try { await unlink(path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(error); }
+    try { await lstat(path); errors.push(new Error(`附件文件清理后仍存在: ${path}`)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(error); }
+  }
+  if (errors.length) throw new AggregateError(errors, "附件文件清理失败");
+}
 
 async function lockAuthority(tx: Tx, principal: Principal) {
   await tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;

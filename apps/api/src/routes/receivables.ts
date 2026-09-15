@@ -1,8 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import { z } from "zod";
 import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
@@ -11,7 +9,7 @@ import { requireReceivables, resolveReceivablesAccess } from "../receivables-acc
 import { queryReceivables } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
-import { createReceivableAttachment, newReceivableAttachmentStorageKey, receivableAttachmentStoragePath, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
+import { createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type RouteDependencies = {
@@ -177,21 +175,19 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     if (!part) throw httpError(400, "FILE_REQUIRED", "请选择文件");
     const buffer = await part.toBuffer();
     if (part.file.truncated) throw httpError(413, "FILE_TOO_LARGE", "附件不得超过 10 MiB");
-    validateReceivableAttachment(part.filename, part.mimetype, buffer);
+    await validateReceivableAttachment(part.filename, part.mimetype, buffer);
     const input = attachmentFields.parse(multipartFields(part.fields as Record<string, unknown>));
     const root = process.env.UPLOAD_ROOT ?? "var/uploads";
     const storageKey = newReceivableAttachmentStorageKey();
-    const path = receivableAttachmentStoragePath(root, storageKey);
-    await mkdir(dirname(path), { recursive: true });
+    await storeReceivableAttachment(root, storageKey, buffer);
+    let data;
     try {
-      await writeFile(path, buffer, { mode: 0o600 });
-      await chmod(path, 0o600);
-      const data = await createReceivableAttachment(ledgerContext(request), { ledgerId: idParams.parse(request.params).id, ledgerRevision: input.ledgerRevision, category: input.category, file: { storageKey, originalName: part.filename.slice(0, 240), mimeType: part.mimetype, size: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") } });
-      return reply.code(201).send({ data });
+      data = await createReceivableAttachment(ledgerContext(request), { ledgerId: idParams.parse(request.params).id, ledgerRevision: input.ledgerRevision, category: input.category, file: { storageKey, originalName: part.filename.slice(0, 240), mimeType: part.mimetype, size: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") } });
     } catch (error) {
-      await unlink(receivableAttachmentStoragePath(root, storageKey)).catch(() => undefined);
+      await removeReceivableAttachmentFiles(root, storageKey);
       throw error;
     }
+    return reply.code(201).send({ data });
   });
   app.post("/api/receivables/ledgers/:id/attachments/:attachmentId/void", { preHandler: deps.authenticate }, async (request) => {
     const params = attachmentParams.parse(request.params);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Env } from "../env.js";
@@ -38,7 +38,10 @@ export async function registerFileRoutes(app: FastifyInstance, deps: { env: Env;
     const principal = request.principal!;
     const id = z.object({ id: z.string().uuid() }).parse(request.params).id;
     const file = await readablePrivateFile(principal, id);
-    const content = await readFile(resolve(deps.env.UPLOAD_ROOT, file.storageKey));
+    const root = resolve(deps.env.UPLOAD_ROOT); const path = resolve(root, file.storageKey); const outside = relative(root, path);
+    if (isAbsolute(file.storageKey) || outside === ".." || outside.startsWith("../") || outside.startsWith("..\\") || isAbsolute(outside)) throw Object.assign(new Error("私有文件路径越界"), { statusCode: 409, code: "FILE_INTEGRITY_INVALID" });
+    const metadata = await lstat(path); if (!metadata.isFile() || metadata.size !== file.size) throw Object.assign(new Error("私有文件完整性校验失败"), { statusCode: 409, code: "FILE_INTEGRITY_INVALID" });
+    const content = await readFile(path); if (sha256(content) !== file.sha256) throw Object.assign(new Error("私有文件完整性校验失败"), { statusCode: 409, code: "FILE_INTEGRITY_INVALID" });
     audit(principal.accountId, "file.read", "file", id);
     reply.header("Content-Type", file.mimeType).header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff")
       .header("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(file.originalName)}`);

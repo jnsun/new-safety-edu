@@ -55,5 +55,5 @@ export async function readablePrivateFile(principal: Principal, id: string) {
   };
   const receivablesAccess = facts.receivableAttachments.length ? await resolveReceivablesAccess(principal) : undefined;
   if (!canReadPrivateFile({ ...principal, ...(receivablesAccess ? { receivablesAccess } : {}) }, facts)) throw Object.assign(new Error("无权读取该私有文件"), { statusCode: 403, code: "SCOPE_FORBIDDEN" });
-  return { storageKey: file.storageKey, originalName: file.originalName, mimeType: file.mimeType };
+  return { storageKey: file.storageKey, originalName: file.originalName, mimeType: file.mimeType, size: file.size, sha256: file.sha256 };
 }

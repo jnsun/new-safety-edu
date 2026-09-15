@@ -3,7 +3,7 @@ import { resolve, sep } from "node:path";
 import { Prisma, type PrismaClient } from "@prisma/client";
 
 export async function orphanPrivateFiles(db: PrismaClient, olderThan: Date) {
-  const rows = await db.privateFile.findMany({ where: { createdAt: { lt: olderThan }, personPhotos: { none: {} }, personPhotoHistory: { none: {} }, versions: { none: {} }, signatures: { none: {} }, personCertificates: { none: {} }, organizationQualifications: { none: {} }, certificateAttachments: { none: {} }, monthlyReportAttachments: { none: {} } }, select: { id: true, storageKey: true, size: true } });
+  const rows = await db.privateFile.findMany({ where: { createdAt: { lt: olderThan }, personPhotos: { none: {} }, personPhotoHistory: { none: {} }, versions: { none: {} }, signatures: { none: {} }, personCertificates: { none: {} }, organizationQualifications: { none: {} }, certificateAttachments: { none: {} }, monthlyReportAttachments: { none: {} }, receivableAttachments: { none: {} } }, select: { id: true, storageKey: true, size: true } });
   const unused = [];
   for (const row of rows) {
     const references = await db.$queryRaw<Array<{ used: boolean }>>(Prisma.sql`SELECT EXISTS (
