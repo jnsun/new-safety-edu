@@ -1,0 +1,217 @@
+import { Prisma } from "@prisma/client";
+import type { Principal } from "./auth.js";
+import { prisma } from "./db.js";
+import { assertLedgerPatchAllowed, assertTransition } from "./receivables-core.js";
+import { requireReceivables, resolveReceivablesAccess, type ReceivablesAccess } from "./receivables-access.js";
+import { writeCriticalAudit } from "./transaction-audit.js";
+
+type LedgerFields = {
+  financeDepartmentId?: string | undefined;
+  contractNo?: string | undefined;
+  projectName?: string | null | undefined;
+  customerName?: string | null | undefined;
+  customerType?: string | null | undefined;
+  creditorUnit?: string | null | undefined;
+  workNature?: string | null | undefined;
+  sector?: string | null | undefined;
+  projectStatus?: string | null | undefined;
+  settlementMethod?: string | null | undefined;
+  contractAmount?: string | null | undefined;
+  finalAmount?: string | null | undefined;
+  openingChargeDate?: string | null | undefined;
+  debtStatus?: string | null | undefined;
+  collectionOwner?: string | null | undefined;
+  collectionNotes?: string | null | undefined;
+};
+
+export type ReceivablesLedgerOperation =
+  | { type: "create"; input: LedgerFields & { financeDepartmentId: string; contractNo: string } }
+  | { type: "patch"; id: string; input: LedgerFields & { revision: number; reason: string } }
+  | { type: "void"; id: string; input: { revision: number; reason: string; confirm: true } };
+
+export type ReceivablesLedgerContext = { principal: Principal; requestId: string };
+
+const ledgerSelect = {
+  id: true, financeDepartmentId: true, contractNo: true, contractNoNormalized: true, projectName: true,
+  customerName: true, customerType: true, creditorUnit: true, workNature: true, sector: true,
+  projectStatus: true, settlementMethod: true, contractAmount: true, finalAmount: true, writeoffAmount: true,
+  openingChargeDate: true, debtStatus: true, collectionOwner: true, collectionNotes: true, status: true,
+  revision: true, voidedAt: true, voidedBy: true, voidReason: true, createdBy: true, updatedBy: true,
+  createdByImportBatchId: true, createdAt: true, updatedAt: true,
+} satisfies Prisma.ReceivableLedgerSelect;
+
+type LedgerRow = Prisma.ReceivableLedgerGetPayload<{ select: typeof ledgerSelect }>;
+type LedgerTx = Prisma.TransactionClient;
+
+const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
+const notFound = () => httpError(404, "RECEIVABLES_LEDGER_NOT_FOUND", "应收账款台账不存在");
+const revisionConflict = () => httpError(409, "REVISION_CONFLICT", "台账版本已变化，请刷新后重试");
+const voided = () => httpError(409, "RECEIVABLES_LEDGER_VOIDED", "已作废台账只读");
+const reporterFieldForbidden = () => httpError(403, "RECEIVABLES_REPORTER_FIELD_NOT_ALLOWED", "报账员无权修改该字段");
+const workloadSettlement = "按工作量结算";
+const textFields = ["projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "debtStatus", "collectionOwner", "collectionNotes"] as const;
+
+function snapshot(row: LedgerRow): Prisma.InputJsonObject {
+  return JSON.parse(JSON.stringify(row)) as Prisma.InputJsonObject;
+}
+
+function decimal18_4(value: string | null, field: string): Prisma.Decimal | null {
+  if (value === null) return null;
+  try {
+    const parsed = new Prisma.Decimal(value.trim());
+    if (!parsed.isFinite() || parsed.isNegative() || parsed.decimalPlaces() > 4 || parsed.trunc().toFixed(0).length > 14) throw new Error();
+    return parsed;
+  } catch {
+    throw httpError(400, "RECEIVABLES_AMOUNT_INVALID", `${field}必须为非负 Decimal(18,4) 金额`);
+  }
+}
+
+function dateOnly(value: string | null): Date | null {
+  if (value === null) return null;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw httpError(400, "RECEIVABLES_DATE_INVALID", "挂账日期格式无效");
+  }
+  return parsed;
+}
+
+function normalizeFields(input: LedgerFields, current?: LedgerRow): Prisma.ReceivableLedgerUncheckedUpdateInput {
+  const data: Prisma.ReceivableLedgerUncheckedUpdateInput = {};
+  if (input.financeDepartmentId !== undefined) data.financeDepartmentId = input.financeDepartmentId;
+  if (input.contractNo !== undefined) {
+    const contractNo = input.contractNo.trim();
+    if (!contractNo) throw httpError(400, "RECEIVABLES_CONTRACT_NO_REQUIRED", "合同编号不能为空");
+    data.contractNo = contractNo;
+    data.contractNoNormalized = contractNo;
+  }
+  for (const field of textFields) {
+    if (input[field] !== undefined) data[field] = input[field] === null ? null : input[field]!.trim() || null;
+  }
+  if (input.contractAmount !== undefined) data.contractAmount = decimal18_4(input.contractAmount, "合同金额");
+  if (input.finalAmount !== undefined) data.finalAmount = decimal18_4(input.finalAmount, "决算金额");
+  if (input.openingChargeDate !== undefined) data.openingChargeDate = dateOnly(input.openingChargeDate);
+
+  if (input.contractAmount !== undefined && input.finalAmount === undefined) {
+    const settlementMethod = input.settlementMethod === undefined ? current?.settlementMethod ?? null : (data.settlementMethod as string | null);
+    if (settlementMethod !== workloadSettlement && data.contractAmount !== null && data.contractAmount !== undefined) data.finalAmount = data.contractAmount;
+  }
+  return data;
+}
+
+function assertFieldPolicy(access: ReceivablesAccess, current: LedgerRow | null, fields: Record<string, unknown>) {
+  try {
+    assertLedgerPatchAllowed(access, current, fields);
+  } catch (error) {
+    if (error instanceof Error && ["REPORTER_FIELD_NOT_ALLOWED", "REPORTER_CREATE_NOT_ALLOWED"].includes(error.message)) throw reporterFieldForbidden();
+    throw error;
+  }
+}
+
+async function requireActiveDepartment(tx: LedgerTx, id: string) {
+  const department = await tx.receivableDepartment.findFirst({ where: { id, active: true }, select: { id: true } });
+  if (!department) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "财务归属部门不存在或已停用");
+}
+
+function writeScope(access: ReceivablesAccess) {
+  return access.canManageAll ? {} : { financeDepartmentId: { in: access.writeDepartmentIds } };
+}
+
+async function findWritableLedger(tx: LedgerTx, access: ReceivablesAccess, id: string) {
+  return tx.receivableLedger.findFirst({ where: { id, ...writeScope(access) }, select: ledgerSelect });
+}
+
+function assertActive(row: LedgerRow, action: string) {
+  try {
+    assertTransition(row.status, action);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("VOIDED_FACT_IMMUTABLE:")) throw voided();
+    throw error;
+  }
+}
+
+const auditScope = (access: ReceivablesAccess, departmentId: string) => ({
+  actorRole: access.role,
+  actorScopeType: access.canManageAll ? "receivables" : "receivable_department",
+  actorScopeId: access.canManageAll ? null : departmentId,
+});
+
+async function createLedger(context: ReceivablesLedgerContext, input: Extract<ReceivablesLedgerOperation, { type: "create" }>["input"]) {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const access = await resolveReceivablesAccess(context.principal, tx);
+      requireReceivables(access, "create", input.financeDepartmentId);
+      assertFieldPolicy(access, null, input);
+      await requireActiveDepartment(tx, input.financeDepartmentId);
+      const data = normalizeFields(input);
+      const created = await tx.receivableLedger.create({
+        data: { ...(data as Prisma.ReceivableLedgerUncheckedCreateInput), financeDepartmentId: input.financeDepartmentId, contractNo: data.contractNo as string, contractNoNormalized: data.contractNoNormalized as string, createdBy: context.principal.accountId },
+        select: ledgerSelect,
+      });
+      await writeCriticalAudit(tx, {
+        actorId: context.principal.accountId, action: "receivables.ledger.create", objectType: "receivable_ledger", objectId: created.id,
+        requestId: context.requestId, ...auditScope(access, created.financeDepartmentId), metadata: { before: null, after: snapshot(created) },
+      });
+      return created;
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw httpError(409, "RECEIVABLES_CONTRACT_NO_CONFLICT", "合同编号已存在");
+    }
+    throw error;
+  }
+}
+
+async function updateLedger(context: ReceivablesLedgerContext, operation: Extract<ReceivablesLedgerOperation, { type: "patch" | "void" }>) {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const access = await resolveReceivablesAccess(context.principal, tx);
+      requireReceivables(access, "write");
+      const before = await findWritableLedger(tx, access, operation.id);
+      if (!before) throw notFound();
+      assertActive(before, operation.type);
+      const fields = operation.type === "patch"
+        ? Object.fromEntries(Object.entries(operation.input).filter(([field]) => field !== "revision" && field !== "reason"))
+        : { status: "voided" };
+      assertFieldPolicy(access, before, fields);
+      if (operation.input.revision !== before.revision) throw revisionConflict();
+
+      const reason = operation.input.reason.trim();
+      let data: Prisma.ReceivableLedgerUncheckedUpdateManyInput;
+      if (operation.type === "patch") {
+        data = { ...normalizeFields(operation.input, before), updatedBy: context.principal.accountId, revision: { increment: 1 } };
+        const targetDepartmentId = operation.input.financeDepartmentId;
+        if (targetDepartmentId !== undefined && targetDepartmentId !== before.financeDepartmentId) await requireActiveDepartment(tx, targetDepartmentId);
+      } else {
+        data = { status: "voided", voidedAt: new Date(), voidedBy: context.principal.accountId, voidReason: reason, updatedBy: context.principal.accountId, revision: { increment: 1 } };
+      }
+
+      await tx.receivableLedgerRevision.create({ data: { ledgerId: before.id, revision: before.revision, beforeSnapshot: snapshot(before), reason, changedBy: context.principal.accountId } });
+      const updated = await tx.receivableLedger.updateMany({ where: { id: before.id, revision: operation.input.revision, status: "active" }, data });
+      if (updated.count === 0) {
+        const latest = await findWritableLedger(tx, access, operation.id);
+        if (!latest) throw notFound();
+        if (latest.status === "voided") throw voided();
+        throw revisionConflict();
+      }
+      const after = await tx.receivableLedger.findUniqueOrThrow({ where: { id: before.id }, select: ledgerSelect });
+      await writeCriticalAudit(tx, {
+        actorId: context.principal.accountId, action: operation.type === "patch" ? "receivables.ledger.patch" : "receivables.ledger.void",
+        objectType: "receivable_ledger", objectId: before.id, requestId: context.requestId, ...auditScope(access, before.financeDepartmentId),
+        reason, metadata: { before: snapshot(before), after: snapshot(after) },
+      });
+      return after;
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const target = JSON.stringify(error.meta?.target ?? "");
+      if (target.includes("contract_no_normalized")) throw httpError(409, "RECEIVABLES_CONTRACT_NO_CONFLICT", "合同编号已存在");
+      throw revisionConflict();
+    }
+    throw error;
+  }
+}
+
+export async function writeReceivablesLedger(context: ReceivablesLedgerContext, operation: ReceivablesLedgerOperation): Promise<LedgerRow> {
+  if (operation.type === "create") return createLedger(context, operation.input);
+  return updateLedger(context, operation);
+}

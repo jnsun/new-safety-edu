@@ -6,6 +6,7 @@ import { prisma } from "../db.js";
 import { administerReceivables } from "../receivables-admin.js";
 import { requireReceivables, resolveReceivablesAccess } from "../receivables-access.js";
 import { queryReceivables } from "../receivables-query.js";
+import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type RouteDependencies = {
@@ -57,10 +58,28 @@ const receivablesListInput = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
 }).strict();
 const receivablesDashboardInput = z.object(receivablesFilters).strict();
+const ledgerText = (max: number) => z.string().max(max).nullable().optional();
+const ledgerFields = {
+  financeDepartmentId: z.string().uuid(),
+  contractNo: z.string().max(160).refine((value) => value.trim().length > 0, "合同编号不能为空"),
+  projectName: ledgerText(240), customerName: ledgerText(240), customerType: ledgerText(120),
+  creditorUnit: ledgerText(120), workNature: ledgerText(160), sector: ledgerText(160),
+  projectStatus: ledgerText(120), settlementMethod: ledgerText(120),
+  contractAmount: z.string().min(1).max(80).nullable().optional(), finalAmount: z.string().min(1).max(80).nullable().optional(),
+  openingChargeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  debtStatus: ledgerText(120), collectionOwner: ledgerText(120), collectionNotes: ledgerText(10_000),
+};
+const ledgerCreateInput = z.object(ledgerFields).strict();
+const ledgerPatchInput = z.object({
+  ...Object.fromEntries(Object.entries(ledgerFields).map(([field, schema]) => [field, schema.optional()])),
+  revision: z.number().int().positive(), reason: reasonInput,
+}).strict().refine((input) => Object.keys(input).some((field) => field !== "revision" && field !== "reason"), "至少提交一个修改字段");
+const ledgerVoidInput = z.object({ revision: z.number().int().positive(), reason: reasonInput, confirm: z.literal(true) }).strict();
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
 const lockReceivablesSetup = (tx: Prisma.TransactionClient) => tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
 const adminContext = (request: FastifyRequest) => ({ principal: request.principal as Principal, requestId: request.id });
+const ledgerContext = adminContext;
 
 export async function registerReceivablesRoutes(app: FastifyInstance, deps: RouteDependencies) {
   app.get("/api/receivables/access", { preHandler: deps.authenticate }, async (request) => ({ data: await resolveReceivablesAccess(request.principal as Principal) }));
@@ -123,6 +142,16 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   }));
   app.get("/api/receivables/dashboard", { preHandler: deps.authenticate }, async (request) => ({
     data: await queryReceivables(request.principal as Principal, { type: "dashboard", input: receivablesDashboardInput.parse(request.query) }),
+  }));
+  app.post("/api/receivables/ledgers", { preHandler: deps.authenticate }, async (request, reply) => {
+    const data = await writeReceivablesLedger(ledgerContext(request), { type: "create", input: ledgerCreateInput.parse(request.body) });
+    return reply.code(201).send({ data });
+  });
+  app.patch("/api/receivables/ledgers/:id", { preHandler: deps.authenticate }, async (request) => ({
+    data: await writeReceivablesLedger(ledgerContext(request), { type: "patch", id: idParams.parse(request.params).id, input: ledgerPatchInput.parse(request.body) }),
+  }));
+  app.post("/api/receivables/ledgers/:id/void", { preHandler: deps.authenticate }, async (request) => ({
+    data: await writeReceivablesLedger(ledgerContext(request), { type: "void", id: idParams.parse(request.params).id, input: ledgerVoidInput.parse(request.body) }),
   }));
 
   app.get("/api/receivables/grants", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "grant.list" }) }));
