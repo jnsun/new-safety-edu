@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import type { Prisma, ReceivableGrantRole } from "@prisma/client";
+import { Prisma, type ReceivableGrantRole } from "@prisma/client";
 import { z } from "zod";
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
@@ -29,7 +29,17 @@ export type ReceivablesAdminContext = { principal: Principal; requestId: string 
 
 const migrationTokenLifetimeMs = 5 * 60 * 1000;
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
+const migrationStateChanged = () => httpError(409, "RECEIVABLES_MIGRATION_STATE_CHANGED", "迁移状态已变化，请重新预览");
 const auditMetadata = (before: unknown, after: unknown, impactCount: number) => JSON.parse(JSON.stringify({ before, after, impactCount })) as Prisma.InputJsonValue;
+
+async function runMigrationApply<T>(apply: () => Promise<T>) {
+  try {
+    return await apply();
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") throw migrationStateChanged();
+    throw error;
+  }
+}
 
 const grantSelect = {
   id: true, accountId: true, role: true, canCreate: true, canExport: true, canViewAll: true, active: true, revision: true,
@@ -153,7 +163,7 @@ const assertTokenIdentity = (payload: MigrationTokenPayload, expected: { kind: "
 };
 
 const assertTokenFresh = (payload: MigrationTokenPayload, sourceRevision: number, targetRevision: number, snapshot: ReturnType<typeof migrationSnapshot>) => {
-  if (payload.sourceRevision !== sourceRevision || payload.targetRevision !== targetRevision || payload.impactCount !== snapshot.impactCount || payload.fingerprint !== snapshot.fingerprint) throw httpError(409, "RECEIVABLES_MIGRATION_STATE_CHANGED", "迁移状态已变化，请重新预览");
+  if (payload.sourceRevision !== sourceRevision || payload.targetRevision !== targetRevision || payload.impactCount !== snapshot.impactCount || payload.fingerprint !== snapshot.fingerprint) throw migrationStateChanged();
 };
 
 async function createGrant(context: ReceivablesAdminContext, input: Extract<ReceivablesAdminOperation, { type: "grant.create" }>["input"]) {
@@ -288,7 +298,7 @@ async function migrateDepartment(context: ReceivablesAdminContext, sourceId: str
   }
   const payload = readMigrationToken(input.token);
   assertTokenIdentity(payload, { kind: "department", actorId: context.principal.accountId, sourceId, targetId: input.targetId });
-  return prisma.$transaction(async (tx) => {
+  return runMigrationApply(() => prisma.$transaction(async (tx) => {
     const access = await requireAction(context, "manageAccess", tx);
     const [source, target, rows] = await Promise.all([
       tx.receivableDepartment.findUnique({ where: { id: sourceId }, select: departmentSelect }),
@@ -298,17 +308,17 @@ async function migrateDepartment(context: ReceivablesAdminContext, sourceId: str
     assertSourceAndTarget(source, target, "部门");
     assertTokenFresh(payload, source!.revision, target!.revision, migrationSnapshot(rows));
     const updated = await tx.receivableLedger.updateMany({ where: { id: { in: rows.map(({ id }) => id) }, financeDepartmentId: sourceId }, data: { financeDepartmentId: input.targetId, revision: { increment: 1 } } });
-    if (updated.count !== rows.length) throw httpError(409, "RECEIVABLES_MIGRATION_STATE_CHANGED", "迁移状态已变化，请重新预览");
+    if (updated.count !== rows.length) throw migrationStateChanged();
     const sourceTouch = await tx.receivableDepartment.updateMany({ where: { id: sourceId, active: false, revision: payload.sourceRevision }, data: { revision: { increment: 1 } } });
     const targetTouch = await tx.receivableDepartment.updateMany({ where: { id: input.targetId, active: true, revision: payload.targetRevision }, data: { revision: { increment: 1 } } });
-    if (sourceTouch.count !== 1 || targetTouch.count !== 1) throw httpError(409, "RECEIVABLES_MIGRATION_STATE_CHANGED", "迁移状态已变化，请重新预览");
+    if (sourceTouch.count !== 1 || targetTouch.count !== 1) throw migrationStateChanged();
     const [sourceAfter, targetAfter] = await Promise.all([
       tx.receivableDepartment.findUniqueOrThrow({ where: { id: sourceId }, select: departmentSelect }),
       tx.receivableDepartment.findUniqueOrThrow({ where: { id: input.targetId }, select: departmentSelect }),
     ]);
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.department.migrate", objectType: "receivable_department", objectId: sourceId, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata({ source, target, fingerprint: payload.fingerprint }, { source: sourceAfter, target: targetAfter, migratedTo: targetAfter.id }, rows.length) });
     return { impactCount: rows.length };
-  }, { isolationLevel: "Serializable" });
+  }, { isolationLevel: "Serializable" }));
 }
 
 async function migrateDictionary(context: ReceivablesAdminContext, sourceId: string, input: MigrationInput) {
@@ -333,7 +343,7 @@ async function migrateDictionary(context: ReceivablesAdminContext, sourceId: str
   }
   const payload = readMigrationToken(input.token);
   assertTokenIdentity(payload, { kind: "dictionary", actorId: context.principal.accountId, sourceId, targetId: input.targetId });
-  return prisma.$transaction(async (tx) => {
+  return runMigrationApply(() => prisma.$transaction(async (tx) => {
     const access = await requireAction(context, "manageAccess", tx);
     const [source, target] = await Promise.all([
       tx.receivableDictionaryOption.findUnique({ where: { id: sourceId }, select: dictionarySelect }),
@@ -345,17 +355,17 @@ async function migrateDictionary(context: ReceivablesAdminContext, sourceId: str
     if (!migration) throw httpError(409, "RECEIVABLES_DICTIONARY_MIGRATION_UNSUPPORTED", "该业务字典类别没有可迁移的持久化字段");
     const rows = await migration.affected(tx, source!.value);
     assertTokenFresh(payload, source!.revision, target!.revision, migrationSnapshot(rows));
-    if (await migration.apply(tx, rows.map(({ id }) => id), source!.value, target!.value) !== rows.length) throw httpError(409, "RECEIVABLES_MIGRATION_STATE_CHANGED", "迁移状态已变化，请重新预览");
+    if (await migration.apply(tx, rows.map(({ id }) => id), source!.value, target!.value) !== rows.length) throw migrationStateChanged();
     const sourceTouch = await tx.receivableDictionaryOption.updateMany({ where: { id: sourceId, active: false, revision: payload.sourceRevision }, data: { revision: { increment: 1 } } });
     const targetTouch = await tx.receivableDictionaryOption.updateMany({ where: { id: input.targetId, active: true, revision: payload.targetRevision }, data: { revision: { increment: 1 } } });
-    if (sourceTouch.count !== 1 || targetTouch.count !== 1) throw httpError(409, "RECEIVABLES_MIGRATION_STATE_CHANGED", "迁移状态已变化，请重新预览");
+    if (sourceTouch.count !== 1 || targetTouch.count !== 1) throw migrationStateChanged();
     const [sourceAfter, targetAfter] = await Promise.all([
       tx.receivableDictionaryOption.findUniqueOrThrow({ where: { id: sourceId }, select: dictionarySelect }),
       tx.receivableDictionaryOption.findUniqueOrThrow({ where: { id: input.targetId }, select: dictionarySelect }),
     ]);
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.dictionary.migrate", objectType: "receivable_dictionary_option", objectId: sourceId, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata({ source, target, fingerprint: payload.fingerprint }, { source: sourceAfter, target: targetAfter, migratedTo: targetAfter.id }, rows.length) });
     return { impactCount: rows.length };
-  }, { isolationLevel: "Serializable" });
+  }, { isolationLevel: "Serializable" }));
 }
 
 export async function administerReceivables(context: ReceivablesAdminContext, operation: ReceivablesAdminOperation): Promise<ReceivablesAdminResult> {

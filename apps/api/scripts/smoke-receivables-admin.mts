@@ -34,6 +34,22 @@ type PreviewResponse = { impactCount: number; token: string; expiresAt: string }
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
+async function waitForMigrationLockWaiters(expected: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [row] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND wait_event_type = 'Lock'
+        AND query ILIKE '%receivable_departments%'
+        AND query ILIKE 'UPDATE%'
+    `;
+    if (Number(row?.count ?? 0n) >= expected) return;
+    await delay(20);
+  }
+  assert.fail(`Expected ${expected} migration request(s) waiting on the source row lock`);
+}
+
 async function createIdentity(input: { label: string; accountStatus?: AccountStatus; personStatus?: PersonStatus; role?: RoleName; scopeType?: ScopeType; scopeId?: string }) {
   const person = await prisma.person.create({ data: { name: `${marker}-${input.label}`, phone: `1960000${String(phoneCounter++).padStart(4, "0")}`, type: "employee", status: input.personStatus ?? "active" } });
   ids.people.push(person.id);
@@ -275,7 +291,9 @@ try {
   const departmentPreview = (await expectStatus<PreviewResponse>(`/api/receivables/departments/${departmentA.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: departmentB.id }) })).data!;
   assert.equal(departmentPreview.impactCount, 1);
   await expectStatus(`/api/receivables/departments/${departmentA.id}/migrate`, tokens.financeAdmin!, 403, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: departmentB.id, token: departmentPreview.token, confirm: true, reason: "admin forbidden" }) });
-  const tamperedToken = `${departmentPreview.token.slice(0, -1)}${departmentPreview.token.endsWith("A") ? "B" : "A"}`;
+  const [tamperedPayload, originalSignature] = departmentPreview.token.split(".");
+  assert.ok(tamperedPayload && originalSignature);
+  const tamperedToken = `${tamperedPayload}.${originalSignature.startsWith("A") ? "B" : "A"}${originalSignature.slice(1)}`;
   await expectStatus(`/api/receivables/departments/${departmentA.id}/migrate`, tokens.owner!, 400, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: departmentB.id, token: tamperedToken, confirm: true, reason: "tampered" }) });
   await expectStatus(`/api/receivables/departments/${departmentA.id}/migrate`, tokens.owner!, 400, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: departmentB.id, token: expiredTokenFrom(departmentPreview.token), confirm: true, reason: "expired" }) });
 
@@ -352,6 +370,29 @@ try {
   assert.equal((await prisma.receivableDepartment.findUniqueOrThrow({ where: { id: replaySource.id }, select: { revision: true } })).revision, replaySourceRevision + 1);
   assert.equal((await prisma.receivableDepartment.findUniqueOrThrow({ where: { id: replayTarget.id }, select: { revision: true } })).revision, replayTargetRevision + 1);
   await expectRejectedWithoutMutation(`/api/receivables/departments/${replaySource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: replayTarget.id, token: replayPreview.token, confirm: true, reason: "replay rejected" }) });
+
+  const concurrentSource = await createDepartmentFixture("concurrent-source", false);
+  const concurrentTarget = await createDepartmentFixture("concurrent-target", true);
+  const concurrentPreview = (await expectStatus<PreviewResponse>(`/api/receivables/departments/${concurrentSource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: concurrentTarget.id }) })).data!;
+  assert.equal(concurrentPreview.impactCount, 0);
+  const concurrentAuditBefore = await prisma.auditLog.count({ where: { action: "receivables.admin.department.migrate", objectId: concurrentSource.id } });
+  const concurrentApply = { method: "POST", body: JSON.stringify({ mode: "apply", targetId: concurrentTarget.id, token: concurrentPreview.token, confirm: true, reason: "concurrent token consumption" }) } satisfies RequestInit;
+  let concurrentRequests!: Array<ReturnType<typeof json<{ impactCount: number }>>>;
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id = ${concurrentSource.id}::uuid FOR UPDATE`;
+    concurrentRequests = [
+      json<{ impactCount: number }>(`/api/receivables/departments/${concurrentSource.id}/migrate`, tokens.owner!, concurrentApply),
+      json<{ impactCount: number }>(`/api/receivables/departments/${concurrentSource.id}/migrate`, tokens.owner!, concurrentApply),
+    ];
+    await waitForMigrationLockWaiters(2);
+  });
+  const concurrentResults = await Promise.all(concurrentRequests);
+  assert.deepEqual(concurrentResults.map(({ response }) => response.status).sort(), [200, 409], `concurrent apply statuses: ${JSON.stringify(concurrentResults.map(({ response, body }) => ({ status: response.status, body })))}`);
+  assert.equal(concurrentResults.find(({ response }) => response.status === 200)?.body.data?.impactCount, 0);
+  assert.equal(concurrentResults.find(({ response }) => response.status === 409)?.body.error?.code, "RECEIVABLES_MIGRATION_STATE_CHANGED");
+  assert.equal((await prisma.receivableDepartment.findUniqueOrThrow({ where: { id: concurrentSource.id }, select: { revision: true } })).revision, concurrentSource.revision + 1);
+  assert.equal((await prisma.receivableDepartment.findUniqueOrThrow({ where: { id: concurrentTarget.id }, select: { revision: true } })).revision, concurrentTarget.revision + 1);
+  assert.equal(await prisma.auditLog.count({ where: { action: "receivables.admin.department.migrate", objectId: concurrentSource.id } }), concurrentAuditBefore + 1);
 
   const grants = (await expectStatus<GrantResponse[]>("/api/receivables/grants", tokens.owner!, 200)).data!;
   assert.ok(grants.some((grant) => grant.id === adminGrant.id));
