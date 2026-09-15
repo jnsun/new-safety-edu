@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { decideReceivablesAccess, requireReceivables } from "../src/receivables-access.js";
+import { decideReceivablesAccess, requireReceivables, selectSingleReceivablesGrant } from "../src/receivables-access.js";
 
 const unconfiguredAdmin = decideReceivablesAccess({
   accountActive: true,
@@ -85,5 +85,6 @@ assert.deepEqual(viewer.writeDepartmentIds, []);
 
 assert.equal(decideReceivablesAccess({ accountActive: false, personActive: true, grant: { role: "admin" } }).canEnter, false);
 assert.equal(decideReceivablesAccess({ accountActive: true, personActive: false, grant: { role: "admin" } }).canEnter, false);
+assert.equal(selectSingleReceivablesGrant([{ role: "admin" }, { role: "readonly" }]), null);
 
 console.log("RECEIVABLES_ACCESS_OK");

@@ -17,6 +17,7 @@ assert.equal(apiUrl.port, "55448", "Receivables smoke API must use port 55448");
 const prisma = new PrismaClient();
 const marker = `rxa-${randomUUID()}`;
 const jwtSecret = "receivables-access-smoke-jwt-secret";
+const setupLockKey = 8_645_136_501n;
 const ids = { accounts: [] as string[], people: [] as string[], organizations: [] as string[], financeDepartments: [] as string[], grants: [] as string[] };
 let server: ChildProcess | null = null;
 let serverOutput = "";
@@ -39,6 +40,21 @@ type AccessResponse = {
 };
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+
+async function waitForSetupLockWaiters(expected: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [row] = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND wait_event_type = 'Lock'
+        AND query ILIKE '%pg_advisory_xact_lock%'
+    `;
+    if (Number(row?.count ?? 0n) >= expected) return;
+    await delay(20);
+  }
+  assert.fail(`Expected ${expected} setup request(s) waiting on the transaction lock`);
+}
 
 async function createIdentity(input: {
   label: string;
@@ -119,6 +135,8 @@ async function startServer() {
       DATABASE_URL: databaseUrl,
       NODE_ENV: "test",
       PORT: "55448",
+      RECEIVABLES_ACCESS_SMOKE: "1",
+      RECEIVABLES_TEST_LISTEN_HOST: "127.0.0.1",
       PUBLIC_BASE_URL: baseUrl,
       COOKIE_SECRET: "receivables-access-smoke-cookie-secret",
       JWT_SECRET: jwtSecret,
@@ -131,10 +149,12 @@ async function startServer() {
   server.stderr?.on("data", (chunk) => { serverOutput += String(chunk); });
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (server.exitCode !== null) throw new Error(`Receivables API exited before readiness:\n${serverOutput}`);
-    try {
-      const health = await fetch(`${baseUrl}/api/health`);
-      if (health.status === 200) return;
-    } catch {}
+    let health: Response | undefined;
+    try { health = await fetch(`${baseUrl}/api/health`); } catch {}
+    if (health?.status === 200) {
+      assert.match(serverOutput, /RECEIVABLES_LISTEN_ADDRESS=127\.0\.0\.1/, "Smoke API did not actually bind its socket to loopback");
+      return;
+    }
     await delay(50);
   }
   throw new Error(`Receivables API did not become ready:\n${serverOutput}`);
@@ -164,12 +184,15 @@ async function cleanup() {
 try {
   assert.equal(await prisma.receivableSetting.count(), 0, "receivables_test must start without a ReceivableSetting row");
   const company = await prisma.organization.create({ data: { name: `${marker}-company`, type: "company" } });
+  ids.organizations.push(company.id);
   const financeOrganization = await prisma.organization.create({ data: { name: `${marker}-finance-org`, type: "department", parentId: company.id } });
+  ids.organizations.push(financeOrganization.id);
   const replacementOrganization = await prisma.organization.create({ data: { name: `${marker}-replacement-org`, type: "department", parentId: company.id } });
-  ids.organizations.push(company.id, financeOrganization.id, replacementOrganization.id);
+  ids.organizations.push(replacementOrganization.id);
   const departmentA = await prisma.receivableDepartment.create({ data: { name: `${marker}-finance-a` } });
+  ids.financeDepartments.push(departmentA.id);
   const departmentB = await prisma.receivableDepartment.create({ data: { name: `${marker}-finance-b` } });
-  ids.financeDepartments.push(departmentA.id, departmentB.id);
+  ids.financeDepartments.push(departmentB.id);
 
   const companyAdmin = await createIdentity({ label: "company-admin", role: "company_admin", scopeType: "company" });
   const owner = await createIdentity({ label: "owner", role: "org_leader", scopeType: "organization", scopeId: financeOrganization.id });
@@ -239,6 +262,7 @@ try {
   assert.equal(readyReporterA.body.data?.canCreateLedger, true);
   assert.deepEqual(readyReporterA.body.data?.readDepartmentIds, [departmentA.id]);
   assert.deepEqual(readyReporterA.body.data?.writeDepartmentIds, [departmentA.id]);
+  assert.equal((await request("/api/receivables/_smoke/protected", tokens.reporterA!)).status, 200);
   const readyReporterB = await access(tokens.reporterB!);
   assert.deepEqual(readyReporterB.body.data?.readDepartmentIds, [departmentB.id]);
   assert.deepEqual(readyReporterB.body.data?.writeDepartmentIds, []);
@@ -254,6 +278,9 @@ try {
   assert.equal(revoked.response.status, 200);
   assert.equal(revoked.body.data?.role, null);
   assert.equal(revoked.body.data?.canEnter, false);
+  const revokedProtected = await request("/api/receivables/_smoke/protected", tokens.reporterA!);
+  assert.equal(revokedProtected.status, 403);
+  assert.equal((await revokedProtected.json() as { error: { code: string } }).error.code, "RECEIVABLES_FORBIDDEN");
 
   assert.equal((await access(tokens.pending!)).response.status, 403);
   assert.equal((await access(tokens.disabled!)).response.status, 401);
@@ -266,10 +293,32 @@ try {
   ]) {
     assert.equal((await request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify(body) })).status, 400);
   }
-  const rebind = await request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify({ organizationId: replacementOrganization.id, confirm: true, reason: "smoke recovery rebind" }) });
+  let releaseSetupLock!: () => void;
+  let setupLockReady!: () => void;
+  const releaseSetupLockPromise = new Promise<void>((resolveRelease) => { releaseSetupLock = resolveRelease; });
+  const setupLockReadyPromise = new Promise<void>((resolveReady) => { setupLockReady = resolveReady; });
+  const setupLockHolder = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
+    setupLockReady();
+    await releaseSetupLockPromise;
+  }).catch((error) => { setupLockReady(); throw error; });
+  void setupLockHolder.catch(() => undefined);
+  await setupLockReadyPromise;
+  const rebindPromise = request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify({ organizationId: replacementOrganization.id, confirm: true, reason: "smoke recovery rebind" }) });
+  let staleOwnerConfirmPromise: Promise<Response> | undefined;
+  try {
+    await waitForSetupLockWaiters(1);
+    staleOwnerConfirmPromise = request("/api/receivables/setup/confirm", tokens.owner!, { method: "POST", body: "{}" });
+    await waitForSetupLockWaiters(2);
+  } finally {
+    releaseSetupLock();
+    await setupLockHolder;
+  }
+  const rebind = await rebindPromise;
+  const staleOwnerConfirm = await staleOwnerConfirmPromise!;
   assert.equal(rebind.status, 200);
+  assert.equal(staleOwnerConfirm.status, 403);
   assert.equal((await access(tokens.companyAdmin!)).body.data?.state, "pending_confirmation");
-  assert.equal((await request("/api/receivables/setup/confirm", tokens.owner!, { method: "POST", body: "{}" })).status, 403);
   assert.equal((await request("/api/receivables/setup/confirm", tokens.replacementOwner!, { method: "POST", body: "{}" })).status, 200);
 
   assert.equal(await prisma.auditLog.count({ where: { action: { in: ["receivables.setup.bind", "receivables.setup.rebind", "receivables.setup.confirm"] }, objectId: { in: ids.organizations } } }), 4);
@@ -282,6 +331,8 @@ try {
   assert.equal(await prisma.receivableAccessGrant.count({ where: { id: { in: ids.grants } } }), 0);
   assert.equal(await prisma.account.count({ where: { id: { in: ids.accounts } } }), 0);
   assert.equal(await prisma.person.count({ where: { id: { in: ids.people } } }), 0);
+  assert.equal(await prisma.receivableDepartment.count({ where: { id: { in: ids.financeDepartments } } }), 0);
   assert.equal(await prisma.organization.count({ where: { id: { in: ids.organizations } } }), 0);
+  assert.equal(await prisma.auditLog.count({ where: { action: { startsWith: "receivables.setup." }, objectId: { in: ids.organizations } } }), 0);
   await prisma.$disconnect();
 }

@@ -61,7 +61,7 @@ await registerSafetyManagementRoutes(app, { env, ...guards });
 await registerQualificationRoutes(app, { env, authenticate: guards.authenticate });
 await registerProjectReportingRoutes(app, { authenticate: guards.authenticate });
 await registerSensitiveExportRoutes(app, { env, ...guards });
-await registerReceivablesRoutes(app, { authenticate: guards.authenticate });
+await registerReceivablesRoutes(app, { authenticate: guards.authenticate, enableAccessSmokeRoute: env.NODE_ENV === "test" && process.env.RECEIVABLES_ACCESS_SMOKE === "1" });
 await registerPhoneAuthRoutes(app, { env, authenticate: guards.authenticate });
 await registerWechatWebAuthRoutes(app, { env, authenticate: guards.authenticate, requireManager: guards.requireManager });
 
@@ -92,4 +92,9 @@ const sensitiveExportCleanupTimer = setInterval(() => void cleanupExpiredSensiti
 sensitiveExportCleanupTimer.unref();
 void cleanupExpiredSensitiveExports(env).catch((error) => app.log.error({ err: error }, "sensitive_export_cleanup_failed"));
 
-await app.listen({ port: env.PORT, host: "0.0.0.0" });
+const listenHost = env.NODE_ENV === "test" && process.env.RECEIVABLES_TEST_LISTEN_HOST === "127.0.0.1" ? "127.0.0.1" : "0.0.0.0";
+await app.listen({ port: env.PORT, host: listenHost });
+if (listenHost === "127.0.0.1") {
+  const address = app.server.address();
+  console.log(`RECEIVABLES_LISTEN_ADDRESS=${typeof address === "object" && address ? address.address : "unknown"}`);
+}

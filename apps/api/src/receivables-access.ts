@@ -59,6 +59,10 @@ export type ReceivablesAction =
 
 type AccessDb = Pick<Prisma.TransactionClient, "account" | "receivableSetting" | "roleAssignment" | "receivableAccessGrant">;
 
+export function selectSingleReceivablesGrant<T>(grants: readonly T[]): T | null {
+  return grants.length === 1 ? grants[0]! : null;
+}
+
 const emptyAccess = (state: ReceivablesAccessState, canRecover: boolean): ReceivablesAccess => ({
   state,
   role: null,
@@ -213,9 +217,10 @@ export async function resolveReceivablesAccess(principal: Principal, db: AccessD
       : Promise.resolve([]),
   ]);
   const leaderAccountIds = [...new Set(leaderRoles.map(({ person }) => person?.account?.id).filter((id): id is string => !!id))];
-  const grant = grants.length === 1 ? {
-    ...grants[0]!,
-    departments: grants[0]!.departments.map(({ financeDepartmentId, canRead, canWrite }) => ({ departmentId: financeDepartmentId, canRead, canWrite })),
+  const activeGrant = selectSingleReceivablesGrant(grants);
+  const grant = activeGrant ? {
+    ...activeGrant,
+    departments: activeGrant.departments.map(({ financeDepartmentId, canRead, canWrite }) => ({ departmentId: financeDepartmentId, canRead, canWrite })),
   } : null;
 
   return decideReceivablesAccess({

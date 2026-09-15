@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
@@ -7,6 +8,7 @@ import { writeCriticalAudit } from "../transaction-audit.js";
 
 type RouteDependencies = {
   authenticate(request: FastifyRequest): Promise<void>;
+  enableAccessSmokeRoute?: boolean;
 };
 
 const organizationInput = z.object({
@@ -14,18 +16,29 @@ const organizationInput = z.object({
   reason: z.string().trim().min(1).max(500).optional(),
   confirm: z.boolean().optional(),
 });
+const setupLockKey = 8_645_136_501n;
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
+const lockReceivablesSetup = (tx: Prisma.TransactionClient) =>
+  tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
 
 export async function registerReceivablesRoutes(app: FastifyInstance, deps: RouteDependencies) {
   app.get("/api/receivables/access", { preHandler: deps.authenticate }, async (request) => ({
     data: await resolveReceivablesAccess(request.principal as Principal),
   }));
 
+  if (deps.enableAccessSmokeRoute) {
+    app.get("/api/receivables/_smoke/protected", { preHandler: deps.authenticate }, async (request) => {
+      requireReceivables(await resolveReceivablesAccess(request.principal as Principal), "enter");
+      return { data: { allowed: true } };
+    });
+  }
+
   app.put("/api/receivables/setup/organization", { preHandler: deps.authenticate }, async (request) => {
     const input = organizationInput.parse(request.body);
     const principal = request.principal as Principal;
     const data = await prisma.$transaction(async (tx) => {
+      await lockReceivablesSetup(tx);
       requireReceivables(await resolveReceivablesAccess(principal, tx), "recover");
       const organization = await tx.organization.findUnique({ where: { id: input.organizationId }, select: { id: true, name: true, type: true } });
       if (!organization) throw httpError(404, "RECEIVABLES_ORGANIZATION_NOT_FOUND", "组织不存在");
@@ -70,6 +83,7 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.post("/api/receivables/setup/confirm", { preHandler: deps.authenticate }, async (request) => {
     const principal = request.principal as Principal;
     const data = await prisma.$transaction(async (tx) => {
+      await lockReceivablesSetup(tx);
       const access = await resolveReceivablesAccess(principal, tx);
       requireReceivables(access, "confirmSetup");
       const setting = await tx.receivableSetting.findUniqueOrThrow({
