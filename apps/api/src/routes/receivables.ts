@@ -9,7 +9,7 @@ import { requireReceivables, resolveReceivablesAccess } from "../receivables-acc
 import { queryReceivables } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
-import { createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
+import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type RouteDependencies = {
@@ -171,6 +171,8 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     data: await writeReceivablesLedger(ledgerContext(request), { type: "void", id: idParams.parse(request.params).id, input: ledgerVoidInput.parse(request.body) }),
   }));
   app.post("/api/receivables/ledgers/:id/attachments", { preHandler: deps.authenticate }, async (request, reply) => {
+    const ledgerId = idParams.parse(request.params).id;
+    await authorizeReceivableAttachmentUpload(request.principal as Principal, ledgerId);
     const part = await request.file({ limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
     if (!part) throw httpError(400, "FILE_REQUIRED", "请选择文件");
     const buffer = await part.toBuffer();
@@ -182,7 +184,7 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     await storeReceivableAttachment(root, storageKey, buffer);
     let data;
     try {
-      data = await createReceivableAttachment(ledgerContext(request), { ledgerId: idParams.parse(request.params).id, ledgerRevision: input.ledgerRevision, category: input.category, file: { storageKey, originalName: part.filename.slice(0, 240), mimeType: part.mimetype, size: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") } });
+      data = await createReceivableAttachment(ledgerContext(request), { ledgerId, ledgerRevision: input.ledgerRevision, category: input.category, file: { storageKey, originalName: part.filename.slice(0, 240), mimeType: part.mimetype, size: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") } });
     } catch (error) {
       await removeReceivableAttachmentFiles(root, storageKey);
       throw error;

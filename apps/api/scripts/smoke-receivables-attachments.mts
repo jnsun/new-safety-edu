@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import archiver from "archiver";
 import ExcelJS from "exceljs";
 import { SignJWT } from "jose";
+import unzipper from "unzipper";
 import { orphanPrivateFiles } from "../src/private-file-retention.js";
+import { RECEIVABLE_WORKBOOK_LIMITS, receivableAttachmentStoragePath, removeReceivableAttachmentFiles, validateReceivableWorkbookDirectory, validateReceivableWorkbookShape } from "../src/receivables-files.js";
 
 const expectedDatabaseUrl = "postgresql://postgres@127.0.0.1:55432/receivables_test";
 const databaseUrl = process.env.DATABASE_URL ?? "";
@@ -85,6 +87,38 @@ async function validXlsx() {
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
+async function bombXlsx() {
+  const source = await unzipper.Open.buffer(await validXlsx());
+  const zip = archiver("zip"); const chunks: Buffer[] = [];
+  zip.on("data", (chunk: Buffer) => chunks.push(chunk));
+  const ended = once(zip, "end");
+  for (const file of source.files.filter(({ type }) => type === "File")) zip.append(await file.buffer(), { name: file.path });
+  zip.append(Buffer.alloc(16 * 1024 * 1024 + 1), { name: "xl/media/bomb.bin" });
+  await zip.finalize(); await ended;
+  const content = Buffer.concat(chunks); assert.ok(content.length <= 10 * 1024 * 1024, "bomb fixture must stay within upload limit");
+  return content;
+}
+
+function checkWorkbookResourcePolicy() {
+  const entry = (overrides: Partial<{ path: string; type: "Directory" | "File"; flags: number; compressedSize: number; uncompressedSize: number }> = {}) => ({ path: "xl/workbook.xml", type: "File" as const, flags: 0, compressedSize: 10, uncompressedSize: 20, ...overrides });
+  assert.deepEqual(RECEIVABLE_WORKBOOK_LIMITS, { entries: 256, entryUncompressedBytes: 16 * 1024 * 1024, totalUncompressedBytes: 64 * 1024 * 1024, compressionRatio: 100, worksheets: 50, rows: 200_000, cells: 1_000_000 });
+  assert.doesNotThrow(() => validateReceivableWorkbookDirectory([entry()]));
+  for (const entries of [
+    Array.from({ length: 257 }, (_, index) => entry({ path: `xl/item-${index}.xml` })),
+    [entry({ uncompressedSize: 16 * 1024 * 1024 + 1 })],
+    Array.from({ length: 5 }, (_, index) => entry({ path: `xl/large-${index}.xml`, compressedSize: 14 * 1024 * 1024, uncompressedSize: 14 * 1024 * 1024 })),
+    [entry({ compressedSize: 1, uncompressedSize: 101 })],
+    [entry({ compressedSize: 0, uncompressedSize: 1 })],
+    [entry({ flags: 1 })],
+    [entry({ path: "../workbook.xml" })],
+    [entry(), entry()],
+  ]) assert.throws(() => validateReceivableWorkbookDirectory(entries), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
+  const tooManySheets = new ExcelJS.Workbook(); for (let index = 0; index <= RECEIVABLE_WORKBOOK_LIMITS.worksheets; index += 1) tooManySheets.addWorksheet(`Sheet${index}`);
+  assert.throws(() => validateReceivableWorkbookShape(tooManySheets), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
+  const sparseRows = new ExcelJS.Workbook(); sparseRows.addWorksheet("Rows").getCell(`A${RECEIVABLE_WORKBOOK_LIMITS.rows + 1}`).value = "too far";
+  assert.throws(() => validateReceivableWorkbookShape(sparseRows), (error: Error & { code?: string }) => error.code === "INVALID_FILE_CONTENT");
+}
+
 async function start() {
   await rm(uploadRoot, { recursive: true, force: true }); await mkdir(uploadRoot, { recursive: true });
   server = spawn(process.execPath, [resolve(root, "node_modules/tsx/dist/cli.mjs"), "apps/api/src/server.ts"], { cwd: root, env: { ...process.env, DATABASE_URL: databaseUrl, NODE_ENV: "test", PORT: "55448", RECEIVABLES_TEST_LISTEN_HOST: "127.0.0.1", PUBLIC_BASE_URL: baseUrl, COOKIE_SECRET: "receivables-attachments-smoke-cookie-secret", JWT_SECRET: jwtSecret, FIELD_ENCRYPTION_KEY: Buffer.alloc(32, 8).toString("base64"), UPLOAD_SIGNING_SECRET: "receivables-attachments-smoke-upload-secret", UPLOAD_ROOT: uploadRoot }, stdio: ["ignore", "pipe", "pipe"] });
@@ -151,6 +185,11 @@ async function unchanged(ledgerId: string, action: () => Promise<unknown>) {
 }
 
 try {
+  checkWorkbookResourcePolicy();
+  if (process.platform === "win32") {
+    const source = await readFile(resolve(root, "apps/api/src/receivables-files.ts"), "utf8");
+    assert.match(source, /writeFile\(temporaryPath, content, \{ mode: 0o600 \}\)/, "atomic upload helper must request mode 0600");
+  }
   const company = await prisma.organization.create({ data: { name: `${marker}-company`, type: "company" } }); ids.organizations.push(company.id);
   const financeOrg = await prisma.organization.create({ data: { name: `${marker}-finance`, type: "department", parentId: company.id } }); ids.organizations.push(financeOrg.id);
   const owner = await identity("owner", "org_leader", financeOrg.id); const admin = await identity("admin"); const reporter = await identity("reporter"); const sameReporter = await identity("same-reporter"); const readonly = await identity("readonly"); const viewAll = await identity("view-all"); const recovery = await identity("recovery", "company_admin"); const crossReporter = await identity("cross-reporter");
@@ -168,8 +207,11 @@ try {
     ["extension mismatch", ownerToken, { filename: "wrong.pdf", mime: "image/png", content: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) }],
     ["invalid PDF", ownerToken, { filename: "fake.pdf", mime: "application/pdf", content: Buffer.from("not a pdf") }],
     ["plain ZIP", ownerToken, { filename: "fake.xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content: await plainZip() }],
+    ["compressed workbook bomb", ownerToken, { filename: "bomb.xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content: await bombXlsx() }],
   ];
   for (const [label, bearer, fixture] of invalids) await unchanged(ledger.id, () => expect(attachmentPath, bearer, label === "recovery" || label === "readonly" ? 404 : 400, { method: "POST", body: form(1, fixture) }));
+  const malformedMultipart = { method: "POST", headers: { "content-type": "multipart/form-data; boundary=broken" }, body: "not-a-valid-boundary" };
+  for (const bearer of [readonlyToken, recoveryToken, crossReporterToken]) await unchanged(ledger.id, () => expect(attachmentPath, bearer, 404, malformedMultipart));
   await unchanged(ledger.id, () => expect(attachmentPath, ownerToken, 413, { method: "POST", body: form(1, { filename: "large.pdf", mime: "application/pdf", content: Buffer.alloc(10 * 1024 * 1024 + 1) }) }));
   await unchanged(ledger.id, () => expect(attachmentPath, ownerToken, 409, { method: "POST", body: form(99, pdf) }));
 
@@ -183,16 +225,28 @@ try {
   const uploadTokens = [reporterToken, adminToken, ownerToken, reporterToken, adminToken];
   const uploaded: Attachment[] = [];
   let ledgerRevision = 1;
+  const cleanupKey = `receivables/test/${randomUUID()}`; const cleanupPath = receivableAttachmentStoragePath(uploadRoot, cleanupKey); const cleanupTemp = `${cleanupPath}.uploading`;
+  await mkdir(resolve(cleanupPath, ".."), { recursive: true }); await writeFile(cleanupPath, "final"); await writeFile(cleanupTemp, "temporary"); await removeReceivableAttachmentFiles(uploadRoot, cleanupKey, cleanupTemp);
+  assert.equal((await storedFiles()).length, 0, "cleanup helper left final or temporary files");
+  await assert.rejects(() => removeReceivableAttachmentFiles(uploadRoot, cleanupKey, resolve(uploadRoot, "..", "outside.uploading")), (error: Error & { code?: string }) => error.code === "FILE_PATH_INVALID");
+  const failedCleanupKey = `receivables/test/${randomUUID()}`; const failedCleanupPath = receivableAttachmentStoragePath(uploadRoot, failedCleanupKey); await mkdir(failedCleanupPath, { recursive: true });
+  await assert.rejects(() => removeReceivableAttachmentFiles(uploadRoot, failedCleanupKey), (error) => error instanceof AggregateError && error.errors.length > 0); await rm(failedCleanupPath, { recursive: true });
   for (let index = 0; index < fixtures.length; index += 1) {
     const result = await expect<Attachment>(attachmentPath, uploadTokens[index]!, 201, { method: "POST", body: form(ledgerRevision, fixtures[index]!) });
     const attachment = result.body!.data!; uploaded.push(attachment); ids.files.push(attachment.file.id); ledgerRevision += 1;
     assert.equal(attachment.file.size, fixtures[index]!.content.length); assert.equal(attachment.file.sha256, hash(fixtures[index]!.content), `${fixtures[index]!.filename} SHA-256`);
-    assert.equal((await stat(resolve(uploadRoot, attachment.file.storageKey))).size, fixtures[index]!.content.length);
+    const metadata = await stat(resolve(uploadRoot, attachment.file.storageKey)); assert.equal(metadata.size, fixtures[index]!.content.length);
+    if (process.platform !== "win32") assert.equal(metadata.mode & 0o777, 0o600, `${fixtures[index]!.filename} mode`);
   }
+  if (process.platform === "win32") console.log("RECEIVABLES_ATTACHMENT_MODE=NOT_PROVABLE_ON_WINDOWS");
   assert.equal((await storedFiles()).filter((path) => path.endsWith(".uploading")).length, 0, "temporary upload files remain");
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: ledger.id } })).revision, ledgerRevision);
   assert.equal(await prisma.receivableLedgerRevision.count({ where: { ledgerId: ledger.id } }), fixtures.length);
   assert.equal(await prisma.auditLog.count({ where: { action: "receivables.attachment.create", objectId: { in: uploaded.map(({ id }) => id) } } }), fixtures.length);
+  const reporterCreateAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.attachment.create", objectId: uploaded[0]!.id } });
+  const reporterCreateMetadata = reporterCreateAudit.metadata as Record<string, unknown> | null;
+  assert.deepEqual({ actorRole: reporterCreateAudit.actorRole, actorScopeType: reporterCreateAudit.actorScopeType, actorScopeId: reporterCreateAudit.actorScopeId, reason: reporterCreateMetadata?.reason }, { actorRole: "reporter", actorScopeType: "receivable_department", actorScopeId: department.id, reason: "上传财务附件" });
+  assert.ok(reporterCreateAudit.metadata && typeof reporterCreateAudit.metadata === "object" && !Array.isArray(reporterCreateAudit.metadata) && "before" in reporterCreateAudit.metadata && "after" in reporterCreateAudit.metadata, "create audit lacks before/after metadata");
   const orphans = await orphanPrivateFiles(prisma, new Date(Date.now() + 60_000));
   assert.equal(orphans.some(({ id }) => uploaded.some(({ file }) => file.id === id)), false, "retention treated a linked receivables file as orphaned");
 
@@ -212,6 +266,10 @@ try {
   const voidBody = (reason: string, revision = 1) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ledgerRevision, revision, reason }) });
   await unchanged(ledger.id, () => expect(voidPath(uploaded[0]!), sameReporterToken, 404, voidBody("same department non-uploader")));
   const ownerVoided = (await expect<Attachment>(voidPath(uploaded[1]!), ownerToken, 200, voidBody("owner void"))).body!.data!; ledgerRevision += 1; assert.equal(ownerVoided.status, "voided");
+  const ownerVoidAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.attachment.void", objectId: uploaded[1]!.id } });
+  const ownerVoidMetadata = ownerVoidAudit.metadata as Record<string, unknown> | null;
+  assert.deepEqual({ actorRole: ownerVoidAudit.actorRole, actorScopeType: ownerVoidAudit.actorScopeType, actorScopeId: ownerVoidAudit.actorScopeId, reason: ownerVoidMetadata?.reason }, { actorRole: "owner", actorScopeType: "receivables", actorScopeId: null, reason: "owner void" });
+  assert.ok(ownerVoidAudit.metadata && typeof ownerVoidAudit.metadata === "object" && !Array.isArray(ownerVoidAudit.metadata) && "before" in ownerVoidAudit.metadata && "after" in ownerVoidAudit.metadata, "void audit lacks before/after metadata");
   const adminVoided = (await expect<Attachment>(voidPath(uploaded[2]!), adminToken, 200, voidBody("admin void"))).body!.data!; ledgerRevision += 1; assert.equal(adminVoided.status, "voided");
   const reporterVoided = (await expect<Attachment>(voidPath(uploaded[0]!), reporterToken, 200, voidBody("uploader void"))).body!.data!; ledgerRevision += 1; assert.equal(reporterVoided.status, "voided");
   await expect(`/api/files/${uploaded[0]!.file.id}`, reporterToken, 403); await expect(`/api/files/${uploaded[0]!.file.id}`, viewAllToken, 403); await expect(`/api/files/${uploaded[1]!.file.id}`, ownerToken, 200); await expect(`/api/files/${uploaded[2]!.file.id}`, adminToken, 200);

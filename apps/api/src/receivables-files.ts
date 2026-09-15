@@ -3,6 +3,7 @@ import { chmod, lstat, mkdir, rename, unlink, writeFile } from "node:fs/promises
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { Prisma } from "@prisma/client";
 import ExcelJS from "exceljs";
+import unzipper from "unzipper";
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
 import { requireReceivables, resolveReceivablesAccess, type ReceivablesAccess } from "./receivables-access.js";
@@ -22,6 +23,51 @@ const attachmentNotFound = () => httpError(404, "RECEIVABLES_ATTACHMENT_NOT_FOUN
 const conflict = () => httpError(409, "REVISION_CONFLICT", "版本已变化，请刷新后重试");
 const ledgerVoided = () => httpError(409, "RECEIVABLES_LEDGER_VOIDED", "已作废台账只读");
 const attachmentVoided = () => httpError(409, "RECEIVABLES_ATTACHMENT_VOIDED", "财务附件已作废");
+const invalidFileContent = () => httpError(400, "INVALID_FILE_CONTENT", "文件内容与声明类型不匹配");
+
+export const RECEIVABLE_WORKBOOK_LIMITS = Object.freeze({
+  entries: 256,
+  entryUncompressedBytes: 16 * 1024 * 1024,
+  totalUncompressedBytes: 64 * 1024 * 1024,
+  compressionRatio: 100,
+  worksheets: 50,
+  rows: 200_000,
+  cells: 1_000_000,
+});
+
+export type ReceivableWorkbookDirectoryEntry = { path: string; type: "Directory" | "File"; flags: number; compressedSize: number; uncompressedSize: number };
+
+export function validateReceivableWorkbookDirectory(entries: readonly ReceivableWorkbookDirectoryEntry[]) {
+  if (entries.length > RECEIVABLE_WORKBOOK_LIMITS.entries) throw invalidFileContent();
+  const seen = new Set<string>();
+  let totalUncompressedBytes = 0;
+  for (const entry of entries) {
+    const path = entry.path.replace(/\/$/, "");
+    const normalized = path.toLowerCase();
+    if (!path || path.includes("\\") || path.includes("\0") || path.startsWith("/") || /^[a-z]:/i.test(path) || path.split("/").some((segment) => !segment || segment === "." || segment === "..") || seen.has(normalized) || (entry.flags & 1) !== 0) throw invalidFileContent();
+    seen.add(normalized);
+    if (entry.type === "Directory") continue;
+    const { compressedSize, uncompressedSize } = entry;
+    if (!Number.isSafeInteger(compressedSize) || !Number.isSafeInteger(uncompressedSize) || compressedSize < 0 || uncompressedSize < 0 || uncompressedSize > RECEIVABLE_WORKBOOK_LIMITS.entryUncompressedBytes || uncompressedSize > 0 && (compressedSize === 0 || uncompressedSize / compressedSize > RECEIVABLE_WORKBOOK_LIMITS.compressionRatio)) throw invalidFileContent();
+    totalUncompressedBytes += uncompressedSize;
+    if (!Number.isSafeInteger(totalUncompressedBytes) || totalUncompressedBytes > RECEIVABLE_WORKBOOK_LIMITS.totalUncompressedBytes) throw invalidFileContent();
+  }
+}
+
+export async function preflightReceivableWorkbookArchive(content: Buffer) {
+  const directory = await unzipper.Open.buffer(content).catch(() => { throw invalidFileContent(); });
+  validateReceivableWorkbookDirectory(directory.files);
+}
+
+export function validateReceivableWorkbookShape(workbook: ExcelJS.Workbook) {
+  if (!workbook.worksheets.length || workbook.worksheets.length > RECEIVABLE_WORKBOOK_LIMITS.worksheets) throw invalidFileContent();
+  let rows = 0; let cells = 0;
+  for (const worksheet of workbook.worksheets) {
+    rows += worksheet.rowCount;
+    worksheet.eachRow({ includeEmpty: false }, (row) => { cells += Math.max(row.cellCount, row.actualCellCount); });
+    if (rows > RECEIVABLE_WORKBOOK_LIMITS.rows || cells > RECEIVABLE_WORKBOOK_LIMITS.cells) throw invalidFileContent();
+  }
+}
 
 export async function validateReceivableAttachment(filename: string, mimeType: string, content: Buffer) {
   const suffix = filename.slice(filename.lastIndexOf(".")).toLowerCase();
@@ -31,8 +77,11 @@ export async function validateReceivableAttachment(filename: string, mimeType: s
     : mimeType === "image/png" ? content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
       : mimeType === "image/jpeg" ? content[0] === 0xff && content[1] === 0xd8
         : mimeType === "image/webp" ? content.subarray(0, 4).equals(Buffer.from("RIFF")) && content.subarray(8, 12).equals(Buffer.from("WEBP"))
-          : await new ExcelJS.Workbook().xlsx.load(content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer).then((workbook) => workbook.worksheets.length > 0).catch(() => false);
-  if (!validContent) throw httpError(400, "INVALID_FILE_CONTENT", "文件内容与声明类型不匹配");
+          : await preflightReceivableWorkbookArchive(content).then(async () => {
+            const workbook = await new ExcelJS.Workbook().xlsx.load(content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer);
+            validateReceivableWorkbookShape(workbook); return true;
+          }).catch(() => false);
+  if (!validContent) throw invalidFileContent();
 }
 
 export function receivableAttachmentStoragePath(uploadRoot: string, storageKey: string) {
@@ -77,6 +126,12 @@ async function lockAuthority(tx: Tx, principal: Principal) {
 
 const writeScope = (access: ReceivablesAccess) => access.canManageAll ? {} : { financeDepartmentId: { in: access.writeDepartmentIds } };
 const auditScope = (access: ReceivablesAccess, departmentId: string) => ({ actorRole: access.role, actorScopeType: access.canManageAll ? "receivables" : "receivable_department", actorScopeId: access.canManageAll ? null : departmentId });
+export async function authorizeReceivableAttachmentUpload(principal: Principal, ledgerId: string) {
+  const access = await resolveReceivablesAccess(principal);
+  if (!access.canWriteLedger) throw ledgerNotFound();
+  const ledger = await prisma.receivableLedger.findFirst({ where: { id: ledgerId, status: "active", financeDepartment: { active: true }, ...writeScope(access) }, select: { id: true } });
+  if (!ledger) throw ledgerNotFound();
+}
 async function writableLedger(tx: Tx, access: ReceivablesAccess, ledgerId: string) {
   const candidate = await tx.receivableLedger.findFirst({ where: { id: ledgerId, ...writeScope(access) }, select: { financeDepartmentId: true } });
   if (!candidate) throw ledgerNotFound();
