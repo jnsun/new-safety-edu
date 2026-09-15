@@ -62,6 +62,7 @@
     "smoke:receivables-money": "tsx scripts/smoke-receivables-money.mts",
     "smoke:receivables-attachments": "tsx scripts/smoke-receivables-attachments.mts",
     "smoke:receivables-import": "tsx scripts/smoke-receivables-import.mts",
+    "smoke:receivables-export": "tsx scripts/smoke-receivables-export.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
   },

@@ -26,7 +26,7 @@ export type ReceivablesQueryOperation =
   | { type: "ledger.detail"; id: string }
   | { type: "dashboard"; input: ReceivablesFiltersInput };
 
-type NormalizedFilters = {
+export type NormalizedReceivablesFilters = {
   financeDepartmentId: string | null;
   status: "active" | "voided" | "all";
   settlement: "unsettled" | "settled" | "all";
@@ -36,10 +36,17 @@ type NormalizedFilters = {
   search: string | null;
 };
 
-type QueryScope = NormalizedFilters & {
+type QueryScope = NormalizedReceivablesFilters & {
   readDepartmentIds: string[] | null;
   capabilityReadDepartmentIds: string[];
   capabilityWriteDepartmentIds: string[];
+  cutoffAt: Date | null;
+};
+export type ReceivablesExportScopeSnapshot = {
+  role: Exclude<ReceivablesAccess["role"], null>;
+  all: boolean;
+  readDepartmentIds: string[];
+  cutoffAt: string;
 };
 type QueryTx = Prisma.TransactionClient;
 type Facet = { value: string | null; count: number };
@@ -113,7 +120,7 @@ const sortColumns = {
   openingChargeDate: Prisma.sql`f.opening_charge_date`,
 } satisfies Record<NonNullable<ReceivablesListInput["sort"]>, Prisma.Sql>;
 
-function normalizeFilters(input: ReceivablesFiltersInput): NormalizedFilters {
+export function normalizeReceivablesFilters(input: ReceivablesFiltersInput): NormalizedReceivablesFilters {
   return {
     financeDepartmentId: input.financeDepartmentId ?? null,
     status: input.status ?? "active",
@@ -126,7 +133,7 @@ function normalizeFilters(input: ReceivablesFiltersInput): NormalizedFilters {
 }
 
 async function resolveQueryScope(tx: QueryTx, access: ReceivablesAccess, input: ReceivablesFiltersInput): Promise<QueryScope> {
-  const filters = normalizeFilters(input);
+  const filters = normalizeReceivablesFilters(input);
   const grantedDepartmentIds = [...new Set([...access.readDepartmentIds, ...access.writeDepartmentIds])];
   const activeDepartments = grantedDepartmentIds.length
     ? await tx.receivableDepartment.findMany({ where: { id: { in: grantedDepartmentIds }, active: true }, select: { id: true } })
@@ -136,7 +143,7 @@ async function resolveQueryScope(tx: QueryTx, access: ReceivablesAccess, input: 
   const capabilityWriteDepartmentIds = access.writeDepartmentIds.filter((id) => activeDepartmentIds.has(id)).sort();
   const readDepartmentIds = access.canManageAll || access.canViewAll ? null : capabilityReadDepartmentIds;
   if (filters.financeDepartmentId && readDepartmentIds !== null && !readDepartmentIds.includes(filters.financeDepartmentId)) throw forbiddenDepartment();
-  return { ...filters, readDepartmentIds, capabilityReadDepartmentIds, capabilityWriteDepartmentIds };
+  return { ...filters, readDepartmentIds, capabilityReadDepartmentIds, capabilityWriteDepartmentIds, cutoffAt: null };
 }
 
 function queryWhere(scope: QueryScope): Prisma.Sql {
@@ -146,6 +153,7 @@ function queryWhere(scope: QueryScope): Prisma.Sql {
       ? Prisma.sql`q.finance_department_id IN (${Prisma.join(scope.readDepartmentIds.map((id) => Prisma.sql`${id}::uuid`))})`
       : Prisma.sql`FALSE`);
   }
+  if (scope.cutoffAt) clauses.push(Prisma.sql`q.created_at <= ${scope.cutoffAt}`);
   if (scope.financeDepartmentId) clauses.push(Prisma.sql`q.finance_department_id = ${scope.financeDepartmentId}::uuid`);
   if (scope.status !== "all") clauses.push(Prisma.sql`q.status = ${scope.status}::"ReceivableRecordStatus"`);
   if (scope.settlement === "unsettled") clauses.push(Prisma.sql`(q.balance IS NULL OR q.balance <> 0)`);
@@ -356,5 +364,66 @@ export async function queryReceivables(principal: Principal, operation: Receivab
     if (operation.type === "ledger.list") return listLedgers(tx, scope, operation.input);
     if (operation.type === "dashboard") return dashboard(tx, scope);
     return ledgerDetail(tx, access, scope, operation.id);
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+export async function createReceivablesExportSnapshot(principal: Principal, input: ReceivablesFiltersInput) {
+  return prisma.$transaction(async (tx) => {
+    const access = await resolveReceivablesAccess(principal, tx);
+    requireReceivables(access, "export", input.financeDepartmentId);
+    const scope = await resolveQueryScope(tx, access, input);
+    if (scope.readDepartmentIds !== null && scope.readDepartmentIds.length === 0) throw forbiddenDepartment();
+    if (!access.role) throw forbiddenDepartment();
+    return {
+      scopeSnapshot: {
+        role: access.role,
+        all: scope.readDepartmentIds === null,
+        readDepartmentIds: scope.readDepartmentIds ?? [],
+        cutoffAt: new Date().toISOString(),
+      } satisfies ReceivablesExportScopeSnapshot,
+      filterSnapshot: normalizeReceivablesFilters(input),
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+async function resolveReceivablesExportScope(tx: QueryTx, principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters) {
+  const access = await resolveReceivablesAccess(principal, tx);
+  requireReceivables(access, "export", filters.financeDepartmentId ?? undefined);
+  const current = await resolveQueryScope(tx, access, {
+    ...(filters.financeDepartmentId ? { financeDepartmentId: filters.financeDepartmentId } : {}),
+    status: filters.status, settlement: filters.settlement,
+    ...(filters.debtStatus ? { debtStatus: filters.debtStatus } : {}),
+    ...(filters.creditorUnit ? { creditorUnit: filters.creditorUnit } : {}),
+    ...(filters.anomaly ? { anomaly: filters.anomaly } : {}),
+    ...(filters.search ? { search: filters.search } : {}),
+  });
+  const saved = snapshot.all ? null : snapshot.readDepartmentIds;
+  const readDepartmentIds = saved === null
+    ? current.readDepartmentIds
+    : current.readDepartmentIds === null
+      ? saved
+      : saved.filter((id) => current.readDepartmentIds!.includes(id));
+  if (snapshot.all && current.readDepartmentIds !== null || saved !== null && readDepartmentIds !== null && readDepartmentIds.length !== saved.length) throw forbiddenDepartment();
+  if (readDepartmentIds !== null && readDepartmentIds.length === 0) throw forbiddenDepartment();
+  if (filters.financeDepartmentId && readDepartmentIds !== null && !readDepartmentIds.includes(filters.financeDepartmentId)) throw forbiddenDepartment();
+  const cutoffAt = new Date(snapshot.cutoffAt);
+  if (Number.isNaN(cutoffAt.valueOf())) throw Object.assign(new Error("导出范围快照无效"), { statusCode: 409, code: "RECEIVABLES_EXPORT_SNAPSHOT_INVALID" });
+  return { ...current, readDepartmentIds, cutoffAt };
+}
+
+export async function authorizeReceivablesExportSnapshot(principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters) {
+  return prisma.$transaction(async (tx) => {
+    await resolveReceivablesExportScope(tx, principal, snapshot, filters);
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+export async function queryReceivablesExportBatch(principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters, afterId: string | null, batchSize = 500) {
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) throw new Error("RECEIVABLES_EXPORT_BATCH_SIZE_INVALID");
+  return prisma.$transaction(async (tx) => {
+    const scope = await resolveReceivablesExportScope(tx, principal, snapshot, filters);
+    const cte = filteredCte(scope);
+    const cursor = afterId ? Prisma.sql`WHERE f.id > ${afterId}::uuid` : Prisma.empty;
+    const rows = await tx.$queryRaw<RawRow[]>(Prisma.sql`${cte} SELECT ${rowColumns} FROM filtered f ${cursor} ORDER BY f.id ASC LIMIT ${batchSize}`);
+    return rows.map(mapRow);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }

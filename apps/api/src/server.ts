@@ -25,6 +25,7 @@ import { registerProjectReportingRoutes } from "./routes/project-reporting.js";
 import { registerSensitiveExportRoutes } from "./routes/sensitive-exports.js";
 import { registerReceivablesRoutes } from "./routes/receivables.js";
 import { cleanupExpiredSensitiveExports } from "./sensitive-export.js";
+import { cleanupExpiredReceivablesExports, processPendingReceivablesExports } from "./receivables-export.js";
 import { assertCsrfRequest } from "./csrf.js";
 
 const env = loadEnv();
@@ -91,6 +92,27 @@ void processNotificationOutbox(env).catch(() => app.log.error("wechat_delivery_f
 const sensitiveExportCleanupTimer = setInterval(() => void cleanupExpiredSensitiveExports(env).catch((error) => app.log.error({ err: error }, "sensitive_export_cleanup_failed")), 10 * 60 * 1000);
 sensitiveExportCleanupTimer.unref();
 void cleanupExpiredSensitiveExports(env).catch((error) => app.log.error({ err: error }, "sensitive_export_cleanup_failed"));
+const receivablesExportEnvironment = { uploadRoot: env.UPLOAD_ROOT };
+let receivablesExportProcessing = false;
+let receivablesExportCleaning = false;
+const processReceivablesExports = async () => {
+  if (receivablesExportProcessing) return;
+  receivablesExportProcessing = true;
+  try { await processPendingReceivablesExports(receivablesExportEnvironment, 2); }
+  finally { receivablesExportProcessing = false; }
+};
+const cleanReceivablesExports = async () => {
+  if (receivablesExportCleaning) return;
+  receivablesExportCleaning = true;
+  try { await cleanupExpiredReceivablesExports(receivablesExportEnvironment); }
+  finally { receivablesExportCleaning = false; }
+};
+const receivablesExportProcessorTimer = setInterval(() => void processReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_processor_failed")), 1_000);
+receivablesExportProcessorTimer.unref();
+void processReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_processor_failed"));
+const receivablesExportCleanupTimer = setInterval(() => void cleanReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_cleanup_failed")), 10 * 60 * 1_000);
+receivablesExportCleanupTimer.unref();
+void cleanReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_cleanup_failed"));
 
 const listenHost = env.NODE_ENV === "test" && process.env.RECEIVABLES_TEST_LISTEN_HOST === "127.0.0.1" ? "127.0.0.1" : "0.0.0.0";
 await app.listen({ port: env.PORT, host: listenHost });

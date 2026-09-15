@@ -62,6 +62,7 @@
     "smoke:receivables-money": "pnpm --filter @safety/api smoke:receivables-money",
     "smoke:receivables-attachments": "pnpm --filter @safety/api smoke:receivables-attachments",
     "smoke:receivables-import": "pnpm --filter @safety/api smoke:receivables-import",
+    "smoke:receivables-export": "pnpm --filter @safety/api smoke:receivables-export",
     "smoke:phase1-identity": "tsx scripts/phase1-identity-smoke.ts",
     "smoke:phase1-api": "tsx scripts/phase1-api-smoke.mts",
     "smoke:account-lifecycle": "pnpm --filter @safety/api smoke:account-lifecycle",

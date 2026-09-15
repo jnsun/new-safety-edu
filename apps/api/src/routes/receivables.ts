@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { z } from "zod";
 import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
@@ -11,6 +12,7 @@ import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
 import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
 import { applyReceivablesImport, authorizeReceivablesImport, listReceivablesImports, previewReceivablesImport, rollbackReceivablesImport } from "../receivables-import.js";
+import { consumeReceivablesExport, createReceivablesExportJob, issueReceivablesExportToken, listReceivablesExports, removeConsumedReceivablesExport } from "../receivables-export.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type RouteDependencies = {
@@ -62,6 +64,9 @@ const receivablesListInput = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
 }).strict();
 const receivablesDashboardInput = z.object(receivablesFilters).strict();
+const receivablesExportCreateInput = z.object({ filters: z.object(receivablesFilters).strict().default({}) }).strict();
+const receivablesExportListInput = z.object({ page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).strict();
+const receivablesExportTokenInput = z.object({ token: z.string().min(32).max(200) }).strict();
 const ledgerText = (max: number) => z.string().max(max).nullable().optional();
 const ledgerFields = {
   financeDepartmentId: z.string().uuid(),
@@ -102,6 +107,7 @@ const ledgerContext = adminContext;
 const multipartFields = (fields: Record<string, unknown>) => Object.fromEntries(Object.entries(fields).filter(([key]) => key !== "file").map(([key, value]) => [key, value && typeof value === "object" && "value" in value ? (value as { value: unknown }).value : value]));
 
 export async function registerReceivablesRoutes(app: FastifyInstance, deps: RouteDependencies) {
+  const exportEnvironment = { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads" };
   app.get("/api/receivables/access", { preHandler: deps.authenticate }, async (request) => ({ data: await resolveReceivablesAccess(request.principal as Principal) }));
 
   if (deps.enableAccessSmokeRoute) {
@@ -163,6 +169,24 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.get("/api/receivables/dashboard", { preHandler: deps.authenticate }, async (request) => ({
     data: await queryReceivables(request.principal as Principal, { type: "dashboard", input: receivablesDashboardInput.parse(request.query) }),
   }));
+  app.get("/api/receivables/exports", { preHandler: deps.authenticate }, async (request) => ({
+    data: await listReceivablesExports(request.principal as Principal, receivablesExportListInput.parse(request.query), exportEnvironment),
+  }));
+  app.post("/api/receivables/exports", { preHandler: deps.authenticate }, async (request, reply) => {
+    const { filters } = receivablesExportCreateInput.parse(request.body);
+    const job = await createReceivablesExportJob(request.principal as Principal, filters, exportEnvironment);
+    return reply.code(202).send({ data: { id: job.id, status: job.status } });
+  });
+  app.post("/api/receivables/exports/:id/token", { preHandler: deps.authenticate }, async (request) => ({
+    data: await issueReceivablesExportToken(idParams.parse(request.params).id, request.principal as Principal),
+  }));
+  app.post("/api/receivables/exports/:id/download", { preHandler: deps.authenticate }, async (request, reply) => {
+    const { token } = receivablesExportTokenInput.parse(request.body);
+    const file = await consumeReceivablesExport(idParams.parse(request.params).id, token, request.principal as Principal, exportEnvironment);
+    reply.raw.once("finish", () => void removeConsumedReceivablesExport(file.path, exportEnvironment).catch((error) => app.log.error({ err: error }, "receivables_export_response_cleanup_failed")));
+    reply.header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+    return reply.send(createReadStream(file.path));
+  });
   app.get("/api/receivables/imports", { preHandler: deps.authenticate }, async (request) => ({ data: await listReceivablesImports(request.principal as Principal) }));
   app.post("/api/receivables/imports/preview", { preHandler: deps.authenticate }, async (request, reply) => {
     await authorizeReceivablesImport(request.principal as Principal);
