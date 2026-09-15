@@ -46,6 +46,25 @@ async function createIdentity(input: { label: string; accountStatus?: AccountSta
   return account;
 }
 
+async function createDepartmentFixture(label: string, active: boolean) {
+  const row = await prisma.receivableDepartment.create({ data: { name: `${marker}-${label}`, active } });
+  ids.departments.push(row.id);
+  return row;
+}
+
+async function createDictionaryFixture(category: string, label: string, active: boolean) {
+  const row = await prisma.receivableDictionaryOption.create({ data: { category, value: `${marker}-${label}`, active } });
+  ids.dictionaries.push(row.id);
+  return row;
+}
+
+async function createLedgerFixture(financeDepartmentId: string, label: string, createdBy: string) {
+  const contractNo = `${marker}-${label}`;
+  const row = await prisma.receivableLedger.create({ data: { financeDepartmentId, contractNo, contractNoNormalized: contractNo, createdBy } });
+  ids.ledgers.push(row.id);
+  return row;
+}
+
 async function bearer(accountId: string) {
   const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { sessionVersion: true } });
   const session = await prisma.refreshSession.create({ data: { accountId, tokenHash: `smoke-${randomUUID()}`, clientKind: "rxa-admin-smoke", expiresAt: new Date(Date.now() + 3_600_000), absoluteExpiresAt: new Date(Date.now() + 3_600_000) } });
@@ -64,6 +83,28 @@ async function json<T>(path: string, token: string, init: RequestInit = {}) {
 
 async function expectStatus(path: string, token: string, status: number, init: RequestInit = {}) {
   const result = await json(path, token, init);
+  assert.equal(result.response.status, status, `${init.method ?? "GET"} ${path}: ${JSON.stringify(result.body)}`);
+  return result.body;
+}
+
+async function administrationFacts() {
+  const [grants, departments, dictionaries, ledgers, audits] = await Promise.all([
+    prisma.receivableAccessGrant.findMany({ where: { accountId: { in: ids.accounts } }, select: { id: true, accountId: true, role: true, active: true, revision: true, revokedAt: true, departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true }, orderBy: { financeDepartmentId: "asc" } } }, orderBy: { id: "asc" } }),
+    prisma.receivableDepartment.findMany({ where: { name: { startsWith: marker } }, select: { id: true, name: true, code: true, sortOrder: true, active: true, revision: true }, orderBy: { id: "asc" } }),
+    prisma.receivableDictionaryOption.findMany({ where: { value: { startsWith: marker } }, select: { id: true, category: true, value: true, sortOrder: true, active: true, revision: true }, orderBy: { id: "asc" } }),
+    prisma.receivableLedger.findMany({ where: { contractNo: { startsWith: marker } }, select: { id: true, financeDepartmentId: true, debtStatus: true, revision: true }, orderBy: { id: "asc" } }),
+    prisma.auditLog.findMany({ where: { actorId: { in: ids.accounts }, action: { startsWith: "receivables.admin." } }, select: { id: true, action: true, objectId: true, metadata: true }, orderBy: { id: "asc" } }),
+  ]);
+  return { grants, departments, dictionaries, ledgers, audits };
+}
+
+async function expectRejectedWithoutMutation(path: string, token: string, status: number, init: RequestInit, trackCreated?: "grant") {
+  const before = await administrationFacts();
+  const result = await json<{ id?: string }>(path, token, init);
+  const createdId = result.body.data?.id;
+  if (trackCreated === "grant" && createdId) ids.grants.push(createdId);
+  const after = await administrationFacts();
+  assert.deepEqual(after, before, `${init.method ?? "GET"} ${path} changed business or audit facts on rejection`);
   assert.equal(result.response.status, status, `${init.method ?? "GET"} ${path}: ${JSON.stringify(result.body)}`);
   return result.body;
 }
@@ -136,6 +177,7 @@ try {
   const companyAdmin = await createIdentity({ label: "company-admin", role: "company_admin", scopeType: "company" });
   const inactiveAccount = await createIdentity({ label: "inactive-account", accountStatus: "disabled" });
   const inactivePerson = await createIdentity({ label: "inactive-person", personStatus: "disabled" });
+  const inactiveAfterGrant = await createIdentity({ label: "inactive-after-grant" });
   await prisma.receivableSetting.create({ data: { id: 1, financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
 
   const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, replacementOwner, financeAdmin, reporter, readonly, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
@@ -208,6 +250,8 @@ try {
 
   const ledger = await prisma.receivableLedger.create({ data: { financeDepartmentId: departmentA.id, contractNo: `${marker}-contract-1`, contractNoNormalized: `${marker}-contract-1`, debtStatus: sourceOption.value, createdBy: owner.id } });
   ids.ledgers.push(ledger.id);
+  await expectRejectedWithoutMutation(`/api/receivables/departments/${departmentA.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: departmentB.id }) });
+  await expectRejectedWithoutMutation(`/api/receivables/dictionary-options/${sourceOption.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: targetOption.id }) });
   const auditCountBeforeRejectedRenames = await prisma.auditLog.count({ where: { actorId: financeAdmin.id, action: { startsWith: "receivables.admin." } } });
   await expectStatus(`/api/receivables/departments/${departmentA.id}`, tokens.financeAdmin!, 409, { method: "PATCH", body: JSON.stringify({ revision: departmentA.revision, name: `${marker}-renamed-department` }) });
   await expectStatus(`/api/receivables/dictionary-options/${sourceOption.id}`, tokens.financeAdmin!, 409, { method: "PATCH", body: JSON.stringify({ revision: sourceOption.revision, value: `${marker}-renamed-option` }) });
@@ -219,6 +263,14 @@ try {
   const deactivatedOption = (await expectStatus<DictionaryResponse>(`/api/receivables/dictionary-options/${sourceOption.id}`, tokens.financeAdmin!, 200, { method: "PATCH", body: JSON.stringify({ revision: sourceOption.revision, active: false, reason: "historical option" }) })).data!;
   assert.equal(deactivatedOption.active, false);
   await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ accountId: replacementOwner.id, role: "readonly", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "inactive department scope" }) });
+  await expectRejectedWithoutMutation("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ accountId: replacementOwner.id, role: "readonly", canCreate: false, canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "strict grant create", canManageAccess: true }) }, "grant");
+  await expectRejectedWithoutMutation(`/api/receivables/grants/${reporterGrant.id}`, tokens.owner!, 400, { method: "PATCH", body: JSON.stringify({ revision: reporterGrant.revision, role: "reporter", canCreate: false, canExport: true, canViewAll: true, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "strict grant update", canManageAccess: true }) });
+
+  const inactiveSubjectGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ accountId: inactiveAfterGrant.id, role: "readonly", canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "grant before identity deactivation" }) })).data!;
+  ids.grants.push(inactiveSubjectGrant.id);
+  await prisma.account.update({ where: { id: inactiveAfterGrant.id }, data: { status: "disabled" } });
+  const inactiveSubjectRevocation = (await expectStatus<GrantResponse>(`/api/receivables/grants/${inactiveSubjectGrant.id}`, tokens.owner!, 200, { method: "PATCH", body: JSON.stringify({ revision: inactiveSubjectGrant.revision, revoke: true, reason: "identity disabled" }) })).data!;
+  assert.equal(inactiveSubjectRevocation.active, false);
 
   const departmentPreview = (await expectStatus<PreviewResponse>(`/api/receivables/departments/${departmentA.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: departmentB.id }) })).data!;
   assert.equal(departmentPreview.impactCount, 1);
@@ -248,6 +300,58 @@ try {
   assert.equal(dictionaryPreview.impactCount, 1);
   await expectStatus(`/api/receivables/dictionary-options/${sourceOption.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: targetOption.id, token: dictionaryPreview.token, confirm: true, reason: "replace historical status" }) });
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: ledger.id }, select: { debtStatus: true } })).debtStatus, targetOption.value);
+
+  const activeApplySource = await createDepartmentFixture("active-apply-source", false);
+  const activeApplyTarget = await createDepartmentFixture("active-apply-target", true);
+  const activeApplyPreview = (await expectStatus<PreviewResponse>(`/api/receivables/departments/${activeApplySource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: activeApplyTarget.id }) })).data!;
+  await prisma.receivableDepartment.update({ where: { id: activeApplySource.id }, data: { active: true } });
+  await expectRejectedWithoutMutation(`/api/receivables/departments/${activeApplySource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: activeApplyTarget.id, token: activeApplyPreview.token, confirm: true, reason: "active source rejected at apply" }) });
+
+  const activeDictionarySource = await createDictionaryFixture("debt_status", "active-dictionary-source", false);
+  const activeDictionaryTarget = await createDictionaryFixture("debt_status", "active-dictionary-target", true);
+  const activeDictionaryPreview = (await expectStatus<PreviewResponse>(`/api/receivables/dictionary-options/${activeDictionarySource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: activeDictionaryTarget.id }) })).data!;
+  await prisma.receivableDictionaryOption.update({ where: { id: activeDictionarySource.id }, data: { active: true } });
+  await expectRejectedWithoutMutation(`/api/receivables/dictionary-options/${activeDictionarySource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: activeDictionaryTarget.id, token: activeDictionaryPreview.token, confirm: true, reason: "active dictionary source rejected at apply" }) });
+
+  const unsupportedSource = await createDictionaryFixture("comm_method", "unsupported-source", false);
+  const unsupportedTarget = await createDictionaryFixture("comm_method", "unsupported-target", true);
+  await expectRejectedWithoutMutation(`/api/receivables/dictionary-options/${unsupportedSource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: unsupportedTarget.id }) });
+
+  const staleSource = await createDepartmentFixture("stale-source-revision", false);
+  const staleSourceTarget = await createDepartmentFixture("stale-source-target", true);
+  const staleSourcePreview = (await expectStatus<PreviewResponse>(`/api/receivables/departments/${staleSource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: staleSourceTarget.id }) })).data!;
+  await prisma.receivableDepartment.update({ where: { id: staleSource.id }, data: { revision: { increment: 1 } } });
+  await expectRejectedWithoutMutation(`/api/receivables/departments/${staleSource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: staleSourceTarget.id, token: staleSourcePreview.token, confirm: true, reason: "stale source revision" }) });
+
+  const staleTargetSource = await createDepartmentFixture("stale-target-source", false);
+  const staleTarget = await createDepartmentFixture("stale-target", true);
+  const staleTargetPreview = (await expectStatus<PreviewResponse>(`/api/receivables/departments/${staleTargetSource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: staleTarget.id }) })).data!;
+  await prisma.receivableDepartment.update({ where: { id: staleTarget.id }, data: { revision: { increment: 1 } } });
+  await expectRejectedWithoutMutation(`/api/receivables/departments/${staleTargetSource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: staleTarget.id, token: staleTargetPreview.token, confirm: true, reason: "stale target revision" }) });
+
+  const fingerprintSource = await createDepartmentFixture("fingerprint-source", false);
+  const fingerprintHolding = await createDepartmentFixture("fingerprint-holding", true);
+  const fingerprintTarget = await createDepartmentFixture("fingerprint-target", true);
+  const fingerprintLedgerA = await createLedgerFixture(fingerprintSource.id, "fingerprint-a", owner.id);
+  const fingerprintLedgerB = await createLedgerFixture(fingerprintHolding.id, "fingerprint-b", owner.id);
+  const fingerprintPreview = (await expectStatus<PreviewResponse>(`/api/receivables/departments/${fingerprintSource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: fingerprintTarget.id }) })).data!;
+  assert.equal(fingerprintPreview.impactCount, 1);
+  await prisma.$transaction([
+    prisma.receivableLedger.update({ where: { id: fingerprintLedgerA.id }, data: { financeDepartmentId: fingerprintHolding.id } }),
+    prisma.receivableLedger.update({ where: { id: fingerprintLedgerB.id }, data: { financeDepartmentId: fingerprintSource.id } }),
+  ]);
+  await expectRejectedWithoutMutation(`/api/receivables/departments/${fingerprintSource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: fingerprintTarget.id, token: fingerprintPreview.token, confirm: true, reason: "same count different records" }) });
+
+  const replaySource = await createDepartmentFixture("replay-source", false);
+  const replayTarget = await createDepartmentFixture("replay-target", true);
+  const replayPreview = (await expectStatus<PreviewResponse>(`/api/receivables/departments/${replaySource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: replayTarget.id }) })).data!;
+  const replaySourceRevision = replaySource.revision;
+  const replayTargetRevision = replayTarget.revision;
+  const zeroImpactApply = (await expectStatus<{ impactCount: number }>(`/api/receivables/departments/${replaySource.id}/migrate`, tokens.owner!, 200, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: replayTarget.id, token: replayPreview.token, confirm: true, reason: "consume zero impact token" }) })).data!;
+  assert.equal(zeroImpactApply.impactCount, 0);
+  assert.equal((await prisma.receivableDepartment.findUniqueOrThrow({ where: { id: replaySource.id }, select: { revision: true } })).revision, replaySourceRevision + 1);
+  assert.equal((await prisma.receivableDepartment.findUniqueOrThrow({ where: { id: replayTarget.id }, select: { revision: true } })).revision, replayTargetRevision + 1);
+  await expectRejectedWithoutMutation(`/api/receivables/departments/${replaySource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: replayTarget.id, token: replayPreview.token, confirm: true, reason: "replay rejected" }) });
 
   const grants = (await expectStatus<GrantResponse[]>("/api/receivables/grants", tokens.owner!, 200)).data!;
   assert.ok(grants.some((grant) => grant.id === adminGrant.id));
