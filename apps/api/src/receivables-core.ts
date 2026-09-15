@@ -110,11 +110,7 @@ export function assertTransition(currentStatus: string, action: string): void {
 
 function decimal(value: DecimalValue): Prisma.Decimal {
   try {
-    const amount = new Prisma.Decimal(value);
-    if (!amount.isFinite() || amount.decimalPlaces() > 4 || amount.abs().trunc().toFixed(0).length > 14) {
-      throw new Error("DECIMAL_18_4_INVALID");
-    }
-    return amount;
+    return assertDecimal18_4(new Prisma.Decimal(value));
   } catch (error) {
     if (error instanceof Error && error.message === "DECIMAL_18_4_INVALID") throw error;
     throw new Error("DECIMAL_18_4_INVALID");
@@ -133,5 +129,12 @@ function isAmountDetail(value: ReceivableAmount): value is ReceivableAmountDetai
 }
 
 function format(value: Prisma.Decimal): string {
-  return value.toFixed(4);
+  return assertDecimal18_4(value).toFixed(4);
+}
+
+function assertDecimal18_4(value: Prisma.Decimal): Prisma.Decimal {
+  if (!value.isFinite() || value.decimalPlaces() > 4 || value.abs().trunc().toFixed(0).length > 14) {
+    throw new Error("DECIMAL_18_4_INVALID");
+  }
+  return value;
 }

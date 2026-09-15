@@ -36,6 +36,12 @@ assert.throws(
   () => calculateReceivableAmounts({ finalAmount: "100000000000000", writeoffAmount: "0", invoiceAmounts: [], receiptAmounts: [] }),
   /DECIMAL_18_4_INVALID/,
 );
+for (const input of [
+  { finalAmount: "99999999999999.9999", writeoffAmount: "0", invoiceAmounts: ["99999999999999.9999", "99999999999999.9999"], receiptAmounts: [] },
+  { finalAmount: "99999999999999.9999", writeoffAmount: "0", invoiceAmounts: ["99999999999999.9999"], receiptAmounts: ["-99999999999999.9999"] },
+]) {
+  assert.throws(() => calculateReceivableAmounts(input), /DECIMAL_18_4_INVALID/);
+}
 assert.equal(calculateReceivableAmounts({ finalAmount: null, writeoffAmount: "0", invoiceAmounts: ["80"], receiptAmounts: ["30"] }).balance, null);
 assert.equal(calculateReceivableAmounts({ finalAmount: null, writeoffAmount: "0", invoiceAmounts: [], receiptAmounts: [] }).anomaly, "final_amount_missing");
 assert.equal(calculateReceivableAmounts({ finalAmount: "100", writeoffAmount: "0", invoiceAmounts: [], receiptAmounts: ["101"] }).anomaly, "over_received");
