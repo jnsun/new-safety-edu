@@ -27,6 +27,7 @@
     "check:file-association-policy": "tsx scripts/check-file-association-policy.mts",
     "check:receivables-core": "tsx scripts/check-receivables-core.mts",
     "check:receivables-schema": "tsx scripts/check-receivables-schema.mts",
+    "check:receivables-access": "tsx scripts/check-receivables-access.mts",
     "check:transaction-audit-policy": "tsx scripts/check-transaction-audit-policy.mts",
     "check:request-policy": "tsx scripts/check-request-policy.mts",
     "check:change-request-lifecycle": "tsx scripts/check-change-request-lifecycle.mts",
@@ -53,6 +54,7 @@
     "smoke:sensitive-profile": "tsx scripts/smoke-sensitive-profile.mts",
     "smoke:private-file-access": "tsx scripts/smoke-private-file-access.mts",
     "smoke:file-association": "tsx scripts/smoke-file-association.mts",
+    "smoke:receivables-access": "tsx scripts/smoke-receivables-access.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
   },
