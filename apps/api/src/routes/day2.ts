@@ -52,6 +52,7 @@ const normalize = (value: unknown) => Array.isArray(value) ? [...value].map(Stri
 const sameAnswer = (a: unknown, b: unknown) => JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
 type SnapshotQuestion = { id: string; type: QuestionType; prompt: string; options: unknown; correct: unknown; score: number };
 type ExamSnapshot = { questions: SnapshotQuestion[]; totalScore: number };
+type BatchPaperSnapshot = { mode: "fixed" | "random"; questions: SnapshotQuestion[]; randomCount?: number };
 const publicAttempt = (attempt: { id: string; attemptNumber: number; startedAt: Date; expiresAt: Date; status: string; snapshot: Prisma.JsonValue; answers?: Array<{ questionId: string; answer: Prisma.JsonValue }> }) => {
   const snapshot = attempt.snapshot as unknown as ExamSnapshot;
   return { id: attempt.id, attemptNumber: attempt.attemptNumber, startedAt: attempt.startedAt, expiresAt: attempt.expiresAt, status: attempt.status,
@@ -107,18 +108,32 @@ async function createAssignments(tx: Prisma.TransactionClient, batchId: string, 
   }
 }
 
+export async function freezePaper(paperId: string): Promise<BatchPaperSnapshot> {
+  const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id: paperId }, include: { items: { include: { question: true }, orderBy: { sortOrder: "asc" } }, bank: { include: { questions: { where: { active: true }, orderBy: { createdAt: "asc" } } } } } });
+  const questions = paper.mode === "fixed"
+    ? paper.items.map(({ question, score }) => ({ id: question.id, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, score: Number(score) }))
+    : (paper.bank?.questions ?? []).map((question) => ({ id: question.id, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, score: 100 / (paper.randomCount ?? 1) }));
+  if (!questions.length || (paper.mode === "random" && questions.length < (paper.randomCount ?? 0))) throw Object.assign(new Error("试卷题目不足"), { statusCode: 409, code: "INSUFFICIENT_QUESTIONS" });
+  return { mode: paper.mode, questions, ...(paper.mode === "random" ? { randomCount: paper.randomCount ?? 0 } : {}) };
+}
+
 export async function autoDispatch(type: "three_level" | "project_induction", personId: string, env: Env, projectId?: string) {
-  const template = await prisma.trainingTemplate.findFirst({ where: { type, active: true, OR: [
-    ...(projectId ? [{ scopeType: "project" as const, scopeId: projectId }] : []), { scopeType: "company" as const, scopeId: null }
-  ] }, orderBy: { createdAt: "asc" } });
-  const paper = await prisma.examPaper.findFirst({ orderBy: { createdAt: "asc" } });
-  if (!template || !paper) return null;
+  const config = projectId
+    ? await prisma.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "project", scopeId: projectId }, include: { template: true }, orderBy: { createdAt: "desc" } })
+      ?? await prisma.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "company", scopeId: null }, include: { template: true }, orderBy: { createdAt: "desc" } })
+    : await prisma.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "company", scopeId: null }, include: { template: true }, orderBy: { createdAt: "desc" } });
+  if (!config || !config.template.active) {
+    const admins = await prisma.account.findMany({ where: { status: "active", personId: { not: null }, roles: { some: { active: true, role: "company_admin" } } }, select: { personId: true } });
+    for (const admin of admins) if (admin.personId) await prisma.notification.upsert({ where: { dedupeKey: `auto-config-missing:${type}:${projectId ?? "company"}` }, create: { personId: admin.personId, title: "自动培训配置缺失", body: `${type === "three_level" ? "三级教育" : "项目入场教育"}未生成，请先配置默认模板和试卷。`, dedupeKey: `auto-config-missing:${type}:${projectId ?? "company"}` }, update: {} });
+    return null;
+  }
+  const paperSnapshot = await freezePaper(config.paperId);
   const businessKey = `auto:${type}:${projectId ?? "company"}:${personId}`;
   return prisma.$transaction(async (tx) => {
     const existing = await tx.trainingBatch.findUnique({ where: { businessKey }, include: { assignments: true } });
     if (existing) return existing;
-    const batch = await tx.trainingBatch.create({ data: { businessKey, name: type === "three_level" ? "员工基础三级教育" : "项目入场教育", type, templateId: template.id, paperId: paper.id, projectId: projectId ?? null } });
-    await createAssignments(tx, batch.id, template.id, [personId], env);
+    const batch = await tx.trainingBatch.create({ data: { businessKey, name: type === "three_level" ? "员工基础三级教育" : "项目入场教育", type, templateId: config.templateId, paperId: config.paperId, paperSnapshot: paperSnapshot as unknown as Prisma.InputJsonValue, projectId: projectId ?? null } });
+    await createAssignments(tx, batch.id, config.templateId, [personId], env);
     return batch;
   });
 }
@@ -126,6 +141,15 @@ export async function autoDispatch(type: "three_level" | "project_induction", pe
 export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   const authenticated = { preHandler: deps.authenticate };
   const manager = { preHandler: [deps.authenticate, deps.requireManager] };
+
+  app.get("/api/training-automation-configs", manager, async (request) => ({ data: await prisma.trainingAutomationConfig.findMany({ where: await visibleScope(principalOf(request)), include: { template: true, paper: true }, orderBy: { createdAt: "desc" } }) }));
+  app.post("/api/training-automation-configs", manager, async (request, reply) => {
+    const principal = principalOf(request); const input = scopeSchema.extend({ type: z.enum(["three_level", "project_induction"]), templateId: z.string().uuid(), paperId: z.string().uuid() }).parse(request.body); await assertScope(principal, input.scopeType, input.scopeId);
+    const [template, snapshot] = await Promise.all([prisma.trainingTemplate.findUniqueOrThrow({ where: { id: input.templateId } }), freezePaper(input.paperId)]); void snapshot;
+    if (template.type !== input.type || !template.active) throw Object.assign(new Error("默认模板类型不匹配或已停用"), { statusCode: 409, code: "AUTOMATION_TEMPLATE_INVALID" });
+    const row = await prisma.$transaction(async (tx) => { await tx.trainingAutomationConfig.updateMany({ where: { type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null, active: true }, data: { active: false } }); return tx.trainingAutomationConfig.create({ data: { ...input, scopeId: input.scopeId ?? null, createdBy: principal.accountId } }); });
+    await auditCritical(principal.accountId, "training.automation_config", "training_automation_config", row.id, { type: input.type, scopeType: input.scopeType, scopeId: input.scopeId }, "var/audit-fallback.ndjson"); return reply.code(201).send({ data: row });
+  });
 
   app.get("/api/coursewares", manager, async (request) => ({ data: await prisma.courseware.findMany({ where: await visibleScope(principalOf(request)), include: { versions: { orderBy: { version: "desc" } } }, orderBy: { createdAt: "desc" } }) }));
   app.post("/api/coursewares", manager, async (request, reply) => {
@@ -238,14 +262,17 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   app.post("/api/training-batches", manager, async (request, reply) => {
     const principal = principalOf(request);
     const input = z.object({ name: z.string().min(2).max(180), type: z.enum(["three_level", "project_induction", "routine", "change_update"]), templateId: z.string().uuid(), paperId: z.string().uuid().optional(), projectId: z.string().uuid().optional(), dueAt: z.coerce.date().optional(), durationMin: z.number().int().min(1).max(240).default(30), passScore: z.number().min(0).max(100).default(80), maxAttempts: z.number().int().min(1).max(10).default(3), personIds: z.array(z.string().uuid()).default([]), organizationIds: z.array(z.string().uuid()).default([]) }).parse(request.body);
+    if (["three_level", "project_induction"].includes(input.type) && !input.paperId) throw Object.assign(new Error("三级教育和项目入场教育必须配置考试"), { statusCode: 400, code: "EXAM_REQUIRED" });
     if (input.type === "project_induction" && !input.projectId) throw Object.assign(new Error("项目入场教育必须绑定项目"), { statusCode: 400, code: "PROJECT_REQUIRED" });
     if (input.projectId) { if (!await canAccessProject(principal, input.projectId)) forbidden(); const project = await prisma.project.findUniqueOrThrow({ where: { id: input.projectId }, select: { status: true } }); if (project.status !== "active") throw Object.assign(new Error("暂停或结束项目不能下发新培训"), { statusCode: 409, code: "PROJECT_READ_ONLY" }); }
     const template = await prisma.trainingTemplate.findUniqueOrThrow({ where: { id: input.templateId } }); await assertScope(principal, template.scopeType, template.scopeId);
     if (template.type !== input.type) throw Object.assign(new Error("模板培训类型不匹配"), { statusCode: 400, code: "TYPE_MISMATCH" });
+    let paperSnapshot: BatchPaperSnapshot | undefined;
     if (input.paperId) {
       const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id: input.paperId }, include: { bank: true, items: { include: { question: { include: { bank: true } } } } } });
       if (paper.bank) await assertScope(principal, paper.bank.scopeType, paper.bank.scopeId);
       for (const item of paper.items) await assertScope(principal, item.question.bank.scopeType, item.question.bank.scopeId);
+      paperSnapshot = await freezePaper(input.paperId);
     }
     if (input.personIds.length) throw Object.assign(new Error("培训下发只允许按完整部门或完整项目选择"), { statusCode: 400, code: "INDIVIDUAL_TARGET_DISABLED" });
     const ids = new Set<string>();
@@ -264,7 +291,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const persons = await prisma.person.findMany({ where: { id: { in: [...ids] }, status: "active", ...(input.type === "three_level" ? { type: "employee" as const } : {}) }, select: { id: true } });
     for (const person of persons) if (!await canAccessPerson(principal, person.id)) forbidden();
     if (!persons.length) throw Object.assign(new Error("没有符合条件的在用人员"), { statusCode: 400, code: "NO_TARGETS" });
-    const batch = await prisma.$transaction(async (tx) => { const created = await tx.trainingBatch.create({ data: { businessKey: `manual:${randomUUID()}`, name: input.name, type: input.type, templateId: input.templateId, paperId: input.paperId ?? null, projectId: input.projectId ?? null, dueAt: input.dueAt ?? null, durationMin: input.durationMin, passScore: input.passScore, maxAttempts: input.maxAttempts } }); await createAssignments(tx, created.id, input.templateId, persons.map(({ id }) => id), deps.env); return created; });
+    const batch = await prisma.$transaction(async (tx) => { const created = await tx.trainingBatch.create({ data: { businessKey: `manual:${randomUUID()}`, name: input.name, type: input.type, templateId: input.templateId, paperId: input.paperId ?? null, paperSnapshot: paperSnapshot as unknown as Prisma.InputJsonValue, projectId: input.projectId ?? null, dueAt: input.dueAt ?? null, durationMin: input.durationMin, passScore: input.passScore, maxAttempts: input.maxAttempts } }); await createAssignments(tx, created.id, input.templateId, persons.map(({ id }) => id), deps.env); return created; });
     audit(principal.accountId, "training_batch.dispatch", "training_batch", batch.id, { assignmentCount: persons.length });
     return reply.code(201).send({ data: { ...batch, assignmentCount: persons.length } });
   });
@@ -360,10 +387,10 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
       if (!(["pending_exam", "remediation_required"] as string[]).includes(current.status)) throw Object.assign(new Error("当前任务不可开始考试"), { statusCode: 409, code: "INVALID_ASSIGNMENT_STATE" });
       if (await tx.learningProgress.count({ where: { assignmentId: id, completedAt: null } })) throw Object.assign(new Error("请先完成全部课件"), { statusCode: 409, code: "LEARNING_INCOMPLETE" });
       if (!current.batch.paperId) throw Object.assign(new Error("本次培训不要求考试"), { statusCode: 409, code: "EXAM_NOT_REQUIRED" });
-      const paper = await tx.examPaper.findUniqueOrThrow({ where: { id: current.batch.paperId }, include: { items: { include: { question: true }, orderBy: { sortOrder: "asc" } }, bank: { include: { questions: { where: { active: true } } } } } });
-      const selected = paper.mode === "fixed" ? paper.items.map((item) => ({ question: item.question, score: Number(item.score) })) : (paper.bank?.questions ?? []).sort(() => Math.random() - .5).slice(0, paper.randomCount ?? 0).map((question) => ({ question, score: 100 / (paper.randomCount ?? 1) }));
-      if (!selected.length || (paper.mode === "random" && selected.length !== paper.randomCount)) throw Object.assign(new Error("试卷题目不足"), { statusCode: 409, code: "INSUFFICIENT_QUESTIONS" });
-      const snapshot: ExamSnapshot = { questions: selected.map(({ question, score }) => ({ id: question.id, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, score })), totalScore: selected.reduce((sum, item) => sum + item.score, 0) };
+      const frozen = current.batch.paperSnapshot as unknown as BatchPaperSnapshot | null;
+      if (!frozen?.questions.length) throw Object.assign(new Error("培训批次缺少考试快照"), { statusCode: 409, code: "BATCH_PAPER_SNAPSHOT_MISSING" });
+      const questions = frozen.mode === "random" ? [...frozen.questions].sort(() => Math.random() - .5).slice(0, frozen.randomCount) : frozen.questions;
+      const snapshot: ExamSnapshot = { questions, totalScore: questions.reduce((sum, item) => sum + item.score, 0) };
       const attemptNumber = await tx.examAttempt.count({ where: { assignmentId: id } }) + 1;
       return tx.examAttempt.create({ data: { assignmentId: id, attemptNumber, snapshot: snapshot as unknown as Prisma.InputJsonValue, expiresAt: new Date(Date.now() + current.batch.durationMin * 60_000) } });
     });
@@ -390,7 +417,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
       if (attempt.status === "submitted") return { score: Number(attempt.score), passed: Boolean(attempt.passed), assignmentStatus: attempt.assignment.status, fresh: false };
       if (attempt.expiresAt < new Date()) throw Object.assign(new Error("考试已超时"), { statusCode: 409, code: "ATTEMPT_EXPIRED" });
       const snapshot = attempt.snapshot as unknown as ExamSnapshot; const answers = new Map(attempt.answers.map((answer) => [answer.questionId, answer.answer]));
-      const raw = snapshot.questions.reduce((sum, question) => sum + (sameAnswer(answers.get(question.id), question.correct) ? question.score : 0), 0); const score = snapshot.totalScore ? Math.round(raw / snapshot.totalScore * 10000) / 100 : 0; const passed = score >= Number(attempt.assignment.batch.passScore); const assignmentStatus = passed ? "pending_signature" : attempt.attemptNumber >= attempt.assignment.batch.maxAttempts ? "locked" : "remediation_required";
+      const raw = snapshot.questions.reduce((sum, question) => sum + (sameAnswer(answers.get(question.id), question.correct) ? question.score : 0), 0); const score = snapshot.totalScore ? Math.round(raw / snapshot.totalScore * 10000) / 100 : 0; const passed = score >= Number(attempt.assignment.batch.passScore); const assignmentStatus = passed ? "pending_signature" : attempt.attemptNumber >= attempt.assignment.batch.maxAttempts + attempt.assignment.extraAttempts ? "locked" : "remediation_required";
       await tx.examAttempt.update({ where: { id }, data: { status: "submitted", submittedAt: new Date(), score, passed } }); await tx.trainingAssignment.update({ where: { id: attempt.assignmentId }, data: { status: assignmentStatus } }); if (!passed && assignmentStatus === "remediation_required") { const originals = await tx.learningProgress.findMany({ where: { assignmentId: attempt.assignmentId, remediationRound: 0 }, select: { coursewareVersionId: true } }); await tx.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: attempt.assignmentId, coursewareVersionId: item.coursewareVersionId, remediationRound: attempt.attemptNumber })), skipDuplicates: true }); }
       return { score, passed, assignmentStatus, fresh: true };
     });
@@ -417,6 +444,6 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   });
   app.post("/api/assignments/:id/unlock", manager, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const assignment = await assertAssignment(principal, id, true); if (assignment.status !== "locked") throw Object.assign(new Error("任务未锁定"), { statusCode: 409, code: "NOT_LOCKED" }); const reason = z.object({ reason: z.string().trim().min(2).max(300) }).parse(request.body).reason;
-    const round = await prisma.examAttempt.count({ where: { assignmentId: id } }); const originals = await prisma.learningProgress.findMany({ where: { assignmentId: id, remediationRound: 0 }, select: { coursewareVersionId: true } }); await prisma.$transaction([prisma.trainingAssignment.update({ where: { id }, data: { status: "remediation_required" } }), prisma.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: id, coursewareVersionId: item.coursewareVersionId, remediationRound: round })), skipDuplicates: true })]); await auditCritical(principal.accountId, "assignment.unlock", "training_assignment", id, { reason }, "var/audit-fallback.ndjson"); return { data: { status: "remediation_required" } };
+    const round = await prisma.examAttempt.count({ where: { assignmentId: id } }); const originals = await prisma.learningProgress.findMany({ where: { assignmentId: id, remediationRound: 0 }, select: { coursewareVersionId: true } }); await prisma.$transaction([prisma.trainingAssignment.update({ where: { id }, data: { status: "remediation_required", extraAttempts: { increment: 1 } } }), prisma.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: id, coursewareVersionId: item.coursewareVersionId, remediationRound: round })), skipDuplicates: true })]); await auditCritical(principal.accountId, "assignment.unlock", "training_assignment", id, { reason, addedAttempts: 1 }, "var/audit-fallback.ndjson"); return { data: { status: "remediation_required", addedAttempts: 1 } };
   });
 }

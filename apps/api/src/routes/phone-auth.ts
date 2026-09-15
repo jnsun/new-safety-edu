@@ -6,6 +6,7 @@ import { prisma } from "../db.js";
 import { issueSession } from "../auth.js";
 import { normalizePhone } from "../crypto.js";
 import { auditCritical } from "../audit.js";
+import { bindAccountToPerson, grantRole } from "../identity.js";
 
 const phoneSchema = z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/));
 const digest = (value: string, env: Env) => createHmac("sha256", env.JWT_SECRET).update(value).digest("hex");
@@ -17,6 +18,7 @@ async function deliverCode(phone: string, code: string, env: Env) {
 }
 
 export async function registerPhoneAuthRoutes(app: FastifyInstance, deps: { env: Env }) {
+  app.get("/api/auth/capabilities", async () => ({ data: { phoneLogin: Boolean(deps.env.SMS_SEND_ENDPOINT && deps.env.SMS_SEND_TOKEN), wechatLogin: Boolean(deps.env.WECHAT_APP_ID && deps.env.WECHAT_APP_SECRET) } }));
   app.post("/api/auth/phone/code", async (request) => {
     const phone = phoneSchema.parse(z.object({ phone: z.string() }).parse(request.body).phone); const phoneHash = digest(phone, deps.env);
     const recent = await prisma.phoneVerificationCode.findFirst({ where: { phoneHash, purpose: "login", createdAt: { gt: new Date(Date.now() - 60_000) } } });
@@ -34,19 +36,24 @@ export async function registerPhoneAuthRoutes(app: FastifyInstance, deps: { env:
     const expected = Buffer.from(row.codeHash, "hex"); const actual = Buffer.from(digest(`${input.phone}:${input.code}`, deps.env), "hex");
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) { await prisma.phoneVerificationCode.update({ where: { id: row.id }, data: { attempts: { increment: 1 } } }); throw Object.assign(new Error("验证码无效或已过期"), { statusCode: 401, code: "INVALID_SMS_CODE" }); }
     const people = await prisma.person.findMany({ where: { phone: input.phone, status: "active" }, select: { id: true }, take: 2 });
-    const account = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       await tx.phoneVerificationCode.update({ where: { id: row.id }, data: { consumedAt: new Date() } });
       const byPhone = await tx.account.findUnique({ where: { verifiedPhone: input.phone } });
       const byPerson = people.length === 1 ? await tx.account.findUnique({ where: { personId: people[0]!.id } }) : null;
-      let target = byPerson ?? byPhone;
-      if (byPerson && byPhone && byPerson.id !== byPhone.id) { await tx.account.delete({ where: { id: byPhone.id } }); target = byPerson; }
-      if (!target) target = await tx.account.create({ data: { verifiedPhone: input.phone, ...(people.length === 1 ? { personId: people[0]!.id } : {}), status: "active" } });
-      else target = await tx.account.update({ where: { id: target.id }, data: { verifiedPhone: input.phone, ...(people.length === 1 ? { personId: people[0]!.id } : {}) } });
-      if (target.status !== "active") throw Object.assign(new Error("账号已停用"), { statusCode: 403, code: "ACCOUNT_DISABLED" });
-      if (people.length === 1) await tx.roleAssignment.upsert({ where: { accountId_role_scopeType_scopeId: { accountId: target.id, role: "learner", scopeType: "person", scopeId: people[0]!.id } }, create: { accountId: target.id, role: "learner", scopeType: "person", scopeId: people[0]!.id }, update: { active: true } });
-      return target;
+      if (byPhone?.status !== undefined && byPhone.status !== "active") throw Object.assign(new Error("账号已停用"), { statusCode: 403, code: "ACCOUNT_DISABLED" });
+      if (byPerson?.status !== undefined && byPerson.status !== "active") throw Object.assign(new Error("账号已停用"), { statusCode: 403, code: "ACCOUNT_DISABLED" });
+      if (people.length === 1 && byPhone && byPerson && byPhone.id !== byPerson.id) {
+        const binding = await bindAccountToPerson(tx, { currentAccountId: byPhone.id, personId: people[0]!.id, reason: "手机号登录识别到已有人员账号" });
+        return { accountId: binding.status === "bound" ? binding.accountId : byPhone.id, bindingStatus: binding.status === "bound" ? "bound" as const : "pending_review" as const, ...(binding.status === "pending_merge" ? { requestId: binding.requestId } : {}) };
+      }
+      let account = byPerson ?? byPhone;
+      if (!account) account = await tx.account.create({ data: { verifiedPhone: input.phone, ...(people.length === 1 ? { personId: people[0]!.id } : {}), status: "active" } });
+      else account = await tx.account.update({ where: { id: account.id }, data: { verifiedPhone: input.phone, ...(people.length === 1 ? { personId: people[0]!.id } : {}) } });
+      if (people.length === 1) await grantRole(tx, { accountId: account.id, role: "learner", scopeType: "person", scopeId: people[0]!.id });
+      return { accountId: account.id, bindingStatus: people.length === 1 ? "bound" as const : "unbound" as const };
     });
-    await auditCritical(account.id, "auth.phone_login", "account", account.id, undefined, "var/audit-fallback.ndjson");
-    return { data: { ...(await issueSession(account.id, deps.env)), bindingStatus: people.length === 1 ? "bound" : "unbound" } };
+    const requestId = "requestId" in result ? result.requestId : undefined;
+    await auditCritical(result.accountId, "auth.phone_login", "account", result.accountId, requestId ? { mergeRequestId: requestId } : undefined, "var/audit-fallback.ndjson");
+    return { data: { ...(await issueSession(result.accountId, deps.env)), bindingStatus: result.bindingStatus, ...(requestId ? { requestId } : {}) } };
   });
 }

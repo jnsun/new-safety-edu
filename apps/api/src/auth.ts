@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { jwtVerify, SignJWT } from "jose";
-import type { RoleName, ScopeType } from "@prisma/client";
+import type { OrganizationType, RoleName, ScopeType } from "@prisma/client";
 import { prisma } from "./db.js";
 import type { Env } from "./env.js";
 import { sha256 } from "./crypto.js";
@@ -9,7 +9,7 @@ import { sha256 } from "./crypto.js";
 export type Principal = {
   accountId: string;
   personId: string | null;
-  roles: Array<{ role: RoleName; scopeType: ScopeType; scopeId: string | null }>;
+  roles: Array<{ role: RoleName; scopeType: ScopeType; scopeId: string | null; organizationType?: OrganizationType }>;
 };
 
 const unauthorized = () => Object.assign(new Error("未登录或会话已失效"), { statusCode: 401, code: "UNAUTHORIZED" });
@@ -18,6 +18,25 @@ export async function issueAccessToken(accountId: string, env: Env): Promise<str
   const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { sessionVersion: true } });
   return new SignJWT({ ver: account.sessionVersion }).setProtectedHeader({ alg: "HS256" }).setSubject(accountId).setIssuedAt().setExpirationTime("15m")
     .sign(new TextEncoder().encode(env.JWT_SECRET));
+}
+
+export async function issueSensitiveToken(accountId: string, env: Env): Promise<string> {
+  const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { sessionVersion: true } });
+  return new SignJWT({ ver: account.sessionVersion, purpose: "sensitive" }).setProtectedHeader({ alg: "HS256" }).setSubject(accountId).setIssuedAt().setExpirationTime("5m")
+    .sign(new TextEncoder().encode(env.JWT_SECRET));
+}
+
+export async function verifySensitiveToken(request: FastifyRequest, env: Env) {
+  const token = request.headers["x-sensitive-token"];
+  if (typeof token !== "string" || !request.principal) throw Object.assign(new Error("查看完整敏感信息前请再次验证"), { statusCode: 401, code: "SENSITIVE_REAUTH_REQUIRED" });
+  try {
+    const result = await jwtVerify(token, new TextEncoder().encode(env.JWT_SECRET));
+    if (result.payload.sub !== request.principal.accountId || result.payload.purpose !== "sensitive") throw new Error("invalid sensitive token");
+    const account = await prisma.account.findUnique({ where: { id: request.principal.accountId }, select: { status: true, sessionVersion: true } });
+    if (!account || account.status !== "active" || result.payload.ver !== account.sessionVersion) throw new Error("stale sensitive token");
+  } catch {
+    throw Object.assign(new Error("再次验证已失效，请重新验证"), { statusCode: 401, code: "SENSITIVE_REAUTH_REQUIRED" });
+  }
 }
 
 export async function issueSession(accountId: string, env: Env) {
@@ -46,7 +65,9 @@ export function authHandlers(env: Env) {
         include: { roles: { where: { active: true }, select: { role: true, scopeType: true, scopeId: true } } }
       });
       if (!account || account.status !== "active" || account.sessionVersion !== sessionVersion) throw unauthorized();
-      request.principal = { accountId: account.id, personId: account.personId, roles: account.roles };
+      const organizationIds = account.roles.filter((role) => role.scopeType === "organization" && role.scopeId).map((role) => role.scopeId as string);
+      const organizationTypes = new Map((organizationIds.length ? await prisma.organization.findMany({ where: { id: { in: organizationIds } }, select: { id: true, type: true } }) : []).map((organization) => [organization.id, organization.type]));
+      request.principal = { accountId: account.id, personId: account.personId, roles: account.roles.map((role) => { const organizationType = role.scopeType === "organization" && role.scopeId ? organizationTypes.get(role.scopeId) : undefined; return organizationType ? { ...role, organizationType } : role; }) };
     },
     async requireManager(request: FastifyRequest, _reply: FastifyReply) {
       if (!request.principal?.roles.some(({ role }) => ["company_admin", "org_leader", "org_admin", "project_admin"].includes(role))) {

@@ -9,6 +9,9 @@
     "check:person-import": "tsx scripts/check-person-import.mts",
     "check:qualification-import": "tsx scripts/check-qualification-import.mts",
     "check:project-reporting": "tsx scripts/check-project-reporting.mts",
+    "check:phase1-invariants": "tsx scripts/check-phase1-invariants.mts",
+    "check:phase1-policy": "tsx scripts/check-phase1-policy.mts",
+    "check:phases2-7": "tsx scripts/check-phases2-7.mts",
     "smoke:person-import": "tsx scripts/smoke-person-import.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"

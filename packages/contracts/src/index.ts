@@ -15,7 +15,16 @@ export const organizationCreateSchema = z.object({
 export const projectCreateSchema = z.object({
   name: z.string().trim().min(2).max(160),
   code: z.string().trim().min(2).max(50),
-  responsibleOrganizationId: z.string().uuid()
+  responsibleOrganizationId: z.string().uuid(),
+  projectType: z.string().trim().max(120).optional(),
+  location: z.string().trim().max(300).optional(),
+  contractAmount: z.coerce.number().min(0).optional(),
+  plannedStartAt: z.string().date().optional(),
+  plannedEndAt: z.string().date().optional(),
+  managerName: z.string().trim().max(80).optional(),
+  managerPhone: z.string().regex(/^1\d{10}$/).optional()
+}).superRefine((value, context) => {
+  if (value.plannedStartAt && value.plannedEndAt && value.plannedStartAt > value.plannedEndAt) context.addIssue({ code: "custom", path: ["plannedEndAt"], message: "计划结束日期不能早于开始日期" });
 });
 export const personCreateSchema = z.object({
   name: z.string().trim().min(2).max(80),

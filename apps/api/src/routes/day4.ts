@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, type TrainingType } from "@prisma/client";
 import { z } from "zod";
@@ -8,6 +8,8 @@ import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import type { Env } from "../env.js";
 import { decryptNationalId } from "../crypto.js";
+import { mergeAccounts, setPrimaryOrganization } from "../identity.js";
+import { freezePaper } from "./day2.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -78,6 +80,18 @@ export async function generateScheduledReminders(env: Env) {
     const count = await prisma.trainingAssignment.count({ where: overdueWhere });
     if (count && role.account.personId) await createNotification({ personId: role.account.personId, title: "逾期培训摘要", body: `当前授权范围有 ${count} 人次培训逾期，请在培训管理中查看。`, dedupeKey: `manager-overdue:${role.id}:${weekKey(now)}` }, env);
   }
+  const reportSetting = await prisma.reportSetting.upsert({ where: { id: "default" }, create: {}, update: {} });
+  const reportMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)); const reportKey = reportMonth.toISOString().slice(0, 7); const reportDeadline = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), reportSetting.deadlineDay, 23, 59, 59));
+  const entities = await prisma.organization.findMany({ where: { type: "business_entity", reportingEnabled: true }, select: { id: true, name: true } });
+    for (const entity of entities) {
+      const [reports, noField] = await Promise.all([prisma.projectMonthlyReport.count({ where: { reportingOrganizationId: entity.id, reportMonth, status: "submitted" } }), prisma.departmentMonthStatus.count({ where: { organizationId: entity.id, reportingYear: now.getUTCFullYear(), reportingMonth: now.getUTCMonth() + 1, active: true, noFieldProjects: true } })]);
+      if (reports || noField) continue; const near = reportDeadline.getTime() - now.getTime() <= 3 * 86_400_000; if (!near && now < reportDeadline) continue;
+      const recipients = managers.filter((role) => role.account.personId && (["org_leader", "org_admin"].includes(role.role) ? role.scopeId === entity.id : role.role === "company_admin"));
+      for (const role of recipients) await createNotification({ personId: role.account.personId!, title: now > reportDeadline ? "野外项目月报逾期" : "野外项目月报临近截止", body: `${entity.name} ${reportKey} 尚未报送或确认无野外项目。`, dedupeKey: now > reportDeadline ? `report-overdue:${entity.id}:${reportKey}:${weekKey(now)}` : `report-due:${entity.id}:${reportKey}` }, env);
+    }
+  const certificateSetting = await prisma.certificateSetting.upsert({ where: { id: "default" }, create: {}, update: {} }); const certificateDeadline = new Date(now.getTime() + certificateSetting.warnDays * 86_400_000);
+  const expiring = await prisma.personCertificate.findMany({ where: { status: "active", isLongTerm: false, expiresAt: { lte: certificateDeadline } }, select: { id: true, name: true, expiresAt: true, person: { select: { organizations: { where: { active: true, primary: true }, take: 1, select: { organizationId: true } } } } } });
+  for (const certificate of expiring) { if (!certificate.expiresAt) continue; const days = Math.ceil((certificate.expiresAt.getTime() - now.getTime()) / 86_400_000); const milestone = days < 0 ? `overdue-${weekKey(now)}` : days <= 0 ? "0" : days <= 7 ? "7" : days <= 30 ? "30" : `entry-${certificateSetting.warnDays}`; const organizationId = certificate.person.organizations[0]?.organizationId; const recipients = managers.filter((role) => role.account.personId && (role.role === "company_admin" || (organizationId && ["org_leader", "org_admin"].includes(role.role) && role.scopeId === organizationId))); for (const role of recipients) await createNotification({ personId: role.account.personId!, title: days < 0 ? "人员证照已到期" : "人员证照即将到期", body: `${certificate.name}需要处理，请进入资质证照模块查看。`, dedupeKey: `certificate-expiry:${certificate.id}:${milestone}:${role.id}` }, env); }
   return rows.length;
 }
 
@@ -170,12 +184,13 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const row = await assertManagedAssignment(principal, id); const { reason } = z.object({ reason: z.string().trim().min(2).max(300) }).parse(request.body);
     if (row.status !== "locked") throw Object.assign(new Error("任务未锁定"), { statusCode: 409, code: "NOT_LOCKED" });
     const attemptsBefore = await prisma.examAttempt.count({ where: { assignmentId: id } }); const originals = await prisma.learningProgress.findMany({ where: { assignmentId: id, remediationRound: 0 }, select: { coursewareVersionId: true } });
-    await prisma.$transaction([prisma.trainingAssignment.update({ where: { id }, data: { status: "remediation_required" } }), prisma.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: id, coursewareVersionId: item.coursewareVersionId, remediationRound: attemptsBefore })), skipDuplicates: true })]);
-    await auditCritical(principal.accountId, "assignment.unlock", "training_assignment", id, { before: "locked", attemptsBefore, reason }, "var/audit-fallback.ndjson"); return { data: { status: "remediation_required", attemptsBefore } };
+    await prisma.$transaction([prisma.trainingAssignment.update({ where: { id }, data: { status: "remediation_required", extraAttempts: { increment: 1 } } }), prisma.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: id, coursewareVersionId: item.coursewareVersionId, remediationRound: attemptsBefore })), skipDuplicates: true })]);
+    await auditCritical(principal.accountId, "assignment.unlock", "training_assignment", id, { before: "locked", attemptsBefore, reason, addedAttempts: 1 }, "var/audit-fallback.ndjson"); return { data: { status: "remediation_required", attemptsBefore, addedAttempts: 1 } };
   });
 
   app.post("/api/management/confirmations", manager, async (request) => {
     const principal = principalOf(request); const input = z.object({ assignmentIds: z.array(z.string().uuid()).min(1).max(200), note: z.string().trim().max(300).optional() }).parse(request.body); let confirmed = 0;
+    if (isCompanyAdmin(principal)) forbidden("公司管理员只查看项目现场确认记录，不代为确认");
     for (const id of [...new Set(input.assignmentIds)]) { const row = await assertManagedAssignment(principal, id); if (row.batch.type !== "project_induction" && row.batch.source !== "reconfirmation") throw Object.assign(new Error("仅项目入场或重新确认任务可现场确认"), { statusCode: 409, code: "CONFIRMATION_NOT_REQUIRED" }); if (!row.batch.projectId || !await canAccessProject(principal, row.batch.projectId)) forbidden(); if (row.status !== "confirmation_pending") continue; const round = await prisma.projectConfirmation.count({ where: { assignmentId: id } }); await prisma.$transaction([prisma.projectConfirmation.create({ data: { assignmentId: id, confirmedBy: principal.accountId, note: input.note ?? null, round } }), prisma.trainingAssignment.update({ where: { id }, data: { status: "completed", completedAt: new Date() } })]); confirmed++; }
     await auditCritical(principal.accountId, "project.confirm", "training_assignment", undefined, { assignmentIds: input.assignmentIds, confirmed }, "var/audit-fallback.ndjson"); return { data: { confirmed } };
   });
@@ -189,10 +204,27 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
   app.post("/api/management/offline-batches", manager, async (request, reply) => {
     const principal = principalOf(request); const input = z.object({ name: z.string().trim().min(2).max(180), type: z.enum(["three_level", "project_induction", "routine", "change_update"]), content: z.string().trim().min(2).max(3000), date: z.coerce.date(), startTime: z.string().max(10).optional(), endTime: z.string().max(10).optional(), hours: z.number().positive().max(24), instructor: z.string().trim().min(2).max(80), organizationId: z.string().uuid().optional(), projectId: z.string().uuid().optional(), personIds: z.array(z.string().uuid()).min(1).max(1000), note: z.string().max(1000).optional(), attachmentIds: z.array(z.string().uuid()).max(20).default([]), paperId: z.string().uuid().optional(), dueAt: z.coerce.date().optional() }).parse(request.body);
     if (input.organizationId && !await canAccessOrganization(principal, input.organizationId)) forbidden(); if (input.projectId && !await canAccessProject(principal, input.projectId)) forbidden(); if (input.type === "project_induction" && !input.projectId) throw Object.assign(new Error("项目入场教育必须选择项目"), { statusCode: 400, code: "PROJECT_REQUIRED" });
+    if (["three_level", "project_induction"].includes(input.type) && !input.paperId) throw Object.assign(new Error("三级教育和项目入场教育必须配置考试"), { statusCode: 400, code: "EXAM_REQUIRED" });
+    const paperSnapshot = input.paperId ? await freezePaper(input.paperId) : undefined;
     const persons = await prisma.person.findMany({ where: { id: { in: [...new Set(input.personIds)] }, status: "active" }, select: { id: true } }); for (const person of persons) if (!await canAccessPerson(principal, person.id)) forbidden(); if (persons.length !== new Set(input.personIds).size) throw Object.assign(new Error("参加人员无效或超出范围"), { statusCode: 400, code: "INVALID_PARTICIPANTS" });
     if (input.attachmentIds.length !== await prisma.privateFile.count({ where: { id: { in: input.attachmentIds }, kind: "attachment", uploadedBy: principal.accountId } })) forbidden("附件无效");
     const detail = { content: input.content, date: input.date.toISOString(), startTime: input.startTime, endTime: input.endTime, hours: input.hours, instructor: input.instructor, organizationId: input.organizationId, note: input.note, attachmentIds: input.attachmentIds };
-    const batch = await prisma.trainingBatch.create({ data: { businessKey: `offline:${randomUUID()}`, name: input.name, type: input.type as TrainingType, source: "offline", projectId: input.projectId ?? null, paperId: input.paperId ?? null, dueAt: input.dueAt ?? null, offlineDetail: detail as Prisma.InputJsonValue, assignments: { create: persons.map(({ id }) => input.paperId ? { personId: id, status: "pending_exam" } : { personId: id, status: "completed", completedAt: input.date }) } } }); audit(principal.accountId, "offline_training.create", "training_batch", batch.id, { count: persons.length }); return reply.code(201).send({ data: { id: batch.id, count: persons.length } });
+    const batch = await prisma.trainingBatch.create({ data: { businessKey: `offline:${randomUUID()}`, name: input.name, type: input.type as TrainingType, source: "offline", projectId: input.projectId ?? null, paperId: input.paperId ?? null, paperSnapshot: paperSnapshot as unknown as Prisma.InputJsonValue, dueAt: input.dueAt ?? null, offlineDetail: detail as Prisma.InputJsonValue, assignments: { create: persons.map(({ id }) => input.paperId ? { personId: id, status: "pending_exam" } : { personId: id, status: "pending_signature" }) } } }); audit(principal.accountId, "offline_training.create", "training_batch", batch.id, { count: persons.length }); return reply.code(201).send({ data: { id: batch.id, count: persons.length } });
+  });
+
+  app.post("/api/management/assignments/:id/assisted-sign", manager, async (request, reply) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const assignment = await assertManagedAssignment(principal, id);
+    if (assignment.status !== "pending_signature") throw Object.assign(new Error("当前任务不可签字"), { statusCode: 409, code: "INVALID_ASSIGNMENT_STATE" });
+    const input = z.object({ fileId: z.string().uuid(), deviceInfo: z.record(z.string(), z.unknown()).optional(), witnessedPersonWriting: z.literal(true) }).parse(request.body);
+    const file = await prisma.privateFile.findFirst({ where: { id: input.fileId, kind: "signature", uploadedBy: principal.accountId }, select: { id: true } }); if (!file) forbidden("辅助签字文件无效");
+    const recordHash = createHash("sha256").update(JSON.stringify({ assignmentId: id, personId: assignment.personId, batchId: assignment.batchId })).digest("hex");
+    const signature = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM training_assignments WHERE id = ${id}::uuid FOR UPDATE`;
+      if (await tx.signature.findFirst({ where: { assignmentId: id, correctionOfId: null } })) throw Object.assign(new Error("正式签字已提交，不可覆盖"), { statusCode: 409, code: "SIGNATURE_EXISTS" });
+      const created = await tx.signature.create({ data: { assignmentId: id, personId: assignment.personId, fileId: input.fileId, recordHash, deviceInfo: { ...(input.deviceInfo ?? {}), assistedBy: principal.accountId, witnessedPersonWriting: true } } });
+      await tx.trainingAssignment.update({ where: { id }, data: assignment.batch.type === "project_induction" ? { status: "confirmation_pending" } : { status: "completed", completedAt: new Date() } }); return created;
+    });
+    await auditCritical(principal.accountId, "assignment.assisted_sign", "signature", signature.id, { assignmentId: id, personId: assignment.personId, witnessedPersonWriting: true }, "var/audit-fallback.ndjson"); return reply.code(201).send({ data: { id: signature.id, signedAt: signature.signedAt } });
   });
 
   app.get("/api/me/notifications", authenticated, async (request) => { const principal = principalOf(request); if (!principal.personId) forbidden("账号尚未绑定人员档案"); return { data: await prisma.notification.findMany({ where: { personId: principal.personId }, orderBy: { createdAt: "desc" }, take: 100 }) }; });
@@ -203,8 +235,32 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
 
   app.get("/api/management/requests", manager, async (request) => { const rows = await visibleRequests(principalOf(request)); const ids = [...new Set(rows.map(transferTarget).filter((id): id is string => !!id))]; const organizations = new Map((await prisma.organization.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(({ id, name }) => [id, name])); return { data: rows.map((row) => safeRequest(row, organizations)) }; });
   app.post("/api/management/requests/:id/reject", manager, async (request) => { const principal = principalOf(request); const { id } = idParam.parse(request.params); const { note } = z.object({ note: z.string().trim().min(2).max(500) }).parse(request.body); const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden(); if (row.status !== "pending") throw Object.assign(new Error("申请状态不可审批"), { statusCode: 409, code: "REQUEST_NOT_PENDING" }); if (row.type === "department_transfer") { const target = transferTarget(row); if (!target || !await canLeadOrganization(principal, target)) forbidden("仅目标部门负责人可审批调换部门申请"); } await prisma.changeRequest.update({ where: { id }, data: { status: "rejected", reviewedBy: principal.accountId, reviewedAt: new Date(), reviewNote: note } }); audit(principal.accountId, "change_request.reject", "change_request", id, { note }); return { data: { status: "rejected" } }; });
-  app.post("/api/management/requests/:id/approve", manager, async (request) => { const principal = principalOf(request); const { id } = idParam.parse(request.params); const { note } = z.object({ note: z.string().trim().max(500).default("") }).parse(request.body); const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden(); if (row.status !== "pending" || !["profile_change", "binding_change", "department_transfer"].includes(row.type)) throw Object.assign(new Error("该申请请使用档案绑定审核操作"), { statusCode: 409, code: "SPECIAL_APPROVAL_REQUIRED" }); const payload = row.payload as Record<string, unknown>;
-    if (row.type === "department_transfer") { const target = transferTarget(row); if (!row.personId || !target || !await canLeadOrganization(principal, target)) forbidden("仅目标部门负责人可审批调换部门申请"); await prisma.$transaction(async (tx) => { await tx.organizationMembership.updateMany({ where: { personId: row.personId!, active: true }, data: { active: false, primary: false } }); await tx.organizationMembership.upsert({ where: { personId_organizationId: { personId: row.personId!, organizationId: target } }, create: { personId: row.personId!, organizationId: target, primary: true, active: true }, update: { primary: true, active: true } }); await tx.changeRequest.update({ where: { id }, data: { status: "approved", reviewedBy: principal.accountId, reviewedAt: new Date(), reviewNote: note } }); }); }
+  app.post("/api/management/requests/:id/approve", manager, async (request) => { const principal = principalOf(request); const { id } = idParam.parse(request.params); const { note } = z.object({ note: z.string().trim().max(500).default("") }).parse(request.body); const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden(); if (row.status !== "pending" || !["profile_change", "binding_change", "department_transfer", "account_merge"].includes(row.type)) throw Object.assign(new Error("该申请请使用档案绑定审核操作"), { statusCode: 409, code: "SPECIAL_APPROVAL_REQUIRED" }); const payload = row.payload as Record<string, unknown>;
+    if (row.type === "account_merge") {
+      if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以确认账号合并");
+      const targetAccountId = z.string().uuid().parse(payload.targetAccountId);
+      if (!row.accountId) throw Object.assign(new Error("账号合并申请缺少来源账号"), { statusCode: 409, code: "ACCOUNT_MERGE_INVALID" });
+      await prisma.$transaction(async (tx) => {
+        await mergeAccounts(tx, { sourceAccountId: row.accountId!, targetAccountId, actorId: principal.accountId, reason: note || "公司管理员确认账号合并" });
+        await tx.changeRequest.update({ where: { id }, data: { status: "approved", reviewedBy: principal.accountId, reviewedAt: new Date(), reviewNote: note || "账号已合并" } });
+        if (row.personId) await tx.changeRequest.updateMany({ where: { accountId: row.accountId!, personId: row.personId, type: "binding", status: "pending" }, data: { status: "approved", reviewedBy: principal.accountId, reviewedAt: new Date(), reviewNote: "账号合并后完成绑定" } });
+      });
+      await auditCritical(principal.accountId, "account.merge", "account", row.accountId, { targetAccountId, requestId: id }, "var/audit-fallback.ndjson");
+      return { data: { status: "approved" } };
+    }
+    if (row.type === "department_transfer") {
+      const target = transferTarget(row);
+      if (!row.personId || !target || !await canLeadOrganization(principal, target)) forbidden("仅目标组织负责人可审批调换组织申请");
+      const targetOrganization = await prisma.organization.findFirst({ where: { id: target, type: { in: ["department", "business_entity"] } }, select: { id: true, name: true } });
+      if (!targetOrganization) throw Object.assign(new Error("目标组织不存在或类型不允许"), { statusCode: 409, code: "TRANSFER_TARGET_INVALID" });
+      const previous = await prisma.organizationMembership.findFirst({ where: { personId: row.personId, active: true, primary: true }, select: { organizationId: true } });
+      const previousLeaders = previous ? await prisma.roleAssignment.findMany({ where: { role: "org_leader", scopeType: "organization", scopeId: previous.organizationId, active: true }, select: { account: { select: { personId: true } } } }) : [];
+      await prisma.$transaction(async (tx) => {
+        await setPrimaryOrganization(tx, { personId: row.personId!, organizationId: target, actorId: principal.accountId, reason: note || "组织调换申请审批通过" });
+        await tx.changeRequest.update({ where: { id }, data: { status: "approved", reviewedBy: principal.accountId, reviewedAt: new Date(), reviewNote: note } });
+        for (const leader of previousLeaders) if (leader.account.personId) await tx.notification.create({ data: { personId: leader.account.personId, title: "人员组织调换结果", body: `一名人员已调入${targetOrganization.name}，详情请在人员档案中查看。`, dedupeKey: `transfer-result:${id}:${leader.account.personId}` } });
+      });
+    }
     else { if (row.type === "profile_change" && row.personId) { if (typeof payload.phone === "string") throw Object.assign(new Error("手机号尚未完成短信验证，不能审批变更"), { statusCode: 409, code: "SMS_VERIFICATION_REQUIRED" }); const update: { name?: string } = {}; if (typeof payload.name === "string") update.name = payload.name; if (Object.keys(update).length) await prisma.person.update({ where: { id: row.personId }, data: update }); } if (row.type === "binding_change" && row.accountId) await prisma.$transaction([prisma.wechatBinding.updateMany({ where: { accountId: row.accountId, active: true }, data: { active: false } }), prisma.account.update({ where: { id: row.accountId }, data: { sessionVersion: { increment: 1 } } }), prisma.refreshSession.updateMany({ where: { accountId: row.accountId, revokedAt: null }, data: { revokedAt: new Date() } })]); await prisma.changeRequest.update({ where: { id }, data: { status: "approved", reviewedBy: principal.accountId, reviewedAt: new Date(), reviewNote: note } }); }
     await auditCritical(principal.accountId, "change_request.approve", "change_request", id, { type: row.type }, "var/audit-fallback.ndjson"); return { data: { status: "approved" } }; });
 
@@ -216,11 +272,11 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
 
 async function visibleRequests(principal: Principal) {
   const rows = await prisma.changeRequest.findMany({ include: { person: { include: { organizations: { where: { active: true }, select: { organizationId: true } } } } }, orderBy: { createdAt: "desc" } });
-  const seen = new Set<string>(); const unique = rows.filter((row) => { const payload = row.payload as Record<string, unknown>; const key = [row.accountId, row.personId, row.projectId, row.type, payload.name, payload.phone, payload.type, payload.organizationId, payload.reason].map((value) => String(value ?? "")).join("|"); if (seen.has(key)) return false; seen.add(key); return true; });
+  const seen = new Set<string>(); const unique = rows.filter((row) => { const payload = row.payload as Record<string, unknown>; const key = [row.accountId, row.personId, row.projectId, row.type, payload.name, payload.phone, payload.type, payload.organizationId, payload.targetAccountId, payload.reason].map((value) => String(value ?? "")).join("|"); if (seen.has(key)) return false; seen.add(key); return true; });
   if (isCompanyAdmin(principal)) return unique;
   const orgIds = new Set(await accessibleOrganizationIds(principal)); const projects = new Set(projectScopeIds(principal));
   const leader: Principal = { ...principal, roles: principal.roles.filter(({ role }) => role === "org_leader") }; const leaderOrgIds = new Set(await accessibleOrganizationIds(leader));
-  return unique.filter((row) => row.type === "department_transfer" ? !!transferTarget(row) && leaderOrgIds.has(transferTarget(row)!) : (row.projectId && projects.has(row.projectId)) || row.person?.organizations.some((item) => orgIds.has(item.organizationId)) || (typeof (row.payload as Record<string, unknown>).organizationId === "string" && orgIds.has((row.payload as Record<string, unknown>).organizationId as string)));
+  return unique.filter((row) => row.type !== "account_merge" && (row.type === "department_transfer" ? !!transferTarget(row) && leaderOrgIds.has(transferTarget(row)!) : (row.projectId && projects.has(row.projectId)) || row.person?.organizations.some((item) => orgIds.has(item.organizationId)) || (typeof (row.payload as Record<string, unknown>).organizationId === "string" && orgIds.has((row.payload as Record<string, unknown>).organizationId as string))));
 }
 
 function safeRequest(row: Awaited<ReturnType<typeof visibleRequests>>[number], organizations = new Map<string, string>()) {

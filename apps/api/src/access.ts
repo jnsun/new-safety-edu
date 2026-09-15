@@ -12,14 +12,7 @@ export function projectScopeIds(principal: Principal): string[] {
 }
 
 export async function accessibleOrganizationIds(principal: Principal): Promise<string[]> {
-  const ids = new Set(organizationScopeIds(principal));
-  let parents = [...ids];
-  while (parents.length) {
-    const children = await prisma.organization.findMany({ where: { parentId: { in: parents }, id: { notIn: [...ids] } }, select: { id: true } });
-    parents = children.map(({ id }) => id);
-    parents.forEach((id) => ids.add(id));
-  }
-  return [...ids];
+  return [...new Set(organizationScopeIds(principal))];
 }
 
 export async function canAccessOrganization(principal: Principal, organizationId: string) {
