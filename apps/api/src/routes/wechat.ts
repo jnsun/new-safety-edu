@@ -7,7 +7,7 @@ import { encryptNationalId, normalizePhone } from "../crypto.js";
 import { issueSession } from "../auth.js";
 import { audit } from "../audit.js";
 import { accessibleOrganizationIds, canAccessOrganization, canAccessPerson, canAccessProject, forbidden, isCompanyAdmin, projectScopeIds } from "../access.js";
-import { bindAccountToPerson, grantRole } from "../identity.js";
+import { activatePendingRoles, bindAccountToPerson } from "../identity.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -87,7 +87,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       update: { ...(wx.unionid ? { unionid: wx.unionid } : {}) }, include: { account: true }
     });
     if (!binding.active) throw Object.assign(new Error("原微信绑定已撤销，请使用新微信重新绑定"), { statusCode: 403, code: "WECHAT_BINDING_REVOKED" });
-    const session = await issueSession(binding.accountId, deps.env);
+    const session = await issueSession(binding.accountId, deps.env, { clientKind: "miniprogram", userAgent: request.headers["user-agent"] });
     return { data: { ...session, bindingStatus: binding.account.personId ? "bound" : "unbound" } };
   });
 
@@ -106,9 +106,9 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     const matches = await prisma.person.findMany({ where: { phone, status: "active" }, select: { id: true }, take: 2 });
     if (matches.length === 1) {
       const result = await bindPerson(accountId, matches[0]!.id);
-      if (result.status === "pending_merge") return { data: { status: "pending_review", requestId: result.requestId, ...(await issueSession(accountId, deps.env)) } };
+      if (result.status === "pending_merge") return { data: { status: "pending_review", requestId: result.requestId, ...(await issueSession(accountId, deps.env, { clientKind: "miniprogram", userAgent: request.headers["user-agent"] })) } };
       audit(result.accountId, "wechat.auto_bind", "person", matches[0]!.id);
-      return { data: { status: "bound", ...(await issueSession(result.accountId, deps.env)) } };
+      return { data: { status: "bound", ...(await issueSession(result.accountId, deps.env, { clientKind: "miniprogram", userAgent: request.headers["user-agent"] })) } };
     }
     const requestRow = await pendingBindingRequest(accountId, phone, matches.length);
     return { data: { status: "pending_review", requestId: requestRow.id } };
@@ -162,11 +162,14 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     const rows = isCompanyAdmin(principal) ? uniqueCandidates : uniqueCandidates.filter((row) => (row.projectId && projectIds.has(row.projectId)) || orgIds.has(String((row.payload as Record<string, unknown>).organizationId ?? "")));
     const organizationIds = [...new Set(rows.flatMap((row) => { const payload = row.payload as Record<string, unknown>; return [payload.responsibleOrganizationId, payload.organizationId, payload.contractorOrganizationId].map((value) => String(value ?? "")).filter(Boolean); }))];
     const organizationNames = new Map((await prisma.organization.findMany({ where: { id: { in: organizationIds } }, select: { id: true, name: true } })).map((row) => [row.id, row.name]));
+    const mergeAccountIds = [...new Set(rows.flatMap((row) => row.type === "account_merge" ? [row.accountId, (row.payload as Record<string, unknown>).targetAccountId].filter((value): value is string => typeof value === "string") : []))];
+    const mergeAccountLabels = new Map((await prisma.account.findMany({ where: { id: { in: mergeAccountIds } }, select: { id: true, username: true, person: { select: { name: true } } } })).map((account) => [account.id, `${account.person?.name ?? "未关联人员"} · ${account.username ?? "无用户名"}`]));
     return { data: rows.map(({ payload, ...row }) => {
       const value = payload as Record<string, unknown>;
       const phone = typeof value.phone === "string" ? `${value.phone.slice(0, 3)}****${value.phone.slice(-4)}` : undefined;
       const organizationId = typeof value.responsibleOrganizationId === "string" ? value.responsibleOrganizationId : typeof value.organizationId === "string" ? value.organizationId : undefined;
-      return { ...row, payload: { ...(typeof value.name === "string" ? { name: value.name } : {}), ...(phone ? { phone } : {}), ...(typeof value.type === "string" ? { type: value.type } : {}), ...(typeof value.reason === "string" ? { reason: value.reason } : {}), ...(organizationId ? { organizationId, organizationName: organizationNames.get(organizationId) } : {}), matchCount: value.matchCount } };
+      const targetAccountId = typeof value.targetAccountId === "string" ? value.targetAccountId : undefined;
+      return { ...row, payload: { ...(typeof value.name === "string" ? { name: value.name } : {}), ...(phone ? { phone } : {}), ...(typeof value.type === "string" ? { type: value.type } : {}), ...(typeof value.reason === "string" ? { reason: value.reason } : {}), ...(organizationId ? { organizationId, organizationName: organizationNames.get(organizationId) } : {}), ...(row.type === "account_merge" ? { sourceAccountLabel: row.accountId ? mergeAccountLabels.get(row.accountId) : undefined, targetAccountLabel: targetAccountId ? mergeAccountLabels.get(targetAccountId) : undefined } : {}), matchCount: value.matchCount } };
     }) };
   });
 
@@ -204,8 +207,8 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
           projectMemberships: { create: { projectId: change.projectId!, status: "active", reviewedBy: request.principal!.accountId, reviewedAt: new Date() } }
         } });
         await tx.account.update({ where: { id: change.accountId! }, data: { personId: person.id, status: "active" } });
+        await activatePendingRoles(tx, { personId: person.id, accountId: change.accountId!, actorId: request.principal!.accountId });
         await tx.wechatBinding.updateMany({ where: { accountId: change.accountId!, active: true }, data: { boundAt: new Date() } });
-        await grantRole(tx, { accountId: change.accountId!, role: "learner", scopeType: "person", scopeId: person.id });
         await tx.changeRequest.update({ where: { id }, data: { personId: person.id, status: "approved", reviewedBy: request.principal!.accountId, reviewedAt: new Date(), reviewNote: input.note ?? null } });
         return { accountId: change.accountId!, personId: person.id };
       });

@@ -91,9 +91,9 @@ export async function registerSafetyManagementRoutes(
                   createdAt: true,
                 },
               },
-              roles: { orderBy: { createdAt: "desc" } },
             },
           },
+          roleAssignments: { orderBy: { createdAt: "desc" } },
           organizations: {
             include: { organization: true },
             orderBy: { createdAt: "desc" },

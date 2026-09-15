@@ -55,6 +55,7 @@ import {
 type Principal = {
   accountId: string;
   personId: string | null;
+  mustChangePassword: boolean;
   roles: Array<{ role: string; scopeType: string; scopeId: string | null }>;
 };
 type OrganizationRolePerson = {
@@ -62,6 +63,7 @@ type OrganizationRolePerson = {
   personId: string;
   name: string;
   inherited?: boolean;
+  activationPending?: boolean;
 };
 type Organization = {
   id: string;
@@ -105,19 +107,32 @@ type Person = {
     id: string;
     username: string | null;
     status: string;
-    roles: Array<{
-      id: string;
-      role: string;
-      scopeType: string;
-      scopeId: string | null;
-    }>;
   } | null;
+  roleAssignments: Array<{
+    id: string;
+    role: string;
+    scopeType: string;
+    scopeId: string | null;
+    active: boolean;
+    activationPending: boolean;
+  }>;
 };
 type Account = {
   id: string;
   username: string | null;
   status: string;
   personId: string | null;
+  verifiedPhoneMasked: string | null;
+  passwordLoginEnabled: boolean;
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  loginMethods: { password: boolean; phone: boolean; wechat: boolean };
+  person: {
+    name: string;
+    status: string;
+    organizations: Array<{ organization: { id: string; name: string } }>;
+  } | null;
   roles: Array<{
     id: string;
     role: string;
@@ -136,6 +151,7 @@ const labels: Record<string, string> = {
   temporary_individual: "临时个人",
   active: "启用",
   disabled: "停用",
+  merged: "已合并",
   paused: "已暂停",
   ended: "已结束",
   pending: "待处理",
@@ -151,7 +167,6 @@ const labels: Record<string, string> = {
   field_reporter: "野外项目报送人员",
   project_admin: "项目管理员",
   learner: "普通人员",
-  merged: "已合并",
 };
 const organizationTypeLabels: Record<string, string> = {
   company: "公司",
@@ -293,8 +308,14 @@ function AccountsPanel({
   const [accountOpen, setAccountOpen] = useState(false);
   const [accountOrgId, setAccountOrgId] = useState<string>();
   const [roleOpen, setRoleOpen] = useState(false);
-  const [roleName, setRoleName] = useState("learner");
+  const [roleName, setRoleName] = useState("company_admin");
+  const [revokeRole, setRevokeRole] = useState<{ id: string; label: string; role: string }>();
   const [resetAccount, setResetAccount] = useState<Account>();
+  const [editAccount, setEditAccount] = useState<Account>();
+  const [statusAccount, setStatusAccount] = useState<{ account: Account; nextStatus: "active" | "disabled" }>();
+  const [deleteAccount, setDeleteAccount] = useState<Account>();
+  const [methodAccount, setMethodAccount] = useState<Account>();
+  const [mergeOpen, setMergeOpen] = useState(false);
   const accountCreate = useMutation({
     mutationFn: (v: Record<string, unknown>) => {
       const { organizationId: _, ...input } = v;
@@ -308,23 +329,32 @@ function AccountsPanel({
     onError: (e) => message.error(e.message),
   });
   const roleCreate = useMutation({
-    mutationFn: (v: Record<string, unknown>) =>
-      api(
+    mutationFn: async (v: Record<string, unknown>) => {
+      const { currentPassword, ...body } = v;
+      const sensitive = roleName === "company_admin"
+        ? await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password: currentPassword }))
+        : null;
+      return api(
         "/api/roles",
-        json("POST", {
-          ...v,
+        { ...json("POST", {
+          ...body,
           role: roleName,
           scopeType: {
             company_admin: "company",
+            org_leader: "organization",
+            org_admin: "organization",
+            field_reporter: "organization",
             project_admin: "project",
-            learner: "person",
           }[roleName],
           scopeId: roleName === "company_admin" ? null : v.scopeId,
-        }),
-      ),
+        }), ...(sensitive ? { headers: { "x-sensitive-token": sensitive.token } } : {}) },
+      );
+    },
     onSuccess: () => {
       setRoleOpen(false);
       void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["persons"] });
+      void qc.invalidateQueries({ queryKey: ["organizations"] });
     },
     onError: (e) => message.error(e.message),
   });
@@ -337,22 +367,96 @@ function AccountsPanel({
     },
     onError: (e) => message.error(e.message),
   });
+  const usernameUpdate = useMutation({
+    mutationFn: ({ accountId, username, reason }: { accountId: string; username: string; reason: string }) => api(`/api/accounts/${accountId}/username`, json("PATCH", { username, reason })),
+    onSuccess: (_data, variables) => {
+      message.success("用户名已修改，原登录会话已失效");
+      setEditAccount(undefined);
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      if (variables.accountId === principal.accountId) window.location.assign("/login");
+    },
+    onError: (e) => message.error(e.message),
+  });
+  const accountStatusUpdate = useMutation({
+    mutationFn: ({ accountId, status, reason }: { accountId: string; status: "active" | "disabled"; reason: string }) => api(`/api/accounts/${accountId}/status`, json("POST", { status, reason })),
+    onSuccess: (_data, variables) => {
+      message.success(variables.status === "active" ? "账号已启用" : "账号已停用，现有会话已失效");
+      setStatusAccount(undefined);
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+    },
+    onError: (e) => message.error(e.message),
+  });
+  const accountDelete = useMutation({
+    mutationFn: ({ accountId, reason }: { accountId: string; reason: string }) => api(`/api/accounts/${accountId}`, json("DELETE", { reason })),
+    onSuccess: () => {
+      message.success("误建空账号已删除");
+      setDeleteAccount(undefined);
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+    },
+    onError: (e) => message.error(e.message),
+  });
+  const mergeRequestCreate = useMutation({
+    mutationFn: async (values: { sourceAccountId: string; targetAccountId: string; reason: string; currentPassword: string }) => {
+      const sensitive = await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password: values.currentPassword }));
+      return api<{ id: string; status: string }>("/api/account-merge-requests", { ...json("POST", { sourceAccountId: values.sourceAccountId, targetAccountId: values.targetAccountId, reason: values.reason }), headers: { "x-sensitive-token": sensitive.token } });
+    },
+    onSuccess: () => {
+      message.success("账号合并申请已生成，请在绑定与注册审核中确认");
+      setMergeOpen(false);
+      void qc.invalidateQueries({ queryKey: ["binding-requests"] });
+    },
+    onError: (e) => message.error(e.message),
+  });
+  const roleRevoke = useMutation({
+    mutationFn: async ({ roleId, role, reason, currentPassword }: { roleId: string; role: string; reason: string; currentPassword?: string }) => {
+      const sensitive = role === "company_admin"
+        ? await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password: currentPassword }))
+        : null;
+      return api(`/api/roles/${roleId}`, { ...json("DELETE", { reason }), ...(sensitive ? { headers: { "x-sensitive-token": sensitive.token } } : {}) });
+    },
+    onSuccess: () => {
+      message.success("角色已撤销，相关账号会话已失效");
+      setRevokeRole(undefined);
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      void qc.invalidateQueries({ queryKey: ["persons"] });
+      void qc.invalidateQueries({ queryKey: ["organizations"] });
+    },
+    onError: (e) => message.error(e.message),
+  });
+  async function removeLoginMethod(method: "password" | "phone" | "wechat") {
+    if (!methodAccount) return;
+    const password = window.prompt("请输入当前管理员密码再次验证");
+    if (!password) return;
+    const reason = window.prompt("请输入解除该登录方式的原因");
+    if (!reason?.trim()) return;
+    try {
+      const sensitive = await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password }));
+      await api(`/api/accounts/${methodAccount.id}/login-methods/${method}`, { ...json("DELETE", { reason }), headers: { "x-sensitive-token": sensitive.token } });
+      message.success("登录方式已解除，相关账号会话已失效");
+      setMethodAccount(undefined);
+      void qc.invalidateQueries({ queryKey: ["accounts"] });
+      if (methodAccount.id === principal.accountId) window.location.assign("/login");
+    } catch (error) { message.error((error as Error).message); }
+  }
   const companyAdmin = principal.roles.some(
     (role) => role.role === "company_admin",
   );
+  const managedBusinessEntityIds = new Set(principal.roles.filter((role) => ["org_leader", "org_admin"].includes(role.role) && role.scopeType === "organization" && role.scopeId && organizations.some((organization) => organization.id === role.scopeId && organization.type === "business_entity")).map((role) => role.scopeId));
   const availableRoles = companyAdmin
-    ? ["company_admin", "project_admin", "learner"]
-    : projects.data?.length
-      ? ["project_admin"]
-      : [];
+    ? ["company_admin", "org_leader", "org_admin", "field_reporter", "project_admin"]
+    : [...new Set([
+        ...(principal.roles.some((role) => role.role === "org_leader") ? ["org_admin"] : []),
+        ...(managedBusinessEntityIds.size ? ["field_reporter", "project_admin"] : []),
+      ])];
   const scopeOptions =
     roleName === "project_admin"
       ? (projects.data ?? []).map((p) => ({ value: p.id, label: p.name }))
-      : persons.map((p) => ({ value: p.id, label: p.name }));
+      : organizations.filter((organization) => ["department", "business_entity"].includes(organization.type) && (roleName !== "field_reporter" || organization.type === "business_entity")).map((organization) => ({ value: organization.id, label: organization.name }));
   return (
     <>
       <Space style={{ marginBottom: 12 }}>
         <Button onClick={() => setAccountOpen(true)}>创建账号</Button>
+        {companyAdmin && <Button onClick={() => setMergeOpen(true)}>账号合并</Button>}
         {availableRoles.length > 0 && (
           <Button
             type="primary"
@@ -370,6 +474,15 @@ function AccountsPanel({
         dataSource={accounts}
         columns={[
           {
+            title: "关联人员",
+            render: (_: unknown, row: Account) => row.person ? (
+              <Space direction="vertical" size={0}>
+                <span>{row.person.name}</span>
+                <Typography.Text type="secondary">{row.person.organizations[0]?.organization.name ?? "未设置主部门"}</Typography.Text>
+              </Space>
+            ) : "未关联",
+          },
+          {
             title: "用户名",
             dataIndex: "username",
             render: (v: string | null) => v ?? "微信账号",
@@ -378,6 +491,17 @@ function AccountsPanel({
             title: "状态",
             dataIndex: "status",
             render: (v: string) => labels[v] ?? v,
+          },
+          {
+            title: "登录方式",
+            render: (_: unknown, row: Account) => (
+              <Space size={4} wrap>
+                {row.loginMethods.password && <Tag>密码</Tag>}
+                {row.loginMethods.phone && <Tag>手机 {row.verifiedPhoneMasked}</Tag>}
+                {row.loginMethods.wechat && <Tag color="green">微信</Tag>}
+                {!Object.values(row.loginMethods).some(Boolean) && <Typography.Text type="secondary">未开通</Typography.Text>}
+              </Space>
+            ),
           },
           {
             title: "角色",
@@ -390,17 +514,7 @@ function AccountsPanel({
                     closable
                     onClose={(event) => {
                       event.preventDefault();
-                      Modal.confirm({
-                        title: "确认撤销此角色？",
-                        content: "撤销后该账号将立即失去对应管理权限。",
-                        okText: "确认撤销",
-                        cancelText: "取消",
-                        okButtonProps: { danger: true },
-                        onOk: async () => {
-                          await api(`/api/roles/${r.id}`, { method: "DELETE" });
-                          void qc.invalidateQueries({ queryKey: ["accounts"] });
-                        },
-                      });
+                      setRevokeRole({ id: r.id, label: labels[r.role] ?? r.role, role: r.role });
                     }}
                   >
                     {labels[r.role] ?? r.role}
@@ -410,16 +524,67 @@ function AccountsPanel({
           ...(companyAdmin
             ? [{
                 title: "操作",
-                render: (_: unknown, row: Account) =>
-                  row.id !== principal.accountId && row.username ? (
-                    <Button type="link" onClick={() => setResetAccount(row)}>
-                      重置密码
-                    </Button>
-                  ) : "—",
+                render: (_: unknown, row: Account) => (
+                  <Space size={0} wrap>
+                    {row.status !== "merged" && <Button type="link" onClick={() => setEditAccount(row)}>修改用户名</Button>}
+                    {row.id !== principal.accountId && row.status !== "merged" && <Button type="link" onClick={() => setResetAccount(row)}>重置密码</Button>}
+                    {row.status !== "merged" && <Button type="link" onClick={() => setMethodAccount(row)}>登录方式</Button>}
+                    {row.id !== principal.accountId && ["active", "pending"].includes(row.status) && <Button danger type="link" onClick={() => setStatusAccount({ account: row, nextStatus: "disabled" })}>停用</Button>}
+                    {row.id !== principal.accountId && row.status === "disabled" && <Button type="link" onClick={() => setStatusAccount({ account: row, nextStatus: "active" })}>启用</Button>}
+                    {row.id !== principal.accountId && !row.person && row.status !== "merged" && <Button danger type="link" onClick={() => setDeleteAccount(row)}>删除误建账号</Button>}
+                  </Space>
+                ),
               }]
             : []),
         ]}
       />
+      <Modal
+        title="发起账号合并"
+        open={mergeOpen}
+        footer={null}
+        destroyOnHidden
+        onCancel={() => setMergeOpen(false)}
+      >
+        <Alert type="warning" showIcon message="来源账号将永久转为已合并，登录方式与有效授权转入目标账号；存在人员、手机号、用户名或微信冲突时服务端会拒绝。" style={{ marginBottom: 16 }} />
+        <Form layout="vertical" onFinish={(values) => mergeRequestCreate.mutate(values)}>
+          <Form.Item name="sourceAccountId" label="来源账号（合并后停用）" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="label" options={accounts.filter((row) => row.id !== principal.accountId && row.status !== "merged").map((row) => ({ value: row.id, label: `${row.person?.name ?? "未关联人员"} · ${row.username ?? "无用户名"} · ${labels[row.status] ?? row.status}` }))} />
+          </Form.Item>
+          <Form.Item name="targetAccountId" label="目标账号（继续使用）" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="label" options={accounts.filter((row) => row.id !== principal.accountId && row.status === "active").map((row) => ({ value: row.id, label: `${row.person?.name ?? "未关联人员"} · ${row.username ?? "无用户名"}` }))} />
+          </Form.Item>
+          <Form.Item name="reason" label="合并原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>
+          <Form.Item name="currentPassword" label="当前管理员密码（二次验证）" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>
+          <Button type="primary" htmlType="submit" loading={mergeRequestCreate.isPending}>生成合并申请</Button>
+        </Form>
+      </Modal>
+      <Modal
+        title={`登录方式${methodAccount?.person ? `：${methodAccount.person.name}` : ""}`}
+        open={Boolean(methodAccount)}
+        footer={null}
+        onCancel={() => setMethodAccount(undefined)}
+      >
+        <Alert type="warning" showIcon message="解除后该账号现有会话立即失效；没有剩余登录方式时账号转为待审核。" style={{ marginBottom: 16 }} />
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Button block disabled={!methodAccount?.loginMethods.password} onClick={() => void removeLoginMethod("password")}>关闭用户名密码登录</Button>
+          <Button block disabled={!methodAccount?.loginMethods.phone} onClick={() => void removeLoginMethod("phone")}>解除已验证手机号</Button>
+          <Button block disabled={!methodAccount?.loginMethods.wechat} onClick={() => void removeLoginMethod("wechat")}>解除微信绑定</Button>
+        </Space>
+      </Modal>
+      <Modal
+        title={`撤销角色${revokeRole ? `：${revokeRole.label}` : ""}`}
+        open={Boolean(revokeRole)}
+        footer={null}
+        destroyOnHidden
+        onCancel={() => setRevokeRole(undefined)}
+      >
+        <Alert type="warning" showIcon message="撤销后权限立即失效，授权历史仍会保留。" style={{ marginBottom: 16 }} />
+        <Form layout="vertical" onFinish={(values: { reason: string; currentPassword?: string }) => revokeRole && roleRevoke.mutate({ roleId: revokeRole.id, role: revokeRole.role, ...values })}>
+          {revokeRole?.role === "company_admin" && <Form.Item name="currentPassword" label="当前管理员密码（二次验证）" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>}
+          <Form.Item name="reason" label="撤销原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>
+          <Button danger type="primary" htmlType="submit" loading={roleRevoke.isPending}>确认撤销</Button>
+        </Form>
+      </Modal>
       <Modal
         title={`重置密码${resetAccount?.username ? `：${resetAccount.username}` : ""}`}
         open={Boolean(resetAccount)}
@@ -466,6 +631,51 @@ function AccountsPanel({
           <Button type="primary" htmlType="submit" loading={passwordReset.isPending}>
             确认重置
           </Button>
+        </Form>
+      </Modal>
+      <Modal
+        title={`修改用户名${editAccount?.person ? `：${editAccount.person.name}` : ""}`}
+        open={Boolean(editAccount)}
+        footer={null}
+        destroyOnHidden
+        onCancel={() => setEditAccount(undefined)}
+      >
+        <Alert type="warning" showIcon message="修改后旧用户名不再复用，该账号现有会话将立即失效。" style={{ marginBottom: 16 }} />
+        <Form layout="vertical" initialValues={{ username: editAccount?.username ?? "" }} onFinish={(values: { username: string; reason: string }) => editAccount && usernameUpdate.mutate({ accountId: editAccount.id, ...values })}>
+          <Form.Item name="username" label="新用户名" rules={[{ required: true }, { pattern: /^[A-Za-z0-9._-]{4,40}$/, message: "仅允许英文字母、数字、点、短横线和下划线，长度 4—40 位" }]}>
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item name="reason" label="修改原因" rules={[{ required: true, min: 2, max: 500 }]}>
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={usernameUpdate.isPending}>确认修改</Button>
+        </Form>
+      </Modal>
+      <Modal
+        title={statusAccount?.nextStatus === "active" ? "启用账号" : "停用账号"}
+        open={Boolean(statusAccount)}
+        footer={null}
+        destroyOnHidden
+        onCancel={() => setStatusAccount(undefined)}
+      >
+        <Alert type={statusAccount?.nextStatus === "active" ? "info" : "warning"} showIcon message={statusAccount?.nextStatus === "active" ? "启用只恢复登录能力；人员状态和角色仍按服务端当前记录判断。" : "停用后全部登录方式和现有会话立即失效，但角色及业务历史不会删除。"} style={{ marginBottom: 16 }} />
+        <Form layout="vertical" onFinish={(values: { reason: string }) => statusAccount && accountStatusUpdate.mutate({ accountId: statusAccount.account.id, status: statusAccount.nextStatus, reason: values.reason })}>
+          <Form.Item label="账号"><Input value={statusAccount?.account.username ?? statusAccount?.account.person?.name ?? "未命名账号"} disabled /></Form.Item>
+          <Form.Item name="reason" label="操作原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>
+          <Button danger={statusAccount?.nextStatus === "disabled"} type="primary" htmlType="submit" loading={accountStatusUpdate.isPending}>确认{statusAccount?.nextStatus === "active" ? "启用" : "停用"}</Button>
+        </Form>
+      </Modal>
+      <Modal
+        title="删除误建空账号"
+        open={Boolean(deleteAccount)}
+        footer={null}
+        destroyOnHidden
+        onCancel={() => setDeleteAccount(undefined)}
+      >
+        <Alert type="error" showIcon message="只有完全没有人员、角色、绑定、会话、申请、审计或文件引用的误建账号才能物理删除。服务端会再次检查。" style={{ marginBottom: 16 }} />
+        <Form layout="vertical" onFinish={(values: { reason: string }) => deleteAccount && accountDelete.mutate({ accountId: deleteAccount.id, reason: values.reason })}>
+          <Form.Item name="reason" label="删除原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>
+          <Button danger type="primary" htmlType="submit" loading={accountDelete.isPending}>确认删除</Button>
         </Form>
       </Modal>
       <Modal
@@ -533,13 +743,15 @@ function AccountsPanel({
         onCancel={() => setRoleOpen(false)}
       >
         <Form layout="vertical" onFinish={(v) => roleCreate.mutate(v)}>
-          <Form.Item name="accountId" label="账号" rules={[{ required: true }]}>
+          <Form.Item name="personId" label="人员" rules={[{ required: true }]}>
             <Select
-              options={accounts
-                .filter((account) => account.status === "active")
-                .map((a) => ({
-                  value: a.id,
-                  label: a.username ?? `微信账号 ${a.id.slice(0, 8)}`,
+              showSearch
+              optionFilterProp="label"
+              options={persons
+                .filter((person) => person.status === "active" && person.type === "employee")
+                .map((person) => ({
+                  value: person.id,
+                  label: `${person.name} · ${person.organizations.find((item) => item.primary)?.organization.name ?? "未设置主组织"}${person.account ? "" : " · 账号待激活"}`,
                 }))}
             />
           </Form.Item>
@@ -562,6 +774,10 @@ function AccountsPanel({
               <Select options={scopeOptions} />
             </Form.Item>
           )}
+          <Form.Item name="reason" label="授权原因" rules={[{ required: true, min: 2, max: 500 }]}>
+            <Input.TextArea rows={3} />
+          </Form.Item>
+          {roleName === "company_admin" && <Form.Item name="currentPassword" label="当前管理员密码（二次验证）" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>}
           <Button
             type="primary"
             htmlType="submit"
@@ -599,18 +815,33 @@ function BindingRequests({ persons }: { persons: Person[] }) {
         ? `/api/management/requests/${row.id}/approve`
         : `/api/binding-requests/${row.id}/approve`;
     try {
-      await api(
-        path,
-        json(
-          "POST",
-          row.type === "binding" ? { personId: selected[row.id] } : {},
-        ),
-      );
+      if (row.type === "account_merge") {
+        const password = window.prompt("账号合并不可撤销，请输入当前管理员密码再次验证");
+        if (!password) return;
+        const note = window.prompt("请输入确认合并原因");
+        if (!note?.trim()) return;
+        const sensitive = await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password }));
+        await api(path, { ...json("POST", { note }), headers: { "x-sensitive-token": sensitive.token } });
+      } else {
+        await api(path, json("POST", row.type === "binding" ? { personId: selected[row.id] } : {}));
+      }
       message.success(row.type === "account_merge" ? "账号已合并" : "审核通过");
       void requests.refetch();
     } catch (error) {
       message.error((error as Error).message);
     }
+  }
+  async function rejectMerge(row: { id: string }) {
+    const password = window.prompt("拒绝账号合并前，请输入当前管理员密码再次验证");
+    if (!password) return;
+    const note = window.prompt("请输入拒绝原因");
+    if (!note?.trim()) return;
+    try {
+      const sensitive = await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password }));
+      await api(`/api/management/requests/${row.id}/reject`, { ...json("POST", { note }), headers: { "x-sensitive-token": sensitive.token } });
+      message.success("已拒绝账号合并申请");
+      void requests.refetch();
+    } catch (error) { message.error((error as Error).message); }
   }
   return (
     <Table
@@ -631,7 +862,12 @@ function BindingRequests({ persons }: { persons: Person[] }) {
         },
         {
           title: "申请人",
-          render: (_: unknown, row) => String(row.payload.name ?? "待匹配人员"),
+          render: (_: unknown, row) => row.type === "account_merge" ? (
+            <Space direction="vertical" size={0}>
+              <span>来源：{String(row.payload.sourceAccountLabel ?? "账号信息不可用")}</span>
+              <Typography.Text type="secondary">目标：{String(row.payload.targetAccountLabel ?? "账号信息不可用")}</Typography.Text>
+            </Space>
+          ) : String(row.payload.name ?? "待匹配人员"),
         },
         {
           title: "手机号",
@@ -675,6 +911,7 @@ function BindingRequests({ persons }: { persons: Person[] }) {
               >
                 {row.type === "account_merge" ? "确认合并" : "审核通过"}
               </Button>
+              {row.type === "account_merge" && <Button danger size="small" onClick={() => void rejectMerge(row)}>拒绝</Button>}
             </Space>
           ),
         },
@@ -820,7 +1057,7 @@ function People({ principal }: { principal: Principal }) {
     {
       title: "管理权限",
       render: (_: unknown, row: Person) => {
-        const roles = (row.account?.roles ?? []).filter(
+        const roles = (row.roleAssignments ?? []).filter(
           (role) => role.role !== "learner",
         );
         return roles.length ? (
@@ -1370,7 +1607,7 @@ function PersonDetail({
                   size="small"
                   rowKey="id"
                   pagination={false}
-                  dataSource={row.account?.roles ?? []}
+                  dataSource={row.roleAssignments ?? []}
                   columns={[
                     {
                       title: "角色",
@@ -1381,8 +1618,8 @@ function PersonDetail({
                     {
                       title: "状态",
                       dataIndex: "active",
-                      render: (value: boolean) =>
-                        value ? "当前有效" : "历史授权",
+                      render: (value: boolean, role: Person["roleAssignments"][number]) =>
+                        value ? "当前有效" : role.activationPending ? "已授权，账号待激活" : "历史授权",
                     },
                     {
                       title: "结束时间",
@@ -1602,6 +1839,9 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
     .map((role) => role.scopeId!);
   const canManageOrganization = (organization: Organization) =>
     companyAdmin || managedOrganizationIds.includes(organization.id);
+  const canGrantOrganizationRole = (organization: Organization) => companyAdmin
+    || principal.roles.some((role) => role.role === "org_leader" && role.scopeType === "organization" && role.scopeId === organization.id)
+    || (organization.type === "business_entity" && principal.roles.some((role) => role.role === "org_admin" && role.scopeType === "organization" && role.scopeId === organization.id));
   const canCreateProject =
     companyAdmin ||
     (organizations.data ?? []).some(
@@ -1619,11 +1859,9 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
         ),
       )
     : [];
-  const revokeRole = async (organizationId: string, roleId: string) => {
+  const revokeRole = async (organizationId: string, roleId: string, reason: string) => {
     try {
-      await api(`/api/organizations/${organizationId}/roles/${roleId}`, {
-        method: "DELETE",
-      });
+      await api(`/api/organizations/${organizationId}/roles/${roleId}`, json("DELETE", { reason }));
       message.success("人员权限已取消");
       void organizations.refetch();
     } catch (error) {
@@ -1649,12 +1887,17 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
                   okText: "确认取消",
                   cancelText: "取消",
                   okButtonProps: { danger: true },
-                  onOk: () => revokeRole(organization.id, row.roleId!),
+                  onOk: async () => {
+                    const reason = window.prompt("请输入撤销原因");
+                    if (!reason?.trim()) throw new Error("请填写撤销原因");
+                    await revokeRole(organization.id, row.roleId!, reason);
+                  },
                 });
             }}
           >
             {row.name}
             {row.inherited ? "（管理员默认）" : ""}
+            {row.activationPending ? "（账号待激活）" : ""}
           </Tag>
         ))}
       </Space>
@@ -1738,12 +1981,12 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
                           </Button>
                         )}
                         {["department", "business_entity"].includes(row.type) &&
-                          canManageOrganization(row) && (
+                          canGrantOrganizationRole(row) && (
                             <Button
                               size="small"
                               onClick={() => {
                                 setRoleName(
-                                  companyAdmin ? "org_admin" : "field_reporter",
+                                  companyAdmin || principal.roles.some((role) => role.role === "org_leader" && role.scopeId === row.id) ? "org_admin" : "field_reporter",
                                 );
                                 setRoleOrg(row);
                               }}
@@ -1986,9 +2229,10 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
                       ? ["field_reporter"]
                       : []),
                   ]
-                : roleOrg?.type === "business_entity"
-                  ? ["field_reporter"]
-                  : []
+                : [
+                    ...(principal.roles.some((role) => role.role === "org_leader" && role.scopeId === roleOrg?.id) ? ["org_admin"] : []),
+                    ...(roleOrg?.type === "business_entity" ? ["field_reporter"] : []),
+                  ]
               ).map((value) => ({ value, label: labels[value] }))}
             />
           </Form.Item>
@@ -2005,6 +2249,9 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
                 label: person.name,
               }))}
             />
+          </Form.Item>
+          <Form.Item name="reason" label="授权原因" rules={[{ required: true, min: 2, max: 500 }]}>
+            <Input.TextArea rows={3} />
           </Form.Item>
           <Button
             type="primary"
@@ -2439,6 +2686,37 @@ function Shell({ principal }: { principal: Principal }) {
   );
 }
 
+function RequiredPasswordChange() {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="login-shell">
+      <Card className="login-card" title="首次登录请修改临时密码">
+        <Alert type="warning" showIcon message="完成修改前不能进入管理后台。修改成功后请使用新密码重新登录。" style={{ marginBottom: 16 }} />
+        <Form
+          layout="vertical"
+          onFinish={async (values: { currentPassword: string; newPassword: string }) => {
+            setBusy(true);
+            try {
+              await api("/api/auth/change-password", json("POST", values));
+              message.success("密码已修改，请重新登录");
+              window.location.assign("/login");
+            } catch (error) {
+              message.error((error as Error).message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <Form.Item name="currentPassword" label="当前临时密码" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>
+          <Form.Item name="newPassword" label="新密码" rules={[{ required: true, min: 12, max: 128 }]}><Input.Password autoComplete="new-password" /></Form.Item>
+          <Form.Item name="confirmPassword" label="确认新密码" dependencies={["newPassword"]} rules={[{ required: true }, ({ getFieldValue }) => ({ validator: (_, value) => value === getFieldValue("newPassword") ? Promise.resolve() : Promise.reject(new Error("两次输入的密码不一致")) })]}><Input.Password autoComplete="new-password" /></Form.Item>
+          <Button block type="primary" htmlType="submit" loading={busy}>确认修改</Button>
+        </Form>
+      </Card>
+    </div>
+  );
+}
+
 export default function App() {
   const location = useLocation();
   const principal = useQuery({
@@ -2449,6 +2727,7 @@ export default function App() {
   if (location.pathname === "/login") return <Login />;
   if (principal.isLoading) return <div className="center">正在加载…</div>;
   if (principal.isError) return <Navigate to="/login" replace />;
+  if (principal.data!.mustChangePassword) return <AntApp><RequiredPasswordChange /></AntApp>;
   return (
     <AntApp>
       <Shell principal={principal.data!} />

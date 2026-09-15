@@ -29,6 +29,10 @@ async function logout() {
   try { await request('/api/auth/logout', 'POST') } finally { clearSession() }
 }
 
+async function logoutAll() {
+  try { await request('/api/auth/logout-all', 'POST') } finally { clearSession() }
+}
+
 async function request(path, method = 'GET', data) {
   try { return await rawRequest(path, method, data, wx.getStorageSync('accessToken')) }
   catch (error) {
@@ -62,4 +66,4 @@ function download(path) {
 
 const uploadPhoto = (filePath) => upload(filePath, 'photo')
 const uploadSignature = (filePath) => upload(filePath, 'signature')
-module.exports = { request, publicRequest, saveSession, clearSession, logout, uploadPhoto, uploadSignature, download }
+module.exports = { request, publicRequest, saveSession, clearSession, logout, logoutAll, uploadPhoto, uploadSignature, download }

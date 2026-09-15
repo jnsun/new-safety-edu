@@ -5,6 +5,8 @@ import { canGrantScopedRole, canJoinProject, canManagePersonStatus } from "../sr
 const principal = (role: Principal["roles"][number]["role"], scopeType: Principal["roles"][number]["scopeType"], scopeId: string | null): Principal => ({
   accountId: "00000000-0000-0000-0000-000000000001",
   personId: "00000000-0000-0000-0000-000000000002",
+  mustChangePassword: false,
+  sessionId: null,
   roles: [{ role, scopeType, scopeId }]
 });
 

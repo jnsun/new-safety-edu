@@ -6,7 +6,7 @@ import { prisma } from "../db.js";
 import { issueSession } from "../auth.js";
 import { normalizePhone } from "../crypto.js";
 import { auditCritical } from "../audit.js";
-import { bindAccountToPerson, grantRole } from "../identity.js";
+import { activatePendingRoles, bindAccountToPerson } from "../identity.js";
 
 const phoneSchema = z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/));
 const digest = (value: string, env: Env) => createHmac("sha256", env.JWT_SECRET).update(value).digest("hex");
@@ -49,11 +49,11 @@ export async function registerPhoneAuthRoutes(app: FastifyInstance, deps: { env:
       let account = byPerson ?? byPhone;
       if (!account) account = await tx.account.create({ data: { verifiedPhone: input.phone, ...(people.length === 1 ? { personId: people[0]!.id } : {}), status: "active" } });
       else account = await tx.account.update({ where: { id: account.id }, data: { verifiedPhone: input.phone, ...(people.length === 1 ? { personId: people[0]!.id } : {}) } });
-      if (people.length === 1) await grantRole(tx, { accountId: account.id, role: "learner", scopeType: "person", scopeId: people[0]!.id });
+      if (people.length === 1) await activatePendingRoles(tx, { personId: people[0]!.id, accountId: account.id, actorId: account.id });
       return { accountId: account.id, bindingStatus: people.length === 1 ? "bound" as const : "unbound" as const };
     });
     const requestId = "requestId" in result ? result.requestId : undefined;
     await auditCritical(result.accountId, "auth.phone_login", "account", result.accountId, requestId ? { mergeRequestId: requestId } : undefined, "var/audit-fallback.ndjson");
-    return { data: { ...(await issueSession(result.accountId, deps.env)), bindingStatus: result.bindingStatus, ...(requestId ? { requestId } : {}) } };
+    return { data: { ...(await issueSession(result.accountId, deps.env, { clientKind: "miniprogram", userAgent: request.headers["user-agent"] })), bindingStatus: result.bindingStatus, ...(requestId ? { requestId } : {}) } };
   });
 }

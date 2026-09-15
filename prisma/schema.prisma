@@ -24,6 +24,7 @@ enum PersonStatus {
   pending
   active
   disabled
+  merged
 }
 
 enum OrganizationType {
@@ -58,8 +59,12 @@ enum ProjectStatus {
 enum MembershipStatus {
   pending
   active
+  approved
   rejected
+  withdrawn
   removed
+  ended
+  cancelled
 }
 
 enum FileKind {
@@ -140,8 +145,10 @@ enum ChangeRequestStatus {
   pending
   approved
   rejected
+  withdrawn
   duplicate
   cancelled
+  failed
 }
 
 enum OutboxStatus {
@@ -195,27 +202,48 @@ enum CertificateTrainingStatus {
 }
 
 model Account {
-  id                  String           @id @default(uuid()) @db.Uuid
-  username            String?          @unique @db.VarChar(80)
-  passwordHash        String?          @map("password_hash")
-  status              AccountStatus    @default(active)
-  sessionVersion      Int              @default(0) @map("session_version")
-  personId            String?          @unique @map("person_id") @db.Uuid
-  verifiedPhone       String?          @unique @map("verified_phone") @db.VarChar(20)
-  mergedIntoAccountId String?          @map("merged_into_account_id") @db.Uuid
-  mergedAt            DateTime?        @map("merged_at")
-  person              Person?          @relation(fields: [personId], references: [id])
-  mergedInto          Account?         @relation("AccountMerge", fields: [mergedIntoAccountId], references: [id])
-  mergedAccounts      Account[]        @relation("AccountMerge")
-  roles               RoleAssignment[]
-  wechatBindings      WechatBinding[]
-  refreshSessions     RefreshSession[]
-  preferences         UserPreference[]
-  createdAt           DateTime         @default(now()) @map("created_at")
-  updatedAt           DateTime         @updatedAt @map("updated_at")
+  id                   String            @id @default(uuid()) @db.Uuid
+  username             String?           @unique @db.VarChar(80)
+  usernameNormalized   String?           @unique @map("username_normalized") @db.VarChar(80)
+  passwordHash         String?           @map("password_hash")
+  mustChangePassword   Boolean           @default(false) @map("must_change_password")
+  passwordLoginEnabled Boolean           @default(false) @map("password_login_enabled")
+  status               AccountStatus     @default(active)
+  sessionVersion       Int               @default(0) @map("session_version")
+  lastLoginAt          DateTime?         @map("last_login_at")
+  personId             String?           @unique @map("person_id") @db.Uuid
+  verifiedPhone        String?           @unique @map("verified_phone") @db.VarChar(20)
+  mergedIntoAccountId  String?           @map("merged_into_account_id") @db.Uuid
+  mergedAt             DateTime?         @map("merged_at")
+  person               Person?           @relation(fields: [personId], references: [id])
+  mergedInto           Account?          @relation("AccountMerge", fields: [mergedIntoAccountId], references: [id])
+  mergedAccounts       Account[]         @relation("AccountMerge")
+  roles                RoleAssignment[]
+  wechatBindings       WechatBinding[]
+  refreshSessions      RefreshSession[]
+  usernameHistory      UsernameHistory[]
+  preferences          UserPreference[]
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
 
   @@index([mergedIntoAccountId])
   @@map("accounts")
+}
+
+model UsernameHistory {
+  id                 String   @id @default(uuid()) @db.Uuid
+  accountId          String   @map("account_id") @db.Uuid
+  account            Account  @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  username           String   @db.VarChar(80)
+  usernameNormalized String   @map("username_normalized") @db.VarChar(80)
+  endedAt            DateTime @default(now()) @map("ended_at")
+  changedBy          String?  @map("changed_by") @db.Uuid
+  reason             String?  @db.VarChar(500)
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@unique([usernameNormalized])
+  @@index([accountId, endedAt])
+  @@map("username_history")
 }
 
 model Person {
@@ -230,7 +258,13 @@ model Person {
   nationalIdHash     String?                  @map("national_id_hash") @db.VarChar(64)
   nationalIdLast4    String?                  @map("national_id_last4") @db.Char(4)
   photoFileId        String?                  @map("photo_file_id") @db.Uuid
+  mergedIntoPersonId String?                  @map("merged_into_person_id") @db.Uuid
+  mergedAt           DateTime?                @map("merged_at")
+  mergedBy           String?                  @map("merged_by") @db.Uuid
+  mergeReason        String?                  @map("merge_reason") @db.VarChar(500)
   photoFile          PrivateFile?             @relation("PersonPhoto", fields: [photoFileId], references: [id], onDelete: Restrict)
+  mergedInto         Person?                  @relation("PersonMerge", fields: [mergedIntoPersonId], references: [id], onDelete: Restrict)
+  mergedPersons      Person[]                 @relation("PersonMerge")
   account            Account?
   organizations      OrganizationMembership[]
   projectMemberships ProjectMember[]
@@ -239,11 +273,13 @@ model Person {
   changeRequests     ChangeRequest[]
   notifications      Notification[]
   certificates       PersonCertificate[]
+  roleAssignments    RoleAssignment[]
   createdAt          DateTime                 @default(now()) @map("created_at")
   updatedAt          DateTime                 @updatedAt @map("updated_at")
 
   @@unique([nationalIdHash])
   @@index([phone, status])
+  @@index([mergedIntoPersonId])
   @@map("persons")
 }
 
@@ -256,6 +292,9 @@ model WechatBinding {
   account   Account   @relation(fields: [accountId], references: [id])
   active    Boolean   @default(true)
   boundAt   DateTime? @map("bound_at")
+  endedAt   DateTime? @map("ended_at")
+  endedBy   String?   @map("ended_by") @db.Uuid
+  endReason String?   @map("end_reason") @db.VarChar(500)
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
@@ -264,14 +303,21 @@ model WechatBinding {
 }
 
 model RefreshSession {
-  id        String    @id @default(uuid()) @db.Uuid
-  accountId String    @map("account_id") @db.Uuid
-  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
-  expiresAt DateTime  @map("expires_at")
-  revokedAt DateTime? @map("revoked_at")
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
+  id            String          @id @default(uuid()) @db.Uuid
+  accountId     String          @map("account_id") @db.Uuid
+  account       Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tokenHash     String          @unique @map("token_hash") @db.VarChar(64)
+  clientKind    String?         @map("client_kind") @db.VarChar(20)
+  familyId      String?         @map("family_id") @db.Uuid
+  rotatedFromId String?         @unique @map("rotated_from_id") @db.Uuid
+  rotatedFrom   RefreshSession? @relation("RefreshRotation", fields: [rotatedFromId], references: [id], onDelete: SetNull)
+  rotatedTo     RefreshSession? @relation("RefreshRotation")
+  lastUsedAt    DateTime?       @map("last_used_at")
+  userAgent     String?         @map("user_agent") @db.VarChar(500)
+  expiresAt     DateTime        @map("expires_at")
+  revokedAt     DateTime?       @map("revoked_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
 
   @@map("refresh_sessions")
 }
@@ -316,21 +362,25 @@ model OrganizationMembership {
 }
 
 model RoleAssignment {
-  id        String    @id @default(uuid()) @db.Uuid
-  accountId String    @map("account_id") @db.Uuid
-  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  role      RoleName
-  scopeType ScopeType @map("scope_type")
-  scopeId   String?   @map("scope_id") @db.Uuid
-  active    Boolean   @default(true)
-  endedAt   DateTime? @map("ended_at")
-  endedBy   String?   @map("ended_by") @db.Uuid
-  endReason String?   @map("end_reason") @db.VarChar(500)
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
+  id                String    @id @default(uuid()) @db.Uuid
+  accountId         String?   @map("account_id") @db.Uuid
+  account           Account?  @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  personId          String?   @map("person_id") @db.Uuid
+  person            Person?   @relation(fields: [personId], references: [id], onDelete: Restrict)
+  role              RoleName
+  scopeType         ScopeType @map("scope_type")
+  scopeId           String?   @map("scope_id") @db.Uuid
+  active            Boolean   @default(true)
+  activationPending Boolean   @default(false) @map("activation_pending")
+  endedAt           DateTime? @map("ended_at")
+  endedBy           String?   @map("ended_by") @db.Uuid
+  endReason         String?   @map("end_reason") @db.VarChar(500)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   @@index([role, scopeType, scopeId, active])
   @@index([accountId, active])
+  @@index([personId, active])
   @@map("role_assignments")
 }
 
@@ -358,18 +408,25 @@ model Project {
 }
 
 model ProjectMember {
-  id         String           @id @default(uuid()) @db.Uuid
-  projectId  String           @map("project_id") @db.Uuid
-  personId   String           @map("person_id") @db.Uuid
-  project    Project          @relation(fields: [projectId], references: [id])
-  person     Person           @relation(fields: [personId], references: [id])
-  status     MembershipStatus @default(pending)
-  reviewedBy String?          @map("reviewed_by") @db.Uuid
-  reviewedAt DateTime?        @map("reviewed_at")
-  createdAt  DateTime         @default(now()) @map("created_at")
-  updatedAt  DateTime         @updatedAt @map("updated_at")
+  id                   String           @id @default(uuid()) @db.Uuid
+  projectId            String           @map("project_id") @db.Uuid
+  personId             String           @map("person_id") @db.Uuid
+  project              Project          @relation(fields: [projectId], references: [id])
+  person               Person           @relation(fields: [personId], references: [id])
+  status               MembershipStatus @default(pending)
+  reviewedBy           String?          @map("reviewed_by") @db.Uuid
+  reviewedAt           DateTime?        @map("reviewed_at")
+  previousMembershipId String?          @map("previous_membership_id") @db.Uuid
+  previousMembership   ProjectMember?   @relation("ProjectMembershipHistory", fields: [previousMembershipId], references: [id], onDelete: Restrict)
+  laterMemberships     ProjectMember[]  @relation("ProjectMembershipHistory")
+  endedAt              DateTime?        @map("ended_at")
+  endedBy              String?          @map("ended_by") @db.Uuid
+  endReason            String?          @map("end_reason") @db.VarChar(500)
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
 
-  @@unique([projectId, personId])
+  @@index([projectId, personId, status])
+  @@index([previousMembershipId])
   @@map("project_members")
 }
 
@@ -1033,34 +1090,43 @@ model NotificationOutbox {
 }
 
 model ChangeRequest {
-  id         String              @id @default(uuid()) @db.Uuid
-  personId   String?             @map("person_id") @db.Uuid
-  person     Person?             @relation(fields: [personId], references: [id])
-  accountId  String?             @map("account_id") @db.Uuid
-  projectId  String?             @map("project_id") @db.Uuid
-  type       ChangeRequestType
-  status     ChangeRequestStatus @default(pending)
-  payload    Json
-  reviewedBy String?             @map("reviewed_by") @db.Uuid
-  reviewedAt DateTime?           @map("reviewed_at")
-  reviewNote String?             @map("review_note") @db.VarChar(500)
-  createdAt  DateTime            @default(now()) @map("created_at")
-  updatedAt  DateTime            @updatedAt @map("updated_at")
+  id            String              @id @default(uuid()) @db.Uuid
+  personId      String?             @map("person_id") @db.Uuid
+  person        Person?             @relation(fields: [personId], references: [id])
+  accountId     String?             @map("account_id") @db.Uuid
+  projectId     String?             @map("project_id") @db.Uuid
+  type          ChangeRequestType
+  status        ChangeRequestStatus @default(pending)
+  requestKey    String?             @map("request_key") @db.VarChar(160)
+  payload       Json
+  beforeSummary Json?               @map("before_summary")
+  afterSummary  Json?               @map("after_summary")
+  reviewedBy    String?             @map("reviewed_by") @db.Uuid
+  reviewedAt    DateTime?           @map("reviewed_at")
+  reviewNote    String?             @map("review_note") @db.VarChar(500)
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
 
   @@map("change_requests")
 }
 
 model AuditLog {
-  id         String   @id @default(uuid()) @db.Uuid
-  actorId    String?  @map("actor_id") @db.Uuid
-  action     String   @db.VarChar(120)
-  objectType String   @map("object_type") @db.VarChar(80)
-  objectId   String?  @map("object_id") @db.Uuid
-  metadata   Json?
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(uuid()) @db.Uuid
+  actorId        String?  @map("actor_id") @db.Uuid
+  requestId      String?  @map("request_id") @db.VarChar(120)
+  actorRole      String?  @map("actor_role") @db.VarChar(40)
+  actorScopeType String?  @map("actor_scope_type") @db.VarChar(40)
+  actorScopeId   String?  @map("actor_scope_id") @db.Uuid
+  result         String?  @db.VarChar(40)
+  action         String   @db.VarChar(120)
+  objectType     String   @map("object_type") @db.VarChar(80)
+  objectId       String?  @map("object_id") @db.Uuid
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@index([objectType, objectId])
+  @@index([requestId])
   @@map("audit_logs")
 }
 

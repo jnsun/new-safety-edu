@@ -1,5 +1,6 @@
 import { Prisma, type OrganizationType, type PersonType, type RoleName, type ScopeType } from "@prisma/client";
 import type { Principal } from "./auth.js";
+import { assertAccountMergeAllowed } from "./account-merge-policy.js";
 
 type Tx = Prisma.TransactionClient;
 type ScopedRole = { role: RoleName; scopeType: ScopeType; scopeId: string | null };
@@ -15,7 +16,11 @@ const orgManagerIds = (principal: Principal) => new Set(principal.roles
 
 export function canGrantScopedRole(principal: Principal, target: GrantContext) {
   if (principal.roles.some((item) => item.role === "company_admin")) return true;
+  const leaderIds = new Set(principal.roles.filter((item) => item.role === "org_leader" && item.scopeType === "organization" && item.scopeId).map((item) => item.scopeId!));
   const organizationIds = orgManagerIds(principal);
+  if (target.role === "org_admin") {
+    return target.scopeType === "organization" && !!target.scopeId && leaderIds.has(target.scopeId);
+  }
   if (target.role === "field_reporter") {
     return target.scopeType === "organization" && target.organizationType === "business_entity" && !!target.scopeId && organizationIds.has(target.scopeId);
   }
@@ -51,18 +56,35 @@ export async function setPrimaryOrganization(tx: Tx, input: { personId: string; 
   });
 }
 
-export async function grantRole(tx: Tx, input: { accountId: string; role: RoleName; scopeType: ScopeType; scopeId: string | null }) {
-  const existing = await tx.roleAssignment.findFirst({ where: { ...input, active: true } });
+export async function grantRole(tx: Tx, input: { personId: string; role: RoleName; scopeType: ScopeType; scopeId: string | null; actorId: string; reason: string }) {
+  if (input.role === "learner") throw Object.assign(new Error("普通人员能力无需手工授权"), { statusCode: 409, code: "LEARNER_ROLE_NOT_ASSIGNABLE" });
+  const person = await tx.person.findUniqueOrThrow({
+    where: { id: input.personId },
+    select: { status: true, type: true, account: { select: { id: true, status: true } } }
+  });
+  if (person.status !== "active" || person.type !== "employee") throw Object.assign(new Error("管理角色只能授予在用正式员工"), { statusCode: 409, code: "ROLE_PERSON_INELIGIBLE" });
+  const account = person.account?.status === "active" ? person.account : null;
+  if (input.role === "company_admin" && !account) throw Object.assign(new Error("公司管理员必须先激活账号"), { statusCode: 409, code: "COMPANY_ADMIN_ACCOUNT_REQUIRED" });
+  const state = account ? { accountId: account.id, active: true, activationPending: false } : { accountId: null, active: false, activationPending: true };
+  const identity = { personId: input.personId, role: input.role, scopeType: input.scopeType, scopeId: input.scopeId };
+  const existing = await tx.roleAssignment.findFirst({ where: { ...identity, OR: [{ active: true }, { activationPending: true }] } });
   if (existing) return existing;
   if (input.role === "org_leader" && input.scopeType === "organization") {
-    const leader = await tx.roleAssignment.findFirst({ where: { role: "org_leader", scopeType: "organization", scopeId: input.scopeId, active: true } });
-    if (leader) throw Object.assign(new Error("该组织已有当前负责人，请先更换负责人"), { statusCode: 409, code: "ORGANIZATION_LEADER_EXISTS" });
+    const pendingLeader = await tx.roleAssignment.findFirst({ where: { role: "org_leader", scopeType: "organization", scopeId: input.scopeId, activationPending: true } });
+    if (pendingLeader) throw Object.assign(new Error("该组织已有待激活负责人授权"), { statusCode: 409, code: "ORGANIZATION_PENDING_LEADER_EXISTS" });
+    if (account) {
+      await tx.roleAssignment.updateMany({
+        where: { role: "org_leader", scopeType: "organization", scopeId: input.scopeId, active: true, personId: { not: input.personId } },
+        data: { active: false, endedAt: new Date(), endedBy: input.actorId, endReason: input.reason }
+      });
+    }
   }
+  const assignment = { ...identity, ...state };
   try {
-    return await tx.roleAssignment.create({ data: input });
+    return await tx.roleAssignment.create({ data: assignment });
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
-    const concurrent = await tx.roleAssignment.findFirst({ where: { ...input, active: true } });
+    const concurrent = await tx.roleAssignment.findFirst({ where: { ...identity, OR: [{ active: true }, { activationPending: true }] } });
     if (concurrent) return concurrent;
     throw error;
   }
@@ -70,11 +92,25 @@ export async function grantRole(tx: Tx, input: { accountId: string; role: RoleNa
 
 export async function revokeRole(tx: Tx, input: { roleId: string; actorId: string; reason: string }) {
   const role = await tx.roleAssignment.findUniqueOrThrow({ where: { id: input.roleId } });
-  if (!role.active) return role;
+  if (!role.active && !role.activationPending) return role;
   return tx.roleAssignment.update({
     where: { id: input.roleId },
-    data: { active: false, endedAt: new Date(), endedBy: input.actorId, endReason: input.reason }
+    data: { active: false, activationPending: false, endedAt: new Date(), endedBy: input.actorId, endReason: input.reason }
   });
+}
+
+export async function activatePendingRoles(tx: Tx, input: { personId: string; accountId: string; actorId: string }) {
+  const pending = await tx.roleAssignment.findMany({ where: { personId: input.personId, activationPending: true }, orderBy: { createdAt: "asc" } });
+  for (const role of pending) {
+    if (role.role === "org_leader" && role.scopeType === "organization") {
+      await tx.roleAssignment.updateMany({
+        where: { role: "org_leader", scopeType: "organization", scopeId: role.scopeId, active: true, id: { not: role.id } },
+        data: { active: false, endedAt: new Date(), endedBy: input.actorId, endReason: "新负责人账号已激活" }
+      });
+    }
+    await tx.roleAssignment.update({ where: { id: role.id }, data: { accountId: input.accountId, active: true, activationPending: false } });
+  }
+  return pending.length;
 }
 
 export async function disablePerson(tx: Tx, input: { personId: string; actorId: string; reason: string }) {
@@ -85,11 +121,11 @@ export async function disablePerson(tx: Tx, input: { personId: string; actorId: 
   if (accountIds.length) {
     await tx.account.updateMany({ where: { id: { in: accountIds } }, data: { status: "disabled", sessionVersion: { increment: 1 } } });
     await tx.refreshSession.updateMany({ where: { accountId: { in: accountIds }, revokedAt: null }, data: { revokedAt: now } });
-    await tx.roleAssignment.updateMany({
-      where: { accountId: { in: accountIds }, active: true },
-      data: { active: false, endedAt: now, endedBy: input.actorId, endReason: input.reason }
-    });
   }
+  await tx.roleAssignment.updateMany({
+    where: { personId: input.personId, OR: [{ active: true }, { activationPending: true }] },
+    data: { active: false, activationPending: false, endedAt: now, endedBy: input.actorId, endReason: input.reason }
+  });
   await tx.projectMember.updateMany({
     where: { personId: input.personId, status: "active" },
     data: { status: "removed", reviewedBy: input.actorId, reviewedAt: now }
@@ -108,7 +144,6 @@ export async function reactivatePerson(tx: Tx, input: { personId: string }) {
   if (account) {
     await tx.refreshSession.updateMany({ where: { accountId: account.id, revokedAt: null }, data: { revokedAt: now } });
     await tx.account.update({ where: { id: account.id }, data: { status: "active", sessionVersion: { increment: 1 } } });
-    await grantRole(tx, { accountId: account.id, role: "learner", scopeType: "person", scopeId: input.personId });
   }
   return person;
 }
@@ -146,21 +181,42 @@ export async function requestAccountMerge(tx: Tx, input: { sourceAccountId: stri
   }
 }
 
-export async function mergeAccounts(tx: Tx, input: { sourceAccountId: string; targetAccountId: string; actorId: string; reason: string }) {
-  if (input.sourceAccountId === input.targetAccountId) throw Object.assign(new Error("不能合并同一账号"), { statusCode: 409, code: "ACCOUNT_MERGE_SAME" });
+export async function assertAccountMergeCandidate(tx: Tx, input: { sourceAccountId: string; targetAccountId: string; actorId: string; automaticEmptySource?: boolean }) {
   const [source, target] = await Promise.all([
-    tx.account.findUniqueOrThrow({ where: { id: input.sourceAccountId }, include: { roles: { where: { active: true } }, preferences: true } }),
-    tx.account.findUniqueOrThrow({ where: { id: input.targetAccountId } })
+    tx.account.findUniqueOrThrow({ where: { id: input.sourceAccountId }, include: { roles: { where: { active: true } }, preferences: true, wechatBindings: { where: { active: true }, select: { appId: true } } } }),
+    tx.account.findUniqueOrThrow({ where: { id: input.targetAccountId }, include: { person: { select: { status: true } }, wechatBindings: { where: { active: true }, select: { appId: true } } } })
   ]);
-  if (source.status === "merged" || target.status === "merged") throw Object.assign(new Error("账号已经合并"), { statusCode: 409, code: "ACCOUNT_ALREADY_MERGED" });
-  if (source.personId && target.personId && source.personId !== target.personId) throw Object.assign(new Error("两个账号属于不同人员，不能直接合并"), { statusCode: 409, code: "ACCOUNT_PERSON_CONFLICT" });
-  if (source.verifiedPhone && target.verifiedPhone && source.verifiedPhone !== target.verifiedPhone) throw Object.assign(new Error("两个账号的已验证手机号不同，请先处理手机号变更"), { statusCode: 409, code: "ACCOUNT_PHONE_CONFLICT" });
-  if (source.username && target.username && source.username !== target.username) throw Object.assign(new Error("两个账号都有独立用户名，请先处理登录名"), { statusCode: 409, code: "ACCOUNT_CREDENTIAL_CONFLICT" });
+  const activeCompanyAdminCount = await tx.account.count({ where: { status: "active", roles: { some: { active: true, role: "company_admin", scopeType: "company" } } } });
+  assertAccountMergeAllowed({
+    actorId: input.actorId,
+    sourceId: source.id,
+    targetId: target.id,
+    sourceStatus: source.status,
+    targetStatus: target.status,
+    sourcePersonId: source.personId,
+    targetPersonId: target.personId,
+    targetPersonStatus: target.person?.status ?? null,
+    sourceVerifiedPhone: source.verifiedPhone,
+    targetVerifiedPhone: target.verifiedPhone,
+    sourceUsername: source.username,
+    targetUsername: target.username,
+    sourcePassword: Boolean(source.passwordHash),
+    targetPassword: Boolean(target.passwordHash),
+    sourceActiveWechatAppIds: source.wechatBindings.map(({ appId }) => appId),
+    targetActiveWechatAppIds: target.wechatBindings.map(({ appId }) => appId),
+    sourceIsCompanyAdmin: source.roles.some(({ role, scopeType }) => role === "company_admin" && scopeType === "company"),
+    activeCompanyAdminCount,
+    ...(input.automaticEmptySource ? { automaticEmptySource: true } : {})
+  });
+  return { source, target };
+}
+
+export async function mergeAccounts(tx: Tx, input: { sourceAccountId: string; targetAccountId: string; actorId: string; reason: string; automaticEmptySource?: boolean }) {
+  const { source, target } = await assertAccountMergeCandidate(tx, input);
 
   const now = new Date();
   for (const role of source.roles) {
-    await revokeRole(tx, { roleId: role.id, actorId: input.actorId, reason: input.reason });
-    await grantRole(tx, { accountId: target.id, role: role.role, scopeType: role.scopeType, scopeId: role.scopeId });
+    await tx.roleAssignment.update({ where: { id: role.id }, data: { accountId: target.id } });
   }
   for (const preference of source.preferences) {
     await tx.userPreference.upsert({
@@ -173,7 +229,7 @@ export async function mergeAccounts(tx: Tx, input: { sourceAccountId: string; ta
   await tx.refreshSession.updateMany({ where: { accountId: { in: [source.id, target.id] }, revokedAt: null }, data: { revokedAt: now } });
   await tx.account.update({
     where: { id: source.id },
-    data: { username: null, passwordHash: null, verifiedPhone: null, personId: null, status: "merged", mergedIntoAccountId: target.id, mergedAt: now, sessionVersion: { increment: 1 } }
+    data: { username: null, usernameNormalized: null, passwordHash: null, passwordLoginEnabled: false, verifiedPhone: null, personId: null, status: "merged", mergedIntoAccountId: target.id, mergedAt: now, sessionVersion: { increment: 1 } }
   });
   await tx.account.update({
     where: { id: target.id },
@@ -182,7 +238,10 @@ export async function mergeAccounts(tx: Tx, input: { sourceAccountId: string; ta
       personId: target.personId ?? source.personId,
       verifiedPhone: target.verifiedPhone ?? source.verifiedPhone,
       username: target.username ?? source.username,
+      usernameNormalized: target.usernameNormalized ?? source.usernameNormalized,
       passwordHash: target.passwordHash ?? source.passwordHash,
+      passwordLoginEnabled: target.passwordLoginEnabled || source.passwordLoginEnabled,
+      mustChangePassword: target.passwordHash ? target.mustChangePassword : source.mustChangePassword,
       sessionVersion: { increment: 1 }
     }
   });
@@ -197,11 +256,11 @@ export async function bindAccountToPerson(tx: Tx, input: { currentAccountId: str
   if (current.personId && current.personId !== input.personId) throw Object.assign(new Error("当前账号已绑定其他人员"), { statusCode: 409, code: "ACCOUNT_PERSON_CONFLICT" });
   if (!existing || existing.id === current.id) {
     await tx.account.update({ where: { id: current.id }, data: { personId: input.personId, status: "active" } });
-    await grantRole(tx, { accountId: current.id, role: "learner", scopeType: "person", scopeId: input.personId });
+    await activatePendingRoles(tx, { personId: input.personId, accountId: current.id, actorId: current.id });
     return { status: "bound" as const, accountId: current.id };
   }
   if (await isEmptyAccount(tx, current.id)) {
-    const accountId = await mergeAccounts(tx, { sourceAccountId: current.id, targetAccountId: existing.id, actorId: existing.id, reason: input.reason });
+    const accountId = await mergeAccounts(tx, { sourceAccountId: current.id, targetAccountId: existing.id, actorId: current.id, reason: input.reason, automaticEmptySource: true });
     return { status: "bound" as const, accountId };
   }
   const request = await requestAccountMerge(tx, { sourceAccountId: current.id, targetAccountId: existing.id, personId: input.personId, reason: input.reason });

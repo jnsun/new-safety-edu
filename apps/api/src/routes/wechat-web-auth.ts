@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
-import { issueAccessToken } from "../auth.js";
+import { issueSession } from "../auth.js";
 import { audit } from "../audit.js";
 
 function configured(env: Env) {
@@ -35,8 +35,9 @@ export async function registerWechatWebAuthRoutes(app: FastifyInstance, deps: { 
     if (!response.ok || !body.unionid) return reply.redirect("/login?wechat=exchange_failed");
     const binding = await prisma.wechatBinding.findFirst({ where: { unionid: body.unionid, active: true, account: { status: "active" } }, select: { accountId: true } });
     if (!binding) return reply.redirect("/login?wechat=unbound");
-    const token = await issueAccessToken(binding.accountId, deps.env);
-    reply.setCookie("safety_session", token, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/", maxAge: 900 });
+    const session = await issueSession(binding.accountId, deps.env, { clientKind: "web", userAgent: request.headers["user-agent"] });
+    reply.setCookie("safety_session", session.accessToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/", maxAge: 900 });
+    reply.setCookie("safety_refresh", session.refreshToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/api/auth", maxAge: 30 * 86400 });
     audit(binding.accountId, "auth.wechat_web_login", "account", binding.accountId);
     return reply.redirect("/");
   });
