@@ -116,7 +116,9 @@ BEGIN
   IF EXISTS (
     SELECT 1
     FROM "role_assignments"
-    WHERE "active" AND "person_id" IS NULL
+    WHERE "active"
+      AND "person_id" IS NULL
+      AND NOT ("role" = 'company_admin' AND "scope_type" = 'company' AND "scope_id" IS NULL)
   ) THEN
     RAISE EXCEPTION 'person-account migration blocked: an active role has no linked person';
   END IF;
