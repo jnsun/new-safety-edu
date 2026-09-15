@@ -1,5 +1,5 @@
 type Role = { role: string; scopeType: string; scopeId: string | null };
-type Reader = { accountId: string; personId: string | null; roles: Role[] };
+type Reader = { accountId: string; personId: string | null; roles: Role[]; receivablesAccess?: { role: "owner" | "admin" | "reporter" | "readonly" | null; canReadLedger: boolean; canViewAll: boolean; readDepartmentIds: string[] } };
 type PersonScope = { personId: string; organizationIds: string[] };
 
 export type PrivateFileFacts = {
@@ -13,9 +13,17 @@ export type PrivateFileFacts = {
   coursewares: Array<{ scopeType: string; scopeId: string | null; personIds: string[] }>;
   trainingAttachments: Array<{ projectId: string | null; organizationId: string | null; personIds: string[] }>;
   requestAttachments: Array<{ accountId: string | null; personId: string | null; organizationId: string | null; projectId: string | null }>;
+  receivableAttachments: Array<{ financeDepartmentId: string; status: "active" | "voided" }>;
 };
 
 export function canReadPrivateFile(reader: Reader, facts: PrivateFileFacts) {
+  if (facts.receivableAttachments.length) {
+    const access = reader.receivablesAccess;
+    if (!access) return false;
+    return facts.receivableAttachments.every(({ financeDepartmentId, status }) => status === "voided"
+      ? access.role === "owner" || access.role === "admin"
+      : (access.role === "owner" || access.role === "admin" || access.canViewAll || access.canReadLedger && access.readDepartmentIds.includes(financeDepartmentId)));
+  }
   if (reader.roles.some(({ role }) => role === "company_admin")) return true;
   if (!facts.linked) return facts.uploadedBy === reader.accountId;
   const organizationIds = new Set(reader.roles.filter(({ role, scopeType, scopeId }) => ["org_leader", "org_admin"].includes(role) && scopeType === "organization" && scopeId).map(({ scopeId }) => scopeId!));

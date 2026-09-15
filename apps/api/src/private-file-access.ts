@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
 import { canReadPrivateFile, type PrivateFileFacts } from "./private-file-policy.js";
+import { resolveReceivablesAccess } from "./receivables-access.js";
 
 const organizationIds = (person: { organizations: Array<{ organizationId: string }> }) => person.organizations.map((row) => row.organizationId);
 const projectIds = (person: { projectMemberships: Array<{ projectId: string }> }) => person.projectMemberships.map((row) => row.projectId);
@@ -23,7 +24,8 @@ export async function readablePrivateFile(principal: Principal, id: string) {
     certificateAttachments: { select: { personCertificate: { select: { personId: true, person: { select: { organizations: { where: { active: true }, select: { organizationId: true } }, projectMemberships: { where: { status: "active" }, select: { projectId: true } } } } } }, organizationQualification: { select: { organizationId: true } } } },
     monthlyReportAttachments: { select: { report: { select: { projectId: true, reportingOrganizationId: true } } } },
     requestAttachments: { select: { changeRequest: { select: { accountId: true, personId: true, projectId: true, payload: true } } } },
-    versions: { select: { courseware: { select: { scopeType: true, scopeId: true } }, progress: { select: { assignment: { select: { personId: true } } } } } }
+    versions: { select: { courseware: { select: { scopeType: true, scopeId: true } }, progress: { select: { assignment: { select: { personId: true } } } } } },
+    receivableAttachments: { select: { status: true, ledger: { select: { financeDepartmentId: true } } } },
   } });
   if (!file) throw Object.assign(new Error("文件不存在"), { statusCode: 404, code: "NOT_FOUND" });
 
@@ -48,8 +50,10 @@ export async function readablePrivateFile(principal: Principal, id: string) {
     monthlyReports: file.monthlyReportAttachments.map(({ report }) => ({ projectId: report.projectId, organizationId: report.reportingOrganizationId })),
     coursewares: file.versions.map((row) => ({ scopeType: row.courseware.scopeType, scopeId: row.courseware.scopeId, personIds: row.progress.map(({ assignment }) => assignment.personId) })),
     trainingAttachments,
-    requestAttachments
+    requestAttachments,
+    receivableAttachments: file.receivableAttachments.map(({ status, ledger }) => ({ financeDepartmentId: ledger.financeDepartmentId, status })),
   };
-  if (!canReadPrivateFile(principal, facts)) throw Object.assign(new Error("无权读取该私有文件"), { statusCode: 403, code: "SCOPE_FORBIDDEN" });
+  const receivablesAccess = facts.receivableAttachments.length ? await resolveReceivablesAccess(principal) : undefined;
+  if (!canReadPrivateFile({ ...principal, ...(receivablesAccess ? { receivablesAccess } : {}) }, facts)) throw Object.assign(new Error("无权读取该私有文件"), { statusCode: 403, code: "SCOPE_FORBIDDEN" });
   return { storageKey: file.storageKey, originalName: file.originalName, mimeType: file.mimeType };
 }

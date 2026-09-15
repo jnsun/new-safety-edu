@@ -59,6 +59,7 @@
     "smoke:receivables-query": "tsx scripts/smoke-receivables-query.mts",
     "smoke:receivables-ledger": "tsx scripts/smoke-receivables-ledger.mts",
     "smoke:receivables-money": "tsx scripts/smoke-receivables-money.mts",
+    "smoke:receivables-attachments": "tsx scripts/smoke-receivables-attachments.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
   },

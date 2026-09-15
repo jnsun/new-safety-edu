@@ -1,5 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { z } from "zod";
 import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
@@ -8,6 +11,7 @@ import { requireReceivables, resolveReceivablesAccess } from "../receivables-acc
 import { queryReceivables } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
+import { createReceivableAttachment, newReceivableAttachmentStorageKey, receivableAttachmentStoragePath, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type RouteDependencies = {
@@ -86,11 +90,15 @@ const detailVoidInput = z.object({ ledgerRevision: z.number().int().positive(), 
 const detailParams = z.object({ id: z.string().uuid(), invoiceId: z.string().uuid() }).strict();
 const receiptParams = z.object({ id: z.string().uuid(), receiptId: z.string().uuid() }).strict();
 const writeoffInput = z.object({ ledgerRevision: z.number().int().positive(), reason: reasonInput, writeoffAmount: amountInput }).strict();
+const attachmentFields = z.object({ ledgerRevision: z.coerce.number().int().positive(), category: z.string().trim().min(1).max(120).default("general") }).strict();
+const attachmentVoidInput = z.object({ ledgerRevision: z.number().int().positive(), revision: z.number().int().positive(), reason: reasonInput }).strict();
+const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() }).strict();
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
 const lockReceivablesSetup = (tx: Prisma.TransactionClient) => tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
 const adminContext = (request: FastifyRequest) => ({ principal: request.principal as Principal, requestId: request.id });
 const ledgerContext = adminContext;
+const multipartFields = (fields: Record<string, unknown>) => Object.fromEntries(Object.entries(fields).filter(([key]) => key !== "file").map(([key, value]) => [key, value && typeof value === "object" && "value" in value ? (value as { value: unknown }).value : value]));
 
 export async function registerReceivablesRoutes(app: FastifyInstance, deps: RouteDependencies) {
   app.get("/api/receivables/access", { preHandler: deps.authenticate }, async (request) => ({ data: await resolveReceivablesAccess(request.principal as Principal) }));
@@ -164,6 +172,31 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.post("/api/receivables/ledgers/:id/void", { preHandler: deps.authenticate }, async (request) => ({
     data: await writeReceivablesLedger(ledgerContext(request), { type: "void", id: idParams.parse(request.params).id, input: ledgerVoidInput.parse(request.body) }),
   }));
+  app.post("/api/receivables/ledgers/:id/attachments", { preHandler: deps.authenticate }, async (request, reply) => {
+    const part = await request.file({ limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+    if (!part) throw httpError(400, "FILE_REQUIRED", "请选择文件");
+    const buffer = await part.toBuffer();
+    if (part.file.truncated) throw httpError(413, "FILE_TOO_LARGE", "附件不得超过 10 MiB");
+    validateReceivableAttachment(part.filename, part.mimetype, buffer);
+    const input = attachmentFields.parse(multipartFields(part.fields as Record<string, unknown>));
+    const root = process.env.UPLOAD_ROOT ?? "var/uploads";
+    const storageKey = newReceivableAttachmentStorageKey();
+    const path = receivableAttachmentStoragePath(root, storageKey);
+    await mkdir(dirname(path), { recursive: true });
+    try {
+      await writeFile(path, buffer, { mode: 0o600 });
+      await chmod(path, 0o600);
+      const data = await createReceivableAttachment(ledgerContext(request), { ledgerId: idParams.parse(request.params).id, ledgerRevision: input.ledgerRevision, category: input.category, file: { storageKey, originalName: part.filename.slice(0, 240), mimeType: part.mimetype, size: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") } });
+      return reply.code(201).send({ data });
+    } catch (error) {
+      await unlink(receivableAttachmentStoragePath(root, storageKey)).catch(() => undefined);
+      throw error;
+    }
+  });
+  app.post("/api/receivables/ledgers/:id/attachments/:attachmentId/void", { preHandler: deps.authenticate }, async (request) => {
+    const params = attachmentParams.parse(request.params);
+    return { data: await voidReceivableAttachment(ledgerContext(request), { ledgerId: params.id, attachmentId: params.attachmentId, ...attachmentVoidInput.parse(request.body) }) };
+  });
   app.post("/api/receivables/ledgers/:id/invoices", { preHandler: deps.authenticate }, async (request, reply) => {
     const input = invoiceCreateInput.parse(request.body); const id = idParams.parse(request.params).id;
     const data = await writeReceivablesMoney(ledgerContext(request), { type: "invoice.create", ledgerId: id, input: { ledgerRevision: input.ledgerRevision, date: input.invoiceDate, invoiceNo: input.invoiceNo, amount: input.amount, note: input.note } }); return reply.code(201).send({ data });
