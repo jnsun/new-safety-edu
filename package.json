@@ -55,6 +55,7 @@
     "smoke:private-file-access": "pnpm --filter @safety/api smoke:private-file-access",
     "smoke:file-association": "pnpm --filter @safety/api smoke:file-association",
     "smoke:receivables-access": "pnpm --filter @safety/api smoke:receivables-access",
+    "smoke:receivables-admin": "pnpm --filter @safety/api smoke:receivables-admin",
     "smoke:phase1-identity": "tsx scripts/phase1-identity-smoke.ts",
     "smoke:phase1-api": "tsx scripts/phase1-api-smoke.mts",
     "smoke:account-lifecycle": "pnpm --filter @safety/api smoke:account-lifecycle",

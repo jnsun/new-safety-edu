@@ -55,6 +55,7 @@
     "smoke:private-file-access": "tsx scripts/smoke-private-file-access.mts",
     "smoke:file-association": "tsx scripts/smoke-file-association.mts",
     "smoke:receivables-access": "tsx scripts/smoke-receivables-access.mts",
+    "smoke:receivables-admin": "tsx scripts/smoke-receivables-admin.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
   },
