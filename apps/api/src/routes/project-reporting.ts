@@ -3,12 +3,12 @@ import { Prisma } from "@prisma/client";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
-import { auditCritical } from "../audit.js";
 import { forbidden, isCompanyAdmin, projectScopeIds } from "../access.js";
 import {
   reportStats,
   validateReportFields,
 } from "../project-reporting-core.js";
+import { writeCriticalAudit } from "../transaction-audit.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 const id = z.string().uuid();
@@ -474,16 +474,9 @@ export async function registerProjectReportingRoutes(
             invalidReason: "当月新增有效月报",
           },
         });
+        await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "project_monthly_report.create", objectType: "project_monthly_report", objectId: created.id, metadata: { projectId: created.projectId, reportMonth: parsed.reportMonth } });
         return created;
       });
-      await auditCritical(
-        request.principal!.accountId,
-        "project_monthly_report.create",
-        "project_monthly_report",
-        row.id,
-        { projectId: row.projectId, reportMonth: parsed.reportMonth },
-        "var/audit-fallback.ndjson",
-      );
       return reply.code(201).send({ data: row });
     },
   );
@@ -553,19 +546,13 @@ export async function registerProjectReportingRoutes(
             reason,
           },
         });
-        return tx.projectMonthlyReport.update({
+        const updated = await tx.projectMonthlyReport.update({
           where: { id: reportId },
           data,
         });
+        await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "project_monthly_report.update", objectType: "project_monthly_report", objectId: updated.id, reason, metadata: { beforeRevision: current.revision } });
+        return updated;
       });
-      await auditCritical(
-        request.principal!.accountId,
-        "project_monthly_report.update",
-        "project_monthly_report",
-        row.id,
-        { beforeRevision: current.revision, reason },
-        "var/audit-fallback.ndjson",
-      );
       return { data: row };
     },
   );
@@ -586,23 +573,12 @@ export async function registerProjectReportingRoutes(
           statusCode: 409,
           code: "REPORT_NOT_SUBMITTED",
         });
-      await prisma.projectMonthlyReport.update({
-        where: { id: reportId },
-        data: {
+      await prisma.$transaction(async (tx) => { await tx.projectMonthlyReport.update({ where: { id: reportId }, data: {
           status: "withdrawn",
           withdrawnBy: request.principal!.accountId,
           withdrawnAt: new Date(),
           withdrawalReason: reason,
-        },
-      });
-      await auditCritical(
-        request.principal!.accountId,
-        "project_monthly_report.withdraw",
-        "project_monthly_report",
-        reportId,
-        { reason },
-        "var/audit-fallback.ndjson",
-      );
+        } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "project_monthly_report.withdraw", objectType: "project_monthly_report", objectId: reportId, reason }); });
       return { data: { status: "withdrawn" } };
     },
   );
@@ -620,14 +596,11 @@ export async function registerProjectReportingRoutes(
           statusCode: 409,
           code: "REPORT_NOT_WITHDRAWN",
         });
-      await prisma.projectMonthlyReport.update({
-        where: { id: reportId },
-        data: {
+      await prisma.$transaction(async (tx) => { await tx.projectMonthlyReport.update({ where: { id: reportId }, data: {
           status: "submitted",
           submittedBy: request.principal!.accountId,
           submittedAt: new Date(),
-        },
-      });
+        } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "project_monthly_report.resubmit", objectType: "project_monthly_report", objectId: reportId }); });
       return { data: { status: "submitted" } };
     },
   );
@@ -641,23 +614,12 @@ export async function registerProjectReportingRoutes(
       const { reason } = z
         .object({ reason: z.string().trim().min(2).max(500) })
         .parse(request.body);
-      await prisma.projectMonthlyReport.update({
-        where: { id: reportId },
-        data: {
+      await prisma.$transaction(async (tx) => { await tx.projectMonthlyReport.update({ where: { id: reportId }, data: {
           status: "voided",
           voidedBy: request.principal!.accountId,
           voidedAt: new Date(),
           voidReason: reason,
-        },
-      });
-      await auditCritical(
-        request.principal!.accountId,
-        "project_monthly_report.void",
-        "project_monthly_report",
-        reportId,
-        { reason },
-        "var/audit-fallback.ndjson",
-      );
+        } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "project_monthly_report.void", objectType: "project_monthly_report", objectId: reportId, reason }); });
       return { data: { status: "voided" } };
     },
   );
@@ -950,19 +912,7 @@ export async function registerProjectReportingRoutes(
       const deadlineDay = z
         .object({ deadlineDay: z.coerce.number().int().min(1).max(28) })
         .parse(request.body).deadlineDay;
-      const row = await prisma.reportSetting.upsert({
-        where: { id: "default" },
-        create: { deadlineDay, updatedBy: request.principal!.accountId },
-        update: { deadlineDay, updatedBy: request.principal!.accountId },
-      });
-      await auditCritical(
-        request.principal!.accountId,
-        "report_setting.update",
-        "report_setting",
-        row.id,
-        { deadlineDay },
-        "var/audit-fallback.ndjson",
-      );
+      const row = await prisma.$transaction(async (tx) => { const updated = await tx.reportSetting.upsert({ where: { id: "default" }, create: { deadlineDay, updatedBy: request.principal!.accountId }, update: { deadlineDay, updatedBy: request.principal!.accountId } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "report_setting.update", objectType: "report_setting", objectId: updated.id, metadata: { deadlineDay } }); return updated; });
       return { data: row };
     },
   );

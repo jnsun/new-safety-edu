@@ -6,11 +6,15 @@ import { Prisma, type QuestionType, type ScopeType, type TrainingType } from "@p
 import { jwtVerify, SignJWT } from "jose";
 import { z } from "zod";
 import { accessibleOrganizationIds, canAccessOrganization, canAccessPerson, canAccessProject, forbidden, isCompanyAdmin, organizationScopeIds, projectScopeIds } from "../access.js";
-import { audit, auditCritical } from "../audit.js";
+import { audit } from "../audit.js";
 import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import type { Env } from "../env.js";
 import { parseQuestionImport, questionImportTemplate } from "../question-import.js";
+import { coursewareViewerHeaders } from "../courseware-viewer-policy.js";
+import { nextQuestionVersion, questionVersionSnapshot } from "../question-versions.js";
+import { canPublishCourseware } from "../courseware-publish-policy.js";
+import { writeCriticalAudit } from "../transaction-audit.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -109,46 +113,66 @@ async function createAssignments(tx: Prisma.TransactionClient, batchId: string, 
 }
 
 export async function freezePaper(paperId: string): Promise<BatchPaperSnapshot> {
-  const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id: paperId }, include: { items: { include: { question: true }, orderBy: { sortOrder: "asc" } }, bank: { include: { questions: { where: { active: true }, orderBy: { createdAt: "asc" } } } } } });
+  const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id: paperId }, include: { items: { include: { question: { include: { versions: { orderBy: { version: "desc" }, take: 1 } } }, questionVersion: true }, orderBy: { sortOrder: "asc" } }, bank: { include: { questions: { where: { active: true }, include: { versions: { orderBy: { version: "desc" }, take: 1 } }, orderBy: { createdAt: "asc" } } } } } });
   const questions = paper.mode === "fixed"
-    ? paper.items.map(({ question, score }) => ({ id: question.id, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, score: Number(score) }))
-    : (paper.bank?.questions ?? []).map((question) => ({ id: question.id, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, score: 100 / (paper.randomCount ?? 1) }));
+    ? paper.items.map(({ question, questionVersion, score }) => questionVersionSnapshot(questionVersion ?? question.versions[0] ?? { id: question.id, version: question.currentVersion, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, explanation: question.explanation }, Number(score)))
+    : (paper.bank?.questions ?? []).map((question) => questionVersionSnapshot(question.versions[0] ?? { id: question.id, version: question.currentVersion, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, explanation: question.explanation }, 100 / (paper.randomCount ?? 1)));
   if (!questions.length || (paper.mode === "random" && questions.length < (paper.randomCount ?? 0))) throw Object.assign(new Error("试卷题目不足"), { statusCode: 409, code: "INSUFFICIENT_QUESTIONS" });
   return { mode: paper.mode, questions, ...(paper.mode === "random" ? { randomCount: paper.randomCount ?? 0 } : {}) };
 }
 
-export async function autoDispatch(type: "three_level" | "project_induction", personId: string, env: Env, projectId?: string) {
+export async function autoDispatchInTransaction(tx: Prisma.TransactionClient, type: "three_level" | "project_induction", personId: string, env: Env, projectId?: string) {
   const config = projectId
-    ? await prisma.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "project", scopeId: projectId }, include: { template: true }, orderBy: { createdAt: "desc" } })
-      ?? await prisma.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "company", scopeId: null }, include: { template: true }, orderBy: { createdAt: "desc" } })
-    : await prisma.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "company", scopeId: null }, include: { template: true }, orderBy: { createdAt: "desc" } });
+    ? await tx.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "project", scopeId: projectId }, include: { template: true }, orderBy: { createdAt: "desc" } })
+      ?? await tx.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "company", scopeId: null }, include: { template: true }, orderBy: { createdAt: "desc" } })
+    : await tx.trainingAutomationConfig.findFirst({ where: { type, active: true, scopeType: "company", scopeId: null }, include: { template: true }, orderBy: { createdAt: "desc" } });
   if (!config || !config.template.active) {
-    const admins = await prisma.account.findMany({ where: { status: "active", personId: { not: null }, roles: { some: { active: true, role: "company_admin" } } }, select: { personId: true } });
-    for (const admin of admins) if (admin.personId) await prisma.notification.upsert({ where: { dedupeKey: `auto-config-missing:${type}:${projectId ?? "company"}` }, create: { personId: admin.personId, title: "自动培训配置缺失", body: `${type === "three_level" ? "三级教育" : "项目入场教育"}未生成，请先配置默认模板和试卷。`, dedupeKey: `auto-config-missing:${type}:${projectId ?? "company"}` }, update: {} });
+    if (type === "project_induction") throw Object.assign(new Error("项目入场教育默认模板或试卷尚未配置，不能加入项目"), { statusCode: 409, code: "INDUCTION_CONFIG_REQUIRED" });
+    const admins = await tx.account.findMany({ where: { status: "active", personId: { not: null }, roles: { some: { active: true, role: "company_admin" } } }, select: { personId: true } });
+    for (const admin of admins) if (admin.personId) await tx.notification.upsert({ where: { dedupeKey: `auto-config-missing:${type}:${projectId ?? "company"}` }, create: { personId: admin.personId, title: "自动培训配置缺失", body: `${type === "three_level" ? "三级教育" : "项目入场教育"}未生成，请先配置默认模板和试卷。`, dedupeKey: `auto-config-missing:${type}:${projectId ?? "company"}` }, update: {} });
     return null;
   }
   const paperSnapshot = await freezePaper(config.paperId);
   const businessKey = `auto:${type}:${projectId ?? "company"}:${personId}`;
-  return prisma.$transaction(async (tx) => {
-    const existing = await tx.trainingBatch.findUnique({ where: { businessKey }, include: { assignments: true } });
-    if (existing) return existing;
-    const batch = await tx.trainingBatch.create({ data: { businessKey, name: type === "three_level" ? "员工基础三级教育" : "项目入场教育", type, templateId: config.templateId, paperId: config.paperId, paperSnapshot: paperSnapshot as unknown as Prisma.InputJsonValue, projectId: projectId ?? null } });
-    await createAssignments(tx, batch.id, config.templateId, [personId], env);
-    return batch;
-  });
+  const existing = await tx.trainingBatch.findUnique({ where: { businessKey }, include: { assignments: true } });
+  if (existing) return existing;
+  const batch = await tx.trainingBatch.create({ data: { businessKey, name: type === "three_level" ? "员工基础三级教育" : "项目入场教育", type, templateId: config.templateId, paperId: config.paperId, paperSnapshot: paperSnapshot as unknown as Prisma.InputJsonValue, projectId: projectId ?? null } });
+  await createAssignments(tx, batch.id, config.templateId, [personId], env);
+  return batch;
+}
+
+export async function autoDispatch(type: "three_level" | "project_induction", personId: string, env: Env, projectId?: string) {
+  return prisma.$transaction((tx) => autoDispatchInTransaction(tx, type, personId, env, projectId));
 }
 
 export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   const authenticated = { preHandler: deps.authenticate };
   const manager = { preHandler: [deps.authenticate, deps.requireManager] };
 
+  app.get("/api/courseware-publish-grants", manager, async (request) => {
+    const principal = principalOf(request); if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以维护课件发布授权");
+    return { data: await prisma.coursewarePublishGrant.findMany({ where: { active: true }, include: { person: { select: { id: true, name: true } } }, orderBy: { createdAt: "desc" } }) };
+  });
+  app.post("/api/courseware-publish-grants", manager, async (request, reply) => {
+    const principal = principalOf(request); if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以维护课件发布授权");
+    const input = z.object({ personId: z.string().uuid(), scopeType: z.enum(["organization", "project"]), scopeId: z.string().uuid(), reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    const person = await prisma.person.findUniqueOrThrow({ where: { id: input.personId }, select: { status: true, type: true, roleAssignments: { where: { active: true }, select: { role: true, scopeType: true, scopeId: true } } } });
+    if (person.status !== "active" || person.type !== "employee" || !person.roleAssignments.some((role) => role.scopeType === input.scopeType && role.scopeId === input.scopeId && ["org_leader", "org_admin", "project_admin"].includes(role.role))) throw Object.assign(new Error("发布授权只能授予该范围的当前管理员"), { statusCode: 409, code: "PUBLISH_GRANT_TARGET_INVALID" });
+    const grant = await prisma.$transaction(async (tx) => { const existing = await tx.coursewarePublishGrant.findFirst({ where: { personId: input.personId, scopeType: input.scopeType, scopeId: input.scopeId, active: true } }); if (existing) return existing; const created = await tx.coursewarePublishGrant.create({ data: { personId: input.personId, scopeType: input.scopeType, scopeId: input.scopeId, grantedBy: principal.accountId } }); await tx.auditLog.create({ data: { actorId: principal.accountId, action: "courseware.publish_grant", objectType: "courseware_publish_grant", objectId: created.id, result: "success", metadata: { personId: input.personId, scopeType: input.scopeType, scopeId: input.scopeId, reason: input.reason } } }); return created; });
+    return reply.code(201).send({ data: grant });
+  });
+  app.delete("/api/courseware-publish-grants/:id", manager, async (request, reply) => {
+    const principal = principalOf(request); if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以维护课件发布授权"); const { id } = idParam.parse(request.params); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    await prisma.$transaction(async (tx) => { const changed = await tx.coursewarePublishGrant.updateMany({ where: { id, active: true }, data: { active: false, endedAt: new Date(), endedBy: principal.accountId, endReason: reason } }); if (!changed.count) throw Object.assign(new Error("发布授权已经结束"), { statusCode: 409, code: "PUBLISH_GRANT_ENDED" }); await tx.auditLog.create({ data: { actorId: principal.accountId, action: "courseware.publish_grant_revoke", objectType: "courseware_publish_grant", objectId: id, result: "success", metadata: { reason } } }); }); return reply.code(204).send();
+  });
+
   app.get("/api/training-automation-configs", manager, async (request) => ({ data: await prisma.trainingAutomationConfig.findMany({ where: await visibleScope(principalOf(request)), include: { template: true, paper: true }, orderBy: { createdAt: "desc" } }) }));
   app.post("/api/training-automation-configs", manager, async (request, reply) => {
     const principal = principalOf(request); const input = scopeSchema.extend({ type: z.enum(["three_level", "project_induction"]), templateId: z.string().uuid(), paperId: z.string().uuid() }).parse(request.body); await assertScope(principal, input.scopeType, input.scopeId);
     const [template, snapshot] = await Promise.all([prisma.trainingTemplate.findUniqueOrThrow({ where: { id: input.templateId } }), freezePaper(input.paperId)]); void snapshot;
     if (template.type !== input.type || !template.active) throw Object.assign(new Error("默认模板类型不匹配或已停用"), { statusCode: 409, code: "AUTOMATION_TEMPLATE_INVALID" });
-    const row = await prisma.$transaction(async (tx) => { await tx.trainingAutomationConfig.updateMany({ where: { type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null, active: true }, data: { active: false } }); return tx.trainingAutomationConfig.create({ data: { ...input, scopeId: input.scopeId ?? null, createdBy: principal.accountId } }); });
-    await auditCritical(principal.accountId, "training.automation_config", "training_automation_config", row.id, { type: input.type, scopeType: input.scopeType, scopeId: input.scopeId }, "var/audit-fallback.ndjson"); return reply.code(201).send({ data: row });
+    const row = await prisma.$transaction(async (tx) => { await tx.trainingAutomationConfig.updateMany({ where: { type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null, active: true }, data: { active: false } }); const created = await tx.trainingAutomationConfig.create({ data: { ...input, scopeId: input.scopeId ?? null, createdBy: principal.accountId } }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "training.automation_config", objectType: "training_automation_config", objectId: created.id, metadata: { type: input.type, scopeType: input.scopeType, scopeId: input.scopeId } }); return created; });
+    return reply.code(201).send({ data: row });
   });
 
   app.get("/api/coursewares", manager, async (request) => ({ data: await prisma.courseware.findMany({ where: await visibleScope(principalOf(request)), include: { versions: { orderBy: { version: "desc" } } }, orderBy: { createdAt: "desc" } }) }));
@@ -180,9 +204,10 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
     const version = await prisma.coursewareVersion.findUniqueOrThrow({ where: { id }, include: { courseware: true } });
     await assertScope(principal, version.courseware.scopeType, version.courseware.scopeId);
+    const grants = principal.personId ? await prisma.coursewarePublishGrant.findMany({ where: { personId: principal.personId, active: true }, select: { scopeType: true, scopeId: true } }) : [];
+    if (!canPublishCourseware(principal.roles, grants, version.courseware)) forbidden("当前账号只有编辑权限，尚未获得该范围的课件发布授权");
     if (version.status === "published") return { data: version };
-    const updated = await prisma.coursewareVersion.update({ where: { id }, data: { status: "published", publishedAt: new Date() } });
-    await auditCritical(principal.accountId, "courseware.publish", "courseware_version", id, undefined, "var/audit-fallback.ndjson");
+    const updated = await prisma.$transaction(async (tx) => { const published = await tx.coursewareVersion.update({ where: { id }, data: { status: "published", publishedAt: new Date() } }); await tx.auditLog.create({ data: { actorId: principal.accountId, action: "courseware.publish", objectType: "courseware_version", objectId: id, result: "success" } }); return published; });
     return { data: updated };
   });
 
@@ -212,8 +237,19 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const bank = await prisma.questionBank.findUniqueOrThrow({ where: { id } }); await assertScope(principal, bank.scopeType, bank.scopeId);
     const input = z.object({ type: z.enum(["single_choice", "multiple_choice", "true_false"]), prompt: z.string().trim().min(2), options: z.array(z.string()).min(2), correct: z.array(z.string()).min(1), explanation: z.string().optional() }).parse(request.body);
     if (input.correct.some((answer) => !input.options.includes(answer))) throw Object.assign(new Error("正确答案必须来自选项"), { statusCode: 400, code: "INVALID_ANSWER" });
-    const question = await prisma.question.create({ data: { bankId: id, type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null } }); audit(principal.accountId, "question.create", "question", question.id);
+    const question = await prisma.question.create({ data: { bankId: id, type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, versions: { create: { version: 1, type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, createdBy: principal.accountId } } } }); audit(principal.accountId, "question.create", "question", question.id);
     return reply.code(201).send({ data: question });
+  });
+  app.patch("/api/questions/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const input = z.object({ type: z.enum(["single_choice", "multiple_choice", "true_false"]), prompt: z.string().trim().min(2), options: z.array(z.string()).min(2), correct: z.array(z.string()).min(1), explanation: z.string().optional(), active: z.boolean().optional() }).parse(request.body);
+    if (input.correct.some((answer) => !input.options.includes(answer))) throw Object.assign(new Error("正确答案必须来自选项"), { statusCode: 400, code: "INVALID_ANSWER" });
+    const question = await prisma.question.findUniqueOrThrow({ where: { id }, include: { bank: true } }); await assertScope(principal, question.bank.scopeType, question.bank.scopeId);
+    return { data: await prisma.$transaction(async (tx) => {
+      const version = nextQuestionVersion(question.currentVersion);
+      await tx.questionVersion.create({ data: { questionId: id, version, type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, createdBy: principal.accountId } });
+      const updated = await tx.question.update({ where: { id }, data: { type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, currentVersion: version, ...(input.active === undefined ? {} : { active: input.active }) } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "question.version_create", objectType: "question", objectId: id, result: "success", metadata: { fromVersion: question.currentVersion, toVersion: version } } }); return updated;
+    }, { isolationLevel: "Serializable" }) };
   });
   app.get("/api/question-import-template.csv", manager, async (_request, reply) => reply
     .header("Content-Type", "text/csv; charset=utf-8")
@@ -231,9 +267,8 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const conflicts = parsed.questions.flatMap((question) => existingKeys.has(`${question.type}|${question.prompt}`) ? [{ rowNumber: question.rowNumber, reason: "题库中已存在相同题型和题干" }] : []);
     const errors = [...parsed.errors, ...conflicts].sort((a, b) => a.rowNumber - b.rowNumber);
     if (errors.length) return { data: { created: 0, valid: parsed.questions.length - conflicts.length, failed: errors.length, errors } };
-    const created = await prisma.question.createMany({ data: parsed.questions.map(({ rowNumber: _rowNumber, ...question }) => ({ bankId: id, ...question })) });
-    audit(principal.accountId, "question.import", "question_bank", id, { created: created.count, filename: part.filename.slice(0, 240) });
-    return reply.code(201).send({ data: { created: created.count, valid: created.count, failed: 0, errors: [] } });
+    const count = await prisma.$transaction(async (tx) => { for (const { rowNumber: _rowNumber, ...question } of parsed.questions) await tx.question.create({ data: { bankId: id, ...question, versions: { create: { version: 1, ...question, createdBy: principal.accountId } } } }); await tx.auditLog.create({ data: { actorId: principal.accountId, action: "question.import", objectType: "question_bank", objectId: id, result: "success", metadata: { created: parsed.questions.length, filename: part.filename.slice(0, 240) } } }); return parsed.questions.length; });
+    return reply.code(201).send({ data: { created: count, valid: count, failed: 0, errors: [] } });
   });
 
   app.get("/api/exam-papers", manager, async (request) => {
@@ -249,7 +284,9 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     ]).parse(request.body);
     if (input.mode === "random") { const bank = await prisma.questionBank.findUniqueOrThrow({ where: { id: input.bankId } }); await assertScope(principal, bank.scopeType, bank.scopeId); }
     else for (const item of input.items) { const question = await prisma.question.findUniqueOrThrow({ where: { id: item.questionId }, include: { bank: true } }); await assertScope(principal, question.bank.scopeType, question.bank.scopeId); }
-    const paper = await prisma.examPaper.create({ data: input.mode === "fixed" ? { name: input.name, mode: input.mode, items: { create: input.items.map((item, sortOrder) => ({ ...item, sortOrder })) } } : { name: input.name, mode: input.mode, bankId: input.bankId, randomCount: input.randomCount }, include: { items: true } });
+    const currentVersions = new Map<string, string>();
+    if (input.mode === "fixed") for (const version of await prisma.questionVersion.findMany({ where: { questionId: { in: input.items.map(({ questionId }) => questionId) } }, orderBy: { version: "desc" } })) if (!currentVersions.has(version.questionId)) currentVersions.set(version.questionId, version.id);
+    const paper = await prisma.examPaper.create({ data: input.mode === "fixed" ? { name: input.name, mode: input.mode, items: { create: input.items.map((item, sortOrder) => ({ ...item, ...(currentVersions.get(item.questionId) ? { questionVersionId: currentVersions.get(item.questionId)! } : {}), sortOrder })) } } : { name: input.name, mode: input.mode, bankId: input.bankId, randomCount: input.randomCount }, include: { items: true } });
     audit(principal.accountId, "exam_paper.create", "exam_paper", paper.id);
     return reply.code(201).send({ data: paper });
   });
@@ -357,8 +394,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const progress = account?.status === "active" && account.personId ? await prisma.learningProgress.findFirst({ where: { assignmentId: payload.assignmentId, coursewareVersionId: payload.versionId, assignment: { personId: account.personId } }, include: { coursewareVersion: { include: { file: true } } } }) : null;
     if (!progress?.coursewareVersion.file) forbidden("无权读取课件");
     const content = await readFile(resolve(deps.env.UPLOAD_ROOT, progress.coursewareVersion.file.storageKey));
-    reply.header("Content-Type", "text/html; charset=utf-8").header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff")
-      .header("Content-Security-Policy", "default-src 'self' data: blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'unsafe-inline'");
+    reply.header("Content-Type", "text/html; charset=utf-8"); for (const [name, value] of Object.entries(coursewareViewerHeaders())) reply.header(name, value);
     return reply.send(content);
   });
   app.post("/api/assignments/:id/learning/:versionId/complete", authenticated, async (request) => {
@@ -444,6 +480,6 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   });
   app.post("/api/assignments/:id/unlock", manager, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const assignment = await assertAssignment(principal, id, true); if (assignment.status !== "locked") throw Object.assign(new Error("任务未锁定"), { statusCode: 409, code: "NOT_LOCKED" }); const reason = z.object({ reason: z.string().trim().min(2).max(300) }).parse(request.body).reason;
-    const round = await prisma.examAttempt.count({ where: { assignmentId: id } }); const originals = await prisma.learningProgress.findMany({ where: { assignmentId: id, remediationRound: 0 }, select: { coursewareVersionId: true } }); await prisma.$transaction([prisma.trainingAssignment.update({ where: { id }, data: { status: "remediation_required", extraAttempts: { increment: 1 } } }), prisma.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: id, coursewareVersionId: item.coursewareVersionId, remediationRound: round })), skipDuplicates: true })]); await auditCritical(principal.accountId, "assignment.unlock", "training_assignment", id, { reason, addedAttempts: 1 }, "var/audit-fallback.ndjson"); return { data: { status: "remediation_required", addedAttempts: 1 } };
+    const round = await prisma.examAttempt.count({ where: { assignmentId: id } }); const originals = await prisma.learningProgress.findMany({ where: { assignmentId: id, remediationRound: 0 }, select: { coursewareVersionId: true } }); await prisma.$transaction(async (tx) => { await tx.trainingAssignment.update({ where: { id }, data: { status: "remediation_required", extraAttempts: { increment: 1 } } }); await tx.learningProgress.createMany({ data: originals.map((item) => ({ assignmentId: id, coursewareVersionId: item.coursewareVersionId, remediationRound: round })), skipDuplicates: true }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "assignment.unlock", objectType: "training_assignment", objectId: id, reason, metadata: { addedAttempts: 1 } }); }); return { data: { status: "remediation_required", addedAttempts: 1 } };
   });
 }

@@ -34,4 +34,7 @@ pnpm build
 pnpm db:validate
 pnpm db:deploy
 pnpm db:bootstrap
+pnpm check:context-closure
 ```
+
+生产维护命令默认只预览：`pnpm retention`、`pnpm files:cleanup-orphans`、`pnpm audit:replay`、`pnpm capacity:check`。执行清理或审计补写时必须显式增加 `--apply`；生产环境还必须增加 `--confirm-production`。完整操作见 `docs/mvp-deploy.md`。

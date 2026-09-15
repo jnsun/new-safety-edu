@@ -4,10 +4,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
-import { auditCritical } from "../audit.js";
+import { audit } from "../audit.js";
 import { accessibleOrganizationIds, canAccessProject, forbidden, isCompanyAdmin } from "../access.js";
 import { encryptField } from "../crypto.js";
 import { parseQualificationWorkbook, type QualificationImportRow } from "../qualification-import.js";
+import { assertOwnedFiles } from "../file-association-policy.js";
+import { assertOrganizationQualificationOwner } from "../qualification-policy.js";
+import { writeCriticalAudit } from "../transaction-audit.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 const DAY = 86_400_000;
@@ -58,6 +61,18 @@ async function validateType(input: z.infer<typeof certificateInput>) {
 async function readableOrgIds(request: FastifyRequest) {
   return isCompanyAdmin(request.principal!) ? undefined : await accessibleOrganizationIds(request.principal!);
 }
+async function assertOwnedAttachments(accountId: string, fileIds: string[]) {
+  if (!fileIds.length) return;
+  const files = await prisma.privateFile.findMany({
+    where: { id: { in: fileIds } },
+    select: { id: true, kind: true, uploadedBy: true },
+  });
+  assertOwnedFiles(files, fileIds, accountId, "attachment");
+}
+async function assertCompanyQualificationOwner(organizationId: string) {
+  const organization = await prisma.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { type: true } });
+  assertOrganizationQualificationOwner(organization.type);
+}
 const dateText = (value: Date | null) => value?.toISOString().slice(0, 10) ?? null;
 
 export async function registerQualificationRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard }) {
@@ -65,27 +80,25 @@ export async function registerQualificationRoutes(app: FastifyInstance, deps: { 
   app.get("/api/certificate-types", { preHandler: deps.authenticate }, async () => ({ data: await prisma.certificateType.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }) }));
   app.post("/api/certificate-types", { preHandler: deps.authenticate }, async (request, reply) => {
     requireCompanyAdmin(request); const input = typeInput.parse(request.body);
-    const row = await prisma.certificateType.create({ data: { ...input, subtype1Label: input.subtype1Label ?? null, subtype2Label: input.subtype2Label ?? null } });
-    await auditCritical(request.principal!.accountId, "certificate_type.create", "certificate_type", row.id, undefined, "var/audit-fallback.ndjson");
+    const row = await prisma.$transaction(async (tx) => { const created = await tx.certificateType.create({ data: { ...input, subtype1Label: input.subtype1Label ?? null, subtype2Label: input.subtype2Label ?? null } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate_type.create", objectType: "certificate_type", objectId: created.id }); return created; });
     return reply.code(201).send({ data: row });
   });
   app.patch("/api/certificate-types/:id", { preHandler: deps.authenticate }, async (request) => {
     requireCompanyAdmin(request); const typeId = id.parse((request.params as { id: string }).id); const input = typeInput.partial().parse(request.body);
     const data = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as Prisma.CertificateTypeUpdateInput;
-    const row = await prisma.certificateType.update({ where: { id: typeId }, data });
-    await auditCritical(request.principal!.accountId, "certificate_type.update", "certificate_type", row.id, undefined, "var/audit-fallback.ndjson");
+    const row = await prisma.$transaction(async (tx) => { const updated = await tx.certificateType.update({ where: { id: typeId }, data }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate_type.update", objectType: "certificate_type", objectId: updated.id }); return updated; });
     return { data: row };
   });
   app.delete("/api/certificate-types/:id", { preHandler: deps.authenticate }, async (request, reply) => {
     requireCompanyAdmin(request); const typeId = id.parse((request.params as { id: string }).id); const [persons, organizations] = await Promise.all([prisma.personCertificate.count({ where: { typeId } }), prisma.organizationQualification.count({ where: { typeId } })]);
-    if (persons + organizations > 0) throw Object.assign(new Error("该类型已有证照引用，不能删除；可以停用"), { statusCode: 409, code: "TYPE_IN_USE" }); await prisma.certificateType.delete({ where: { id: typeId } }); return reply.code(204).send();
+    if (persons + organizations > 0) throw Object.assign(new Error("该类型已有证照引用，不能删除；可以停用"), { statusCode: 409, code: "TYPE_IN_USE" });
+    await prisma.$transaction(async (tx) => { await tx.certificateType.delete({ where: { id: typeId } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate_type.delete", objectType: "certificate_type", objectId: typeId }); }); return reply.code(204).send();
   });
 
   app.get("/api/certificate-settings", { preHandler: deps.authenticate }, async () => ({ data: await prisma.certificateSetting.upsert({ where: { id: "default" }, create: {}, update: {} }) }));
   app.patch("/api/certificate-settings", { preHandler: deps.authenticate }, async (request) => {
     requireCompanyAdmin(request); const warnDays = z.object({ warnDays: z.coerce.number().int().min(1).max(365) }).parse(request.body).warnDays;
-    const row = await prisma.certificateSetting.upsert({ where: { id: "default" }, create: { warnDays, updatedBy: request.principal!.accountId }, update: { warnDays, updatedBy: request.principal!.accountId } });
-    await auditCritical(request.principal!.accountId, "certificate_setting.update", "certificate_setting", row.id, { warnDays }, "var/audit-fallback.ndjson");
+    const row = await prisma.$transaction(async (tx) => { const updated = await tx.certificateSetting.upsert({ where: { id: "default" }, create: { warnDays, updatedBy: request.principal!.accountId }, update: { warnDays, updatedBy: request.principal!.accountId } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate_setting.update", objectType: "certificate_setting", objectId: updated.id, metadata: { warnDays } }); return updated; });
     return { data: row };
   });
 
@@ -111,50 +124,50 @@ export async function registerQualificationRoutes(app: FastifyInstance, deps: { 
 
   app.post("/api/certificates", { preHandler: deps.authenticate }, async (request, reply) => {
     requireCompanyAdmin(request); const input = certificateInput.parse(request.body); const type = await validateType(input); const actor = request.principal!.accountId;
+    if (input.category === "company") await assertCompanyQualificationOwner(input.ownerId);
+    await assertOwnedAttachments(actor, input.fileIds);
     const common = { typeId: input.typeId, name: input.name, category: type.name, subtype1Value: input.subtype1Value ?? null, subtype2Value: input.subtype2Value ?? null, issuingAuthority: input.issuingAuthority ?? null, issuedAt: input.issuedAt ?? null, validFrom: input.validFrom ?? null, expiresAt: input.isLongTerm ? null : input.expiresAt ?? null, isLongTerm: input.isLongTerm, remark: input.remark ?? null, createdBy: actor, ...numberFields(input.certificateNo, deps.env) };
-    const row = input.category === "company"
-      ? await prisma.organizationQualification.create({ data: { ...common, organizationId: input.ownerId, scope: input.scope ?? null, attachments: { create: input.fileIds.map((fileId) => ({ fileId, createdBy: actor })) } } })
-      : await prisma.personCertificate.create({ data: { ...common, personId: input.ownerId, holderPosition: input.holderPosition ?? null, trainingStatus: trainingDefault(type.requiresAnnualTraining), annualTrainingStatuses: { create: { year: new Date().getFullYear(), status: trainingDefault(type.requiresAnnualTraining), setBy: actor } }, attachments: { create: input.fileIds.map((fileId) => ({ fileId, createdBy: actor })) } } });
-    await auditCritical(actor, "certificate.create", input.category, row.id, { ownerId: input.ownerId }, "var/audit-fallback.ndjson");
+    const row = await prisma.$transaction(async (tx) => { const created = input.category === "company"
+      ? await tx.organizationQualification.create({ data: { ...common, organizationId: input.ownerId, scope: input.scope ?? null, attachments: { create: input.fileIds.map((fileId) => ({ fileId, createdBy: actor })) } } })
+      : await tx.personCertificate.create({ data: { ...common, personId: input.ownerId, holderPosition: input.holderPosition ?? null, trainingStatus: trainingDefault(type.requiresAnnualTraining), annualTrainingStatuses: { create: { year: new Date().getFullYear(), status: trainingDefault(type.requiresAnnualTraining), setBy: actor } }, attachments: { create: input.fileIds.map((fileId) => ({ fileId, createdBy: actor })) } } }); await writeCriticalAudit(tx, { actorId: actor, action: "certificate.create", objectType: input.category, objectId: created.id, metadata: { ownerId: input.ownerId } }); return created; });
     return reply.code(201).send({ data: { id: row.id, category: input.category } });
   });
 
   app.patch("/api/certificates/:category/:id", { preHandler: deps.authenticate }, async (request) => {
     requireCompanyAdmin(request); const params = z.object({ category: z.enum(["company", "personal"]), id }).parse(request.params); const input = certificateInput.parse(request.body); if (input.category !== params.category) throw Object.assign(new Error("证照大类不能修改"), { statusCode: 400 });
-    const type = await validateType(input); const data = { typeId: input.typeId, name: input.name, category: type.name, subtype1Value: input.subtype1Value ?? null, subtype2Value: input.subtype2Value ?? null, issuingAuthority: input.issuingAuthority ?? null, issuedAt: input.issuedAt ?? null, validFrom: input.validFrom ?? null, expiresAt: input.isLongTerm ? null : input.expiresAt ?? null, isLongTerm: input.isLongTerm, remark: input.remark ?? null, ...numberFields(input.certificateNo, deps.env) };
+    await assertOwnedAttachments(request.principal!.accountId, input.fileIds);
+    const type = await validateType(input); if (params.category === "company") await assertCompanyQualificationOwner(input.ownerId); const data = { typeId: input.typeId, name: input.name, category: type.name, subtype1Value: input.subtype1Value ?? null, subtype2Value: input.subtype2Value ?? null, issuingAuthority: input.issuingAuthority ?? null, issuedAt: input.issuedAt ?? null, validFrom: input.validFrom ?? null, expiresAt: input.isLongTerm ? null : input.expiresAt ?? null, isLongTerm: input.isLongTerm, remark: input.remark ?? null, ...numberFields(input.certificateNo, deps.env) };
     const attachments = input.fileIds.length ? { create: input.fileIds.map((fileId) => ({ fileId, createdBy: request.principal!.accountId })) } : undefined;
-    if (params.category === "company") await prisma.organizationQualification.update({ where: { id: params.id }, data: { ...data, organizationId: input.ownerId, scope: input.scope ?? null, ...(attachments ? { attachments } : {}) } });
-    else await prisma.personCertificate.update({ where: { id: params.id }, data: { ...data, personId: input.ownerId, holderPosition: input.holderPosition ?? null, ...(attachments ? { attachments } : {}) } });
-    await auditCritical(request.principal!.accountId, "certificate.update", params.category, params.id, undefined, "var/audit-fallback.ndjson");
+    await prisma.$transaction(async (tx) => { if (params.category === "company") await tx.organizationQualification.update({ where: { id: params.id }, data: { ...data, organizationId: input.ownerId, scope: input.scope ?? null, ...(attachments ? { attachments } : {}) } }); else await tx.personCertificate.update({ where: { id: params.id }, data: { ...data, personId: input.ownerId, holderPosition: input.holderPosition ?? null, ...(attachments ? { attachments } : {}) } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate.update", objectType: params.category, objectId: params.id }); });
     return { data: { id: params.id } };
   });
 
   app.post("/api/certificates/:category/:id/renew", { preHandler: deps.authenticate }, async (request, reply) => {
     requireCompanyAdmin(request); const params = z.object({ category: z.enum(["company", "personal"]), id }).parse(request.params); const input = certificateInput.parse(request.body); const type = await validateType(input); const actor = request.principal!.accountId;
+    await assertOwnedAttachments(actor, input.fileIds);
     if (input.category !== params.category) throw Object.assign(new Error("换证大类必须与原证一致"), { statusCode: 400 });
+    if (params.category === "company") { const current = await prisma.organizationQualification.findUniqueOrThrow({ where: { id: params.id }, select: { organizationId: true } }); await assertCompanyQualificationOwner(current.organizationId); }
     const common = { typeId: input.typeId, name: input.name, category: type.name, subtype1Value: input.subtype1Value ?? null, subtype2Value: input.subtype2Value ?? null, issuingAuthority: input.issuingAuthority ?? null, issuedAt: input.issuedAt ?? null, validFrom: input.validFrom ?? null, expiresAt: input.isLongTerm ? null : input.expiresAt ?? null, isLongTerm: input.isLongTerm, remark: input.remark ?? null, renewedFromId: params.id, createdBy: actor, ...numberFields(input.certificateNo, deps.env) };
     const created = await prisma.$transaction(async (tx) => {
-      if (params.category === "company") { const old = await tx.organizationQualification.findUniqueOrThrow({ where: { id: params.id } }); const next = await tx.organizationQualification.create({ data: { ...common, organizationId: old.organizationId, scope: input.scope ?? old.scope, attachments: { create: input.fileIds.map((fileId) => ({ fileId, createdBy: actor })) } } }); await tx.organizationQualification.update({ where: { id: old.id }, data: { status: "replaced", active: false, renewedAt: new Date() } }); return next; }
-      const old = await tx.personCertificate.findUniqueOrThrow({ where: { id: params.id } }); const next = await tx.personCertificate.create({ data: { ...common, personId: old.personId, holderPosition: input.holderPosition ?? old.holderPosition, trainingStatus: trainingDefault(type.requiresAnnualTraining), annualTrainingStatuses: { create: { year: new Date().getFullYear(), status: trainingDefault(type.requiresAnnualTraining), setBy: actor } }, attachments: { create: input.fileIds.map((fileId) => ({ fileId, createdBy: actor })) } } }); await tx.personCertificate.update({ where: { id: old.id }, data: { status: "replaced", active: false, renewedAt: new Date() } }); return next;
+      let next; if (params.category === "company") { const old = await tx.organizationQualification.findUniqueOrThrow({ where: { id: params.id } }); next = await tx.organizationQualification.create({ data: { ...common, organizationId: old.organizationId, scope: input.scope ?? old.scope, attachments: { create: input.fileIds.map((fileId) => ({ fileId, createdBy: actor })) } } }); await tx.organizationQualification.update({ where: { id: old.id }, data: { status: "replaced", active: false, renewedAt: new Date() } }); }
+      else { const old = await tx.personCertificate.findUniqueOrThrow({ where: { id: params.id } }); next = await tx.personCertificate.create({ data: { ...common, personId: old.personId, holderPosition: input.holderPosition ?? old.holderPosition, trainingStatus: trainingDefault(type.requiresAnnualTraining), annualTrainingStatuses: { create: { year: new Date().getFullYear(), status: trainingDefault(type.requiresAnnualTraining), setBy: actor } }, attachments: { create: input.fileIds.map((fileId) => ({ fileId, createdBy: actor })) } } }); await tx.personCertificate.update({ where: { id: old.id }, data: { status: "replaced", active: false, renewedAt: new Date() } }); } await writeCriticalAudit(tx, { actorId: actor, action: "certificate.renew", objectType: params.category, objectId: next.id, metadata: { renewedFromId: params.id } }); return next;
     });
-    await auditCritical(actor, "certificate.renew", params.category, created.id, { renewedFromId: params.id }, "var/audit-fallback.ndjson");
     return reply.code(201).send({ data: { id: created.id } });
   });
 
   app.patch("/api/certificates/:category/:id/revoke", { preHandler: deps.authenticate }, async (request) => {
     requireCompanyAdmin(request); const params = z.object({ category: z.enum(["company", "personal"]), id }).parse(request.params);
-    if (params.category === "company") await prisma.organizationQualification.update({ where: { id: params.id }, data: { status: "revoked", active: false } }); else await prisma.personCertificate.update({ where: { id: params.id }, data: { status: "revoked", active: false } });
-    await auditCritical(request.principal!.accountId, "certificate.revoke", params.category, params.id, undefined, "var/audit-fallback.ndjson"); return { data: { id: params.id } };
+    await prisma.$transaction(async (tx) => { if (params.category === "company") await tx.organizationQualification.update({ where: { id: params.id }, data: { status: "revoked", active: false } }); else await tx.personCertificate.update({ where: { id: params.id }, data: { status: "revoked", active: false } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate.revoke", objectType: params.category, objectId: params.id }); }); return { data: { id: params.id } };
   });
 
   app.post("/api/certificates/:category/:id/void", { preHandler: deps.authenticate }, async (request) => {
     requireCompanyAdmin(request); const params = z.object({ category: z.enum(["company", "personal"]), id }).parse(request.params); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body);
-    if (params.category === "company") await prisma.organizationQualification.update({ where: { id: params.id }, data: { status: "voided", active: false, voidedAt: new Date(), voidedBy: request.principal!.accountId, voidReason: reason } }); else await prisma.personCertificate.update({ where: { id: params.id }, data: { status: "voided", active: false, voidedAt: new Date(), voidedBy: request.principal!.accountId, voidReason: reason } });
-    await auditCritical(request.principal!.accountId, "certificate.void", params.category, params.id, { reason }, "var/audit-fallback.ndjson"); return { data: { id: params.id, status: "voided" } };
+    await prisma.$transaction(async (tx) => { if (params.category === "company") await tx.organizationQualification.update({ where: { id: params.id }, data: { status: "voided", active: false, voidedAt: new Date(), voidedBy: request.principal!.accountId, voidReason: reason } }); else await tx.personCertificate.update({ where: { id: params.id }, data: { status: "voided", active: false, voidedAt: new Date(), voidedBy: request.principal!.accountId, voidReason: reason } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate.void", objectType: params.category, objectId: params.id, reason }); }); return { data: { id: params.id, status: "voided" } };
   });
 
   app.post("/api/certificates/:category/:id/attachments", { preHandler: deps.authenticate }, async (request, reply) => {
     requireCompanyAdmin(request); const params = z.object({ category: z.enum(["company", "personal"]), id }).parse(request.params); const fileId = z.object({ fileId: id }).parse(request.body).fileId;
+    await assertOwnedAttachments(request.principal!.accountId, [fileId]);
     const row = await prisma.certificateAttachment.create({ data: { fileId, createdBy: request.principal!.accountId, ...(params.category === "company" ? { organizationQualificationId: params.id } : { personCertificateId: params.id }) } });
     return reply.code(201).send({ data: row });
   });
@@ -166,27 +179,26 @@ export async function registerQualificationRoutes(app: FastifyInstance, deps: { 
       const created = await tx.certificateTrainingRecord.create({ data: { personCertificateId: certificateId, year: input.year, trainingDate: input.trainingDate, content: input.content, trainingOrganization: input.trainingOrganization ?? null, hours: input.hours ?? null, result: input.result ?? null, remark: input.remark ?? null, createdBy: actor } });
       await tx.certificateAnnualTrainingStatus.upsert({ where: { personCertificateId_year: { personCertificateId: certificateId, year: input.year } }, create: { personCertificateId: certificateId, year: input.year, status: "trained", setBy: actor }, update: { status: "trained", reason: null, setBy: actor } });
       if (input.year === new Date().getFullYear()) await tx.personCertificate.update({ where: { id: certificateId }, data: { trainingStatus: "trained" } });
+      await writeCriticalAudit(tx, { actorId: actor, action: "certificate_training.create", objectType: "certificate_training_record", objectId: created.id, metadata: { certificateId, year: input.year } });
       return created;
     });
-    await auditCritical(actor, "certificate_training.create", "certificate_training_record", row.id, { certificateId, year: input.year }, "var/audit-fallback.ndjson");
     return reply.code(201).send({ data: row });
   });
   app.patch("/api/certificate-training-records/:id", { preHandler: deps.authenticate }, async (request, reply) => {
     requireCompanyAdmin(request); const recordId = id.parse((request.params as { id: string }).id); const input = trainingInput.parse(request.body); const actor = request.principal!.accountId; const reason = z.string().trim().min(2).max(500).parse((request.body as { correctionReason?: unknown }).correctionReason);
-    const replacement = await prisma.$transaction(async (tx) => { const old = await tx.certificateTrainingRecord.findUniqueOrThrow({ where: { id: recordId } }); if (old.status === "voided") throw Object.assign(new Error("已作废记录不能再次更正"), { statusCode: 409 }); await tx.certificateTrainingRecord.update({ where: { id: recordId }, data: { status: "voided", voidedAt: new Date(), voidedBy: actor, voidReason: reason } }); return tx.certificateTrainingRecord.create({ data: { personCertificateId: old.personCertificateId, year: input.year, trainingDate: input.trainingDate, content: input.content, trainingOrganization: input.trainingOrganization ?? null, hours: input.hours ?? null, result: input.result ?? null, remark: input.remark ?? null, correctionOfId: old.id, createdBy: actor } }); });
-    await auditCritical(actor, "certificate_training.correct", "certificate_training_record", replacement.id, { correctionOfId: recordId, reason }, "var/audit-fallback.ndjson"); return reply.code(201).send({ data: replacement });
+    const replacement = await prisma.$transaction(async (tx) => { const old = await tx.certificateTrainingRecord.findUniqueOrThrow({ where: { id: recordId } }); if (old.status === "voided") throw Object.assign(new Error("已作废记录不能再次更正"), { statusCode: 409 }); await tx.certificateTrainingRecord.update({ where: { id: recordId }, data: { status: "voided", voidedAt: new Date(), voidedBy: actor, voidReason: reason } }); const created = await tx.certificateTrainingRecord.create({ data: { personCertificateId: old.personCertificateId, year: input.year, trainingDate: input.trainingDate, content: input.content, trainingOrganization: input.trainingOrganization ?? null, hours: input.hours ?? null, result: input.result ?? null, remark: input.remark ?? null, correctionOfId: old.id, createdBy: actor } }); await writeCriticalAudit(tx, { actorId: actor, action: "certificate_training.correct", objectType: "certificate_training_record", objectId: created.id, metadata: { correctionOfId: recordId, reason } }); return created; });
+    return reply.code(201).send({ data: replacement });
   });
-  app.post("/api/certificate-training-records/:id/void", { preHandler: deps.authenticate }, async (request) => { requireCompanyAdmin(request); const recordId = id.parse((request.params as { id: string }).id); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body); const row = await prisma.certificateTrainingRecord.update({ where: { id: recordId }, data: { status: "voided", voidedAt: new Date(), voidedBy: request.principal!.accountId, voidReason: reason } }); await auditCritical(request.principal!.accountId, "certificate_training.void", "certificate_training_record", recordId, { reason }, "var/audit-fallback.ndjson"); return { data: row }; });
+  app.post("/api/certificate-training-records/:id/void", { preHandler: deps.authenticate }, async (request) => { requireCompanyAdmin(request); const recordId = id.parse((request.params as { id: string }).id); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body); const row = await prisma.$transaction(async (tx) => { const updated = await tx.certificateTrainingRecord.update({ where: { id: recordId }, data: { status: "voided", voidedAt: new Date(), voidedBy: request.principal!.accountId, voidReason: reason } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate_training.void", objectType: "certificate_training_record", objectId: recordId, metadata: { reason } }); return updated; }); return { data: row }; });
 
   app.post("/api/person-certificates/training-status", { preHandler: deps.authenticate }, async (request) => {
     requireCompanyAdmin(request); const input = z.object({ ids: z.array(id).min(1).max(1000), year: z.coerce.number().int().min(2000).max(9999).default(new Date().getFullYear()), status: z.enum(["trained", "not_required", "pending"]), reason: z.string().trim().max(500).optional() }).superRefine((value, ctx) => { if (value.status === "not_required" && !value.reason) ctx.addIssue({ code: "custom", path: ["reason"], message: "手工设置无需培训必须填写原因" }); }).parse(request.body); const actor = request.principal!.accountId;
-    await prisma.$transaction(async (tx) => { if (input.year === new Date().getFullYear()) await tx.personCertificate.updateMany({ where: { id: { in: input.ids } }, data: { trainingStatus: input.status } }); for (const certificateId of input.ids) await tx.certificateAnnualTrainingStatus.upsert({ where: { personCertificateId_year: { personCertificateId: certificateId, year: input.year } }, create: { personCertificateId: certificateId, year: input.year, status: input.status, reason: input.reason ?? null, setBy: actor }, update: { status: input.status, reason: input.reason ?? null, setBy: actor } }); });
-    await auditCritical(actor, "certificate.training_status.bulk_update", "person_certificate", "bulk", { count: input.ids.length, status: input.status }, "var/audit-fallback.ndjson"); return { data: { updated: input.ids.length } };
+    await prisma.$transaction(async (tx) => { if (input.year === new Date().getFullYear()) await tx.personCertificate.updateMany({ where: { id: { in: input.ids } }, data: { trainingStatus: input.status } }); for (const certificateId of input.ids) await tx.certificateAnnualTrainingStatus.upsert({ where: { personCertificateId_year: { personCertificateId: certificateId, year: input.year } }, create: { personCertificateId: certificateId, year: input.year, status: input.status, reason: input.reason ?? null, setBy: actor }, update: { status: input.status, reason: input.reason ?? null, setBy: actor } }); await writeCriticalAudit(tx, { actorId: actor, action: "certificate.training_status.bulk_update", objectType: "person_certificate", metadata: { count: input.ids.length, status: input.status } }); });
+    return { data: { updated: input.ids.length } };
   });
   app.post("/api/person-certificates/training-status/initialize", { preHandler: deps.authenticate }, async (request) => {
     requireCompanyAdmin(request); const rows = await prisma.personCertificate.findMany({ where: { status: "active", trainingStatus: { not: "trained" } }, include: { type: true } }); let updated = 0;
-    const year = new Date().getFullYear(); for (const row of rows) { if (!row.type) continue; const status = trainingDefault(row.type.requiresAnnualTraining); await prisma.$transaction([prisma.personCertificate.update({ where: { id: row.id }, data: { trainingStatus: status } }), prisma.certificateAnnualTrainingStatus.upsert({ where: { personCertificateId_year: { personCertificateId: row.id, year } }, create: { personCertificateId: row.id, year, status }, update: {} })]); updated += 1; }
-    await auditCritical(request.principal!.accountId, "certificate.training_status.initialize", "person_certificate", "bulk", { updated }, "var/audit-fallback.ndjson"); return { data: { updated } };
+    const year = new Date().getFullYear(); await prisma.$transaction(async (tx) => { for (const row of rows) { if (!row.type) continue; const status = trainingDefault(row.type.requiresAnnualTraining); await tx.personCertificate.update({ where: { id: row.id }, data: { trainingStatus: status } }); await tx.certificateAnnualTrainingStatus.upsert({ where: { personCertificateId_year: { personCertificateId: row.id, year } }, create: { personCertificateId: row.id, year, status }, update: {} }); updated += 1; } await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate.training_status.initialize", objectType: "person_certificate", metadata: { updated } }); }); return { data: { updated } };
   });
 
   app.get("/api/certificates/duplicates", { preHandler: deps.authenticate }, async (request) => {
@@ -197,9 +209,8 @@ export async function registerQualificationRoutes(app: FastifyInstance, deps: { 
     return { data: { groups, duplicateCount: groups.reduce((sum, group) => sum + group.duplicateIds.length, 0) } };
   });
   app.post("/api/certificates/duplicates/cleanup", { preHandler: deps.authenticate }, async (request) => {
-    requireCompanyAdmin(request); const input = z.object({ groups: z.array(z.object({ category: z.enum(["company", "personal"]), duplicateIds: z.array(id).min(1) })).max(1000) }).parse(request.body); let updated = 0;
-    for (const group of input.groups) { if (group.category === "company") updated += (await prisma.organizationQualification.updateMany({ where: { id: { in: group.duplicateIds } }, data: { status: "revoked", active: false } })).count; else updated += (await prisma.personCertificate.updateMany({ where: { id: { in: group.duplicateIds } }, data: { status: "revoked", active: false } })).count; }
-    await auditCritical(request.principal!.accountId, "certificate.duplicates.cleanup", "certificate", "bulk", { updated }, "var/audit-fallback.ndjson"); return { data: { updated } };
+    requireCompanyAdmin(request); const input = z.object({ reason: z.string().trim().min(2).max(500), groups: z.array(z.object({ category: z.enum(["company", "personal"]), duplicateIds: z.array(id).min(1) })).max(1000) }).parse(request.body);
+    const updated = await prisma.$transaction(async (tx) => { let count = 0; for (const group of input.groups) { if (group.category === "company") count += (await tx.organizationQualification.updateMany({ where: { id: { in: group.duplicateIds } }, data: { status: "voided", active: false, voidedAt: new Date(), voidedBy: request.principal!.accountId, voidReason: input.reason } })).count; else count += (await tx.personCertificate.updateMany({ where: { id: { in: group.duplicateIds } }, data: { status: "voided", active: false, voidedAt: new Date(), voidedBy: request.principal!.accountId, voidReason: input.reason } })).count; } await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "certificate.duplicates.correct", objectType: "certificate", metadata: { updated: count, reason: input.reason } }); return count; }); return { data: { updated } };
   });
 
   app.get("/api/certificates.csv", { preHandler: deps.authenticate }, async (request, reply) => {
@@ -224,24 +235,41 @@ export async function registerQualificationRoutes(app: FastifyInstance, deps: { 
     const buffer = await part.toBuffer(); const [organizations, persons, types] = await Promise.all([
       prisma.organization.findMany({ select: { id: true, name: true } }), prisma.person.findMany({ where: { status: "active" }, select: { id: true, name: true } }), prisma.certificateType.findMany({ where: { active: true }, select: { id: true, name: true, category: true, subtype1Label: true, subtype1Options: true, subtype2Label: true, subtype2Options: true } })
     ]); const result = await parseQualificationWorkbook(buffer, { organizations, persons, types });
-    return { data: { ...result, summary: { total: result.rows.length, ready: result.rows.filter((row) => row.status === "ready").length, invalid: result.rows.filter((row) => row.status === "invalid").length } } };
+    for (const row of result.rows.filter((item) => item.status === "ready" && item.ownerId && item.typeId)) {
+      const existing = row.category === "company"
+        ? await prisma.organizationQualification.findFirst({ where: { organizationId: row.ownerId!, typeId: row.typeId!, name: row.name, active: true }, select: { id: true } })
+        : await prisma.personCertificate.findFirst({ where: { personId: row.ownerId!, typeId: row.typeId!, name: row.name, active: true }, select: { id: true } });
+      if (existing) { row.status = "conflict"; row.existingId = existing.id; row.reasons.push("已存在同一归属、类型和名称的有效证照，请明确选择跳过、换证或作废后新建"); }
+    }
+    return { data: { ...result, summary: { total: result.rows.length, ready: result.rows.filter((row) => row.status === "ready").length, conflict: result.rows.filter((row) => row.status === "conflict").length, invalid: result.rows.filter((row) => row.status === "invalid").length } } };
   });
 
   app.post("/api/certificates/import/confirm", { preHandler: deps.authenticate }, async (request) => {
-    requireCompanyAdmin(request); const rows = z.array(z.object({ rowNumber: z.number().int().min(2), status: z.enum(["ready", "invalid"]), reasons: z.array(z.string()).default([]) }).passthrough()).max(1000).parse((request.body as { rows?: unknown })?.rows) as unknown as QualificationImportRow[]; const actor = request.principal!.accountId; const result: Array<{ rowNumber: number; status: "success" | "failed" | "skipped"; reason?: string }> = [];
+    requireCompanyAdmin(request); const rows = z.array(z.object({ rowNumber: z.number().int().min(2), status: z.enum(["ready", "invalid", "conflict"]), reasons: z.array(z.string()).default([]), existingId: z.string().uuid().optional(), conflictAction: z.enum(["skip", "renew", "void_and_create"]).optional() }).passthrough()).max(1000).parse((request.body as { rows?: unknown })?.rows) as unknown as QualificationImportRow[]; const actor = request.principal!.accountId; const result: Array<{ rowNumber: number; status: "success" | "failed" | "skipped"; reason?: string }> = [];
     for (let offset = 0; offset < rows.length; offset += 20) {
       for (const raw of rows.slice(offset, offset + 20)) {
-        if (raw.status !== "ready") { result.push({ rowNumber: raw.rowNumber, status: "skipped", reason: raw.reasons.join("；") || "预检查未通过" }); continue; }
+        if (raw.status === "invalid") { result.push({ rowNumber: raw.rowNumber, status: "skipped", reason: raw.reasons.join("；") || "预检查未通过" }); continue; }
+        if (raw.status === "conflict" && !raw.conflictAction) { result.push({ rowNumber: raw.rowNumber, status: "failed", reason: "冲突记录必须明确选择处理方式" }); continue; }
+        if (raw.status === "conflict" && raw.conflictAction === "skip") { result.push({ rowNumber: raw.rowNumber, status: "skipped", reason: "用户选择跳过现有证照" }); continue; }
         const parsed = certificateInput.safeParse(raw); if (!parsed.success) { result.push({ rowNumber: raw.rowNumber, status: "failed", reason: parsed.error.issues[0]?.message ?? "数据无效" }); continue; }
         try {
           const input = parsed.data; const type = await validateType(input); const common = { typeId: input.typeId, name: input.name, category: type.name, subtype1Value: input.subtype1Value ?? null, subtype2Value: input.subtype2Value ?? null, issuingAuthority: input.issuingAuthority ?? null, issuedAt: input.issuedAt ?? null, validFrom: input.validFrom ?? null, expiresAt: input.isLongTerm ? null : input.expiresAt ?? null, isLongTerm: input.isLongTerm, remark: input.remark ?? null, createdBy: actor, ...numberFields(input.certificateNo, deps.env) };
-          if (input.category === "company") { await prisma.organization.findUniqueOrThrow({ where: { id: input.ownerId } }); await prisma.organizationQualification.create({ data: { ...common, organizationId: input.ownerId, scope: input.scope ?? null } }); }
-          else { await prisma.person.findUniqueOrThrow({ where: { id: input.ownerId } }); await prisma.personCertificate.create({ data: { ...common, personId: input.ownerId, holderPosition: input.holderPosition ?? null, trainingStatus: trainingDefault(type.requiresAnnualTraining), annualTrainingStatuses: { create: { year: new Date().getFullYear(), status: trainingDefault(type.requiresAnnualTraining), setBy: actor } } } }); }
+          await prisma.$transaction(async (tx) => {
+            if (raw.status === "conflict" && raw.existingId) {
+              const replacementStatus = raw.conflictAction === "renew" ? "replaced" : "voided";
+              const reason = raw.conflictAction === "renew" ? "批量导入明确选择换证" : "批量导入明确选择作废后新建";
+              if (input.category === "company") await tx.organizationQualification.update({ where: { id: raw.existingId }, data: { status: replacementStatus, active: false, ...(replacementStatus === "voided" ? { voidedAt: new Date(), voidedBy: actor, voidReason: reason } : { renewedAt: new Date() }) } });
+              else await tx.personCertificate.update({ where: { id: raw.existingId }, data: { status: replacementStatus, active: false, ...(replacementStatus === "voided" ? { voidedAt: new Date(), voidedBy: actor, voidReason: reason } : { renewedAt: new Date() }) } });
+            }
+            const renewedFromId = raw.status === "conflict" && raw.conflictAction === "renew" ? raw.existingId ?? null : null;
+            if (input.category === "company") { await assertCompanyQualificationOwner(input.ownerId); const created = await tx.organizationQualification.create({ data: { ...common, organizationId: input.ownerId, scope: input.scope ?? null, renewedFromId } }); await tx.auditLog.create({ data: { actorId: actor, action: "certificate.import_row", objectType: "organization_qualification", objectId: created.id, result: "success", metadata: { rowNumber: raw.rowNumber, conflictAction: raw.conflictAction ?? null } } }); }
+            else { await prisma.person.findUniqueOrThrow({ where: { id: input.ownerId } }); const created = await tx.personCertificate.create({ data: { ...common, personId: input.ownerId, holderPosition: input.holderPosition ?? null, renewedFromId, trainingStatus: trainingDefault(type.requiresAnnualTraining), annualTrainingStatuses: { create: { year: new Date().getFullYear(), status: trainingDefault(type.requiresAnnualTraining), setBy: actor } } } }); await tx.auditLog.create({ data: { actorId: actor, action: "certificate.import_row", objectType: "person_certificate", objectId: created.id, result: "success", metadata: { rowNumber: raw.rowNumber, conflictAction: raw.conflictAction ?? null } } }); }
+          });
           result.push({ rowNumber: raw.rowNumber, status: "success" });
         } catch (error) { result.push({ rowNumber: raw.rowNumber, status: "failed", reason: error instanceof Error ? error.message : "写入失败" }); }
       }
     }
-    await auditCritical(actor, "certificate.import", "certificate", "bulk", { total: rows.length, success: result.filter((row) => row.status === "success").length }, "var/audit-fallback.ndjson");
+    audit(actor, "certificate.import_summary", "certificate", "bulk", { total: rows.length, success: result.filter((row) => row.status === "success").length });
     return { data: { rows: result, summary: { success: result.filter((row) => row.status === "success").length, failed: result.filter((row) => row.status === "failed").length, skipped: result.filter((row) => row.status === "skipped").length } } };
   });
 }

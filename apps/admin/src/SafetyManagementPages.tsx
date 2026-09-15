@@ -318,14 +318,14 @@ export function QualificationsPage({
     try {
       const data = await api<{
         rows: Array<Record<string, unknown>>;
-        summary: { ready: number; invalid: number };
+        summary: { ready: number; conflict: number; invalid: number };
         errors: string[];
       }>("/api/certificates/import/preview", { method: "POST", body });
       setPreviewRows(data.rows);
       if (data.errors.length) message.error(data.errors.join("；"));
       else
         message.success(
-          `预检查完成：${data.summary.ready} 条可导入，${data.summary.invalid} 条需处理`,
+          `预检查完成：${data.summary.ready} 条可导入，${data.summary.conflict ?? 0} 条冲突，${data.summary.invalid} 条无效`,
         );
     } catch (error) {
       message.error(error instanceof Error ? error.message : "预检查失败");
@@ -377,13 +377,15 @@ export function QualificationsPage({
       message.success("未发现完全重复记录");
       return;
     }
+    let correctionReason = "";
     Modal.confirm({
       title: `发现 ${preview.duplicateCount} 条完全重复记录`,
-      content: "将保留最早记录，其余标记为已注销并保留审计，不物理删除。",
+      content: <Space direction="vertical" style={{ width: "100%" }}><div>将保留最早记录，其余作废并保留历史，不物理删除。</div><Input placeholder="请输入更正原因（必填）" onChange={(event) => { correctionReason = event.target.value; }} /></Space>,
       onOk: async () => {
+        if (correctionReason.trim().length < 2) throw new Error("请输入至少 2 个字的更正原因");
         await api(
           "/api/certificates/duplicates/cleanup",
-          json("POST", { groups: preview.groups }),
+          json("POST", { groups: preview.groups, reason: correctionReason.trim() }),
         );
         message.success("重复记录已处理");
         refresh();
@@ -1306,7 +1308,7 @@ export function QualificationsPage({
         onOk={() => void confirmImport()}
         okText="确认导入可用记录"
         okButtonProps={{
-          disabled: !previewRows.some((row) => row.status === "ready"),
+          disabled: !previewRows.some((row) => row.status === "ready" || (row.status === "conflict" && row.conflictAction)) || previewRows.some((row) => row.status === "conflict" && !row.conflictAction),
         }}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
@@ -1350,10 +1352,15 @@ export function QualificationsPage({
                   title: "状态",
                   dataIndex: "status",
                   render: (v: string) => (
-                    <Tag color={v === "ready" ? "green" : "red"}>
-                      {v === "ready" ? "可导入" : "需处理"}
+                    <Tag color={v === "ready" ? "green" : v === "conflict" ? "orange" : "red"}>
+                      {v === "ready" ? "可导入" : v === "conflict" ? "冲突待选择" : "无效"}
                     </Tag>
                   ),
+                },
+                {
+                  title: "冲突处理",
+                  dataIndex: "conflictAction",
+                  render: (value: string, row: Record<string, unknown>) => row.status !== "conflict" ? "—" : <Select style={{ width: 150 }} value={value} placeholder="必须选择" options={[{ value: "skip", label: "跳过" }, { value: "renew", label: "换证" }, { value: "void_and_create", label: "作废后新建" }]} onChange={(next) => setPreviewRows((current) => current.map((item) => item.rowNumber === row.rowNumber ? { ...item, conflictAction: next } : item))} />,
                 },
                 {
                   title: "原因",

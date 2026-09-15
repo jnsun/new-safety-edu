@@ -4,7 +4,9 @@ import { jwtVerify, SignJWT } from "jose";
 import { Prisma, type OrganizationType, type RoleName, type ScopeType } from "@prisma/client";
 import { prisma } from "./db.js";
 import type { Env } from "./env.js";
+import { sessionAbsoluteTtlMs } from "./auth-security.js";
 import { sha256 } from "./crypto.js";
+import { assertSensitiveTokenScope, type SensitiveTokenScope } from "./sensitive-token-scope.js";
 
 export type Principal = {
   accountId: string;
@@ -26,18 +28,19 @@ export async function issueAccessToken(accountId: string, env: Env, sessionId: s
   return signAccessToken(accountId, account.sessionVersion, sessionId, env);
 }
 
-export async function issueSensitiveToken(accountId: string, env: Env): Promise<string> {
+export async function issueSensitiveToken(accountId: string, env: Env, scope?: SensitiveTokenScope): Promise<string> {
   const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { sessionVersion: true } });
-  return new SignJWT({ ver: account.sessionVersion, purpose: "sensitive" }).setProtectedHeader({ alg: "HS256" }).setSubject(accountId).setIssuedAt().setExpirationTime("5m")
+  return new SignJWT({ ver: account.sessionVersion, purpose: "sensitive", ...(scope ? { sensitiveTargetPersonId: scope.targetPersonId, sensitiveField: scope.field, sensitiveAction: scope.action } : {}) }).setProtectedHeader({ alg: "HS256" }).setSubject(accountId).setIssuedAt().setExpirationTime("5m")
     .sign(new TextEncoder().encode(env.JWT_SECRET));
 }
 
-export async function verifySensitiveToken(request: FastifyRequest, env: Env) {
+export async function verifySensitiveToken(request: FastifyRequest, env: Env, expectedScope?: SensitiveTokenScope) {
   const token = request.headers["x-sensitive-token"];
   if (typeof token !== "string" || !request.principal) throw Object.assign(new Error("查看完整敏感信息前请再次验证"), { statusCode: 401, code: "SENSITIVE_REAUTH_REQUIRED" });
   try {
     const result = await jwtVerify(token, new TextEncoder().encode(env.JWT_SECRET));
     if (result.payload.sub !== request.principal.accountId || result.payload.purpose !== "sensitive") throw new Error("invalid sensitive token");
+    if (expectedScope) assertSensitiveTokenScope(result.payload, expectedScope);
     const account = await prisma.account.findUnique({ where: { id: request.principal.accountId }, select: { status: true, sessionVersion: true } });
     if (!account || account.status !== "active" || result.payload.ver !== account.sessionVersion) throw new Error("stale sensitive token");
   } catch {
@@ -45,10 +48,11 @@ export async function verifySensitiveToken(request: FastifyRequest, env: Env) {
   }
 }
 
-export async function issueSession(accountId: string, env: Env, context: { clientKind?: string | undefined; userAgent?: string | undefined } = {}) {
+export async function issueSession(accountId: string, env: Env, context: { clientKind?: string | undefined; loginMethod?: string | undefined; userAgent?: string | undefined } = {}) {
   const refreshToken = randomBytes(48).toString("base64url");
   const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { sessionVersion: true } });
-  const session = await prisma.refreshSession.create({ data: { accountId, tokenHash: sha256(refreshToken), clientKind: context.clientKind ?? null, userAgent: context.userAgent?.slice(0, 500) ?? null, expiresAt: new Date(Date.now() + 30 * 86400_000) } });
+  const absoluteExpiresAt = new Date(Date.now() + sessionAbsoluteTtlMs(context.clientKind));
+  const session = await prisma.refreshSession.create({ data: { accountId, tokenHash: sha256(refreshToken), clientKind: context.clientKind ?? null, loginMethod: context.loginMethod ?? null, userAgent: context.userAgent?.slice(0, 500) ?? null, expiresAt: absoluteExpiresAt, absoluteExpiresAt } });
   const accessToken = await signAccessToken(accountId, account.sessionVersion, session.id, env);
   return { accessToken, refreshToken, expiresIn: 900 };
 }
@@ -71,9 +75,15 @@ export function authHandlers(env: Env) {
         where: { id: accountId },
         include: { person: { select: { status: true } } }
       });
-      if (!account || account.status !== "active" || account.sessionVersion !== sessionVersion || (account.personId && account.person?.status !== "active")) throw unauthorized();
+      if (!account || !["active", "pending"].includes(account.status) || account.sessionVersion !== sessionVersion || (account.personId && account.person?.status !== "active")) throw unauthorized();
       if (sessionId && !await prisma.refreshSession.findFirst({ where: { id: sessionId, accountId: account.id, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } })) throw unauthorized();
       const path = request.url.split("?", 1)[0];
+      if (account.status === "pending") {
+        const pendingAllowed = ["/api/auth/me", "/api/auth/logout", "/api/auth/logout-all", "/api/wechat/registration-options", "/api/wechat/bind-phone", "/api/wechat/registration-requests", "/api/me/change-requests"];
+        if (!pendingAllowed.includes(path ?? "") && !/^\/api\/wechat\/binding-requests\/[0-9a-f-]+\/profile$/i.test(path ?? "") && !/^\/api\/me\/change-requests\/[0-9a-f-]+\/withdraw$/i.test(path ?? "") && path !== "/api/files") {
+          throw Object.assign(new Error("账号身份尚待绑定或审核"), { statusCode: 403, code: "ACCOUNT_PENDING" });
+        }
+      }
       if (account.mustChangePassword && !["/api/auth/me", "/api/auth/change-password", "/api/auth/logout"].includes(path ?? "")) {
         throw Object.assign(new Error("首次登录必须先修改临时密码"), { statusCode: 403, code: "PASSWORD_CHANGE_REQUIRED" });
       }
@@ -97,7 +107,7 @@ export function authHandlers(env: Env) {
 
 export async function rotateRefreshToken(refreshToken: string, env: Env) {
   const session = await prisma.refreshSession.findUnique({ where: { tokenHash: sha256(refreshToken) }, include: { account: true } });
-  if (!session || session.expiresAt <= new Date() || session.account.status !== "active") throw unauthorized();
+  if (!session || session.expiresAt <= new Date() || !["active", "pending"].includes(session.account.status)) throw unauthorized();
   if (session.revokedAt) {
     await prisma.$transaction([
       prisma.refreshSession.updateMany({ where: { accountId: session.accountId, ...(session.familyId ? { OR: [{ familyId: session.familyId }, { id: session.familyId }] } : {}) }, data: { revokedAt: new Date() } }),
@@ -110,7 +120,7 @@ export async function rotateRefreshToken(refreshToken: string, env: Env) {
       const claimed = await tx.refreshSession.updateMany({ where: { id: session.id, revokedAt: null }, data: { revokedAt: new Date(), lastUsedAt: new Date() } });
       if (claimed.count !== 1) throw Object.assign(new Error("refresh token reused"), { code: "REFRESH_TOKEN_REUSED" });
       const next = randomBytes(48).toString("base64url");
-      const nextSession = await tx.refreshSession.create({ data: { accountId: session.accountId, tokenHash: sha256(next), clientKind: session.clientKind, userAgent: session.userAgent, familyId: session.familyId ?? session.id, rotatedFromId: session.id, expiresAt: new Date(Date.now() + 30 * 86400_000) } });
+      const nextSession = await tx.refreshSession.create({ data: { accountId: session.accountId, tokenHash: sha256(next), clientKind: session.clientKind, loginMethod: session.loginMethod, userAgent: session.userAgent, familyId: session.familyId ?? session.id, rotatedFromId: session.id, expiresAt: session.absoluteExpiresAt, absoluteExpiresAt: session.absoluteExpiresAt } });
       return { accessToken: await signAccessToken(session.accountId, session.account.sessionVersion, nextSession.id, env), refreshToken: next, expiresIn: 900 };
     });
   } catch (error) {

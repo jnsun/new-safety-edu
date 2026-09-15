@@ -139,6 +139,15 @@ enum ChangeRequestType {
   binding_change
   department_transfer
   account_merge
+  person_merge
+  account_opening
+  account_recovery
+  identity_correction
+  person_reactivation
+  contractor_unit_change
+  responsible_entity_change
+  project_exit
+  cross_entity_project_admin
 }
 
 enum ChangeRequestStatus {
@@ -201,30 +210,50 @@ enum CertificateTrainingStatus {
   pending
 }
 
+enum SensitiveExportStatus {
+  pending
+  processing
+  ready
+  failed
+  downloaded
+  expired
+}
+
+enum SensitiveExportScopeType {
+  company
+  organization
+  project
+  self
+}
+
 model Account {
-  id                   String            @id @default(uuid()) @db.Uuid
-  username             String?           @unique @db.VarChar(80)
-  usernameNormalized   String?           @unique @map("username_normalized") @db.VarChar(80)
-  passwordHash         String?           @map("password_hash")
-  mustChangePassword   Boolean           @default(false) @map("must_change_password")
-  passwordLoginEnabled Boolean           @default(false) @map("password_login_enabled")
-  status               AccountStatus     @default(active)
-  sessionVersion       Int               @default(0) @map("session_version")
-  lastLoginAt          DateTime?         @map("last_login_at")
-  personId             String?           @unique @map("person_id") @db.Uuid
-  verifiedPhone        String?           @unique @map("verified_phone") @db.VarChar(20)
-  mergedIntoAccountId  String?           @map("merged_into_account_id") @db.Uuid
-  mergedAt             DateTime?         @map("merged_at")
-  person               Person?           @relation(fields: [personId], references: [id])
-  mergedInto           Account?          @relation("AccountMerge", fields: [mergedIntoAccountId], references: [id])
-  mergedAccounts       Account[]         @relation("AccountMerge")
+  id                   String               @id @default(uuid()) @db.Uuid
+  username             String?              @unique @db.VarChar(80)
+  usernameNormalized   String?              @unique @map("username_normalized") @db.VarChar(80)
+  passwordHash         String?              @map("password_hash")
+  mustChangePassword   Boolean              @default(false) @map("must_change_password")
+  passwordLoginEnabled Boolean              @default(false) @map("password_login_enabled")
+  status               AccountStatus        @default(active)
+  sessionVersion       Int                  @default(0) @map("session_version")
+  lastLoginAt          DateTime?            @map("last_login_at")
+  failedLoginCount     Int                  @default(0) @map("failed_login_count")
+  loginLockedUntil     DateTime?            @map("login_locked_until")
+  personId             String?              @unique @map("person_id") @db.Uuid
+  verifiedPhone        String?              @unique @map("verified_phone") @db.VarChar(20)
+  mergedIntoAccountId  String?              @map("merged_into_account_id") @db.Uuid
+  mergedAt             DateTime?            @map("merged_at")
+  person               Person?              @relation(fields: [personId], references: [id])
+  mergedInto           Account?             @relation("AccountMerge", fields: [mergedIntoAccountId], references: [id])
+  mergedAccounts       Account[]            @relation("AccountMerge")
   roles                RoleAssignment[]
   wechatBindings       WechatBinding[]
   refreshSessions      RefreshSession[]
   usernameHistory      UsernameHistory[]
   preferences          UserPreference[]
-  createdAt            DateTime          @default(now()) @map("created_at")
-  updatedAt            DateTime          @updatedAt @map("updated_at")
+  sensitiveExportJobs  SensitiveExportJob[]
+  securityEvents       AuthSecurityEvent[]
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
 
   @@index([mergedIntoAccountId])
   @@map("accounts")
@@ -247,35 +276,37 @@ model UsernameHistory {
 }
 
 model Person {
-  id                 String                   @id @default(uuid()) @db.Uuid
-  name               String                   @db.VarChar(80)
-  phone              String                   @db.VarChar(20)
-  type               PersonType
-  status             PersonStatus             @default(pending)
-  nationalIdCipher   String?                  @map("national_id_cipher")
-  nationalIdIv       String?                  @map("national_id_iv")
-  nationalIdTag      String?                  @map("national_id_tag")
-  nationalIdHash     String?                  @map("national_id_hash") @db.VarChar(64)
-  nationalIdLast4    String?                  @map("national_id_last4") @db.Char(4)
-  photoFileId        String?                  @map("photo_file_id") @db.Uuid
-  mergedIntoPersonId String?                  @map("merged_into_person_id") @db.Uuid
-  mergedAt           DateTime?                @map("merged_at")
-  mergedBy           String?                  @map("merged_by") @db.Uuid
-  mergeReason        String?                  @map("merge_reason") @db.VarChar(500)
-  photoFile          PrivateFile?             @relation("PersonPhoto", fields: [photoFileId], references: [id], onDelete: Restrict)
-  mergedInto         Person?                  @relation("PersonMerge", fields: [mergedIntoPersonId], references: [id], onDelete: Restrict)
-  mergedPersons      Person[]                 @relation("PersonMerge")
-  account            Account?
-  organizations      OrganizationMembership[]
-  projectMemberships ProjectMember[]
-  assignments        TrainingAssignment[]
-  signatures         Signature[]
-  changeRequests     ChangeRequest[]
-  notifications      Notification[]
-  certificates       PersonCertificate[]
-  roleAssignments    RoleAssignment[]
-  createdAt          DateTime                 @default(now()) @map("created_at")
-  updatedAt          DateTime                 @updatedAt @map("updated_at")
+  id                      String                   @id @default(uuid()) @db.Uuid
+  name                    String                   @db.VarChar(80)
+  phone                   String                   @db.VarChar(20)
+  type                    PersonType
+  status                  PersonStatus             @default(pending)
+  nationalIdCipher        String?                  @map("national_id_cipher")
+  nationalIdIv            String?                  @map("national_id_iv")
+  nationalIdTag           String?                  @map("national_id_tag")
+  nationalIdHash          String?                  @map("national_id_hash") @db.VarChar(64)
+  nationalIdLast4         String?                  @map("national_id_last4") @db.Char(4)
+  photoFileId             String?                  @map("photo_file_id") @db.Uuid
+  mergedIntoPersonId      String?                  @map("merged_into_person_id") @db.Uuid
+  mergedAt                DateTime?                @map("merged_at")
+  mergedBy                String?                  @map("merged_by") @db.Uuid
+  mergeReason             String?                  @map("merge_reason") @db.VarChar(500)
+  photoFile               PrivateFile?             @relation("PersonPhoto", fields: [photoFileId], references: [id], onDelete: Restrict)
+  mergedInto              Person?                  @relation("PersonMerge", fields: [mergedIntoPersonId], references: [id], onDelete: Restrict)
+  mergedPersons           Person[]                 @relation("PersonMerge")
+  account                 Account?
+  organizations           OrganizationMembership[]
+  projectMemberships      ProjectMember[]
+  assignments             TrainingAssignment[]
+  signatures              Signature[]
+  changeRequests          ChangeRequest[]
+  notifications           Notification[]
+  certificates            PersonCertificate[]
+  roleAssignments         RoleAssignment[]
+  coursewarePublishGrants CoursewarePublishGrant[]
+  photoHistory            PersonPhotoHistory[]
+  createdAt               DateTime                 @default(now()) @map("created_at")
+  updatedAt               DateTime                 @updatedAt @map("updated_at")
 
   @@unique([nationalIdHash])
   @@index([phone, status])
@@ -303,23 +334,43 @@ model WechatBinding {
 }
 
 model RefreshSession {
-  id            String          @id @default(uuid()) @db.Uuid
-  accountId     String          @map("account_id") @db.Uuid
-  account       Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  tokenHash     String          @unique @map("token_hash") @db.VarChar(64)
-  clientKind    String?         @map("client_kind") @db.VarChar(20)
-  familyId      String?         @map("family_id") @db.Uuid
-  rotatedFromId String?         @unique @map("rotated_from_id") @db.Uuid
-  rotatedFrom   RefreshSession? @relation("RefreshRotation", fields: [rotatedFromId], references: [id], onDelete: SetNull)
-  rotatedTo     RefreshSession? @relation("RefreshRotation")
-  lastUsedAt    DateTime?       @map("last_used_at")
-  userAgent     String?         @map("user_agent") @db.VarChar(500)
-  expiresAt     DateTime        @map("expires_at")
-  revokedAt     DateTime?       @map("revoked_at")
-  createdAt     DateTime        @default(now()) @map("created_at")
-  updatedAt     DateTime        @updatedAt @map("updated_at")
+  id                String          @id @default(uuid()) @db.Uuid
+  accountId         String          @map("account_id") @db.Uuid
+  account           Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  tokenHash         String          @unique @map("token_hash") @db.VarChar(64)
+  clientKind        String?         @map("client_kind") @db.VarChar(20)
+  loginMethod       String?         @map("login_method") @db.VarChar(20)
+  familyId          String?         @map("family_id") @db.Uuid
+  rotatedFromId     String?         @unique @map("rotated_from_id") @db.Uuid
+  rotatedFrom       RefreshSession? @relation("RefreshRotation", fields: [rotatedFromId], references: [id], onDelete: SetNull)
+  rotatedTo         RefreshSession? @relation("RefreshRotation")
+  lastUsedAt        DateTime?       @map("last_used_at")
+  userAgent         String?         @map("user_agent") @db.VarChar(500)
+  expiresAt         DateTime        @map("expires_at")
+  absoluteExpiresAt DateTime        @map("absolute_expires_at")
+  revokedAt         DateTime?       @map("revoked_at")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
 
   @@map("refresh_sessions")
+}
+
+model AuthSecurityEvent {
+  id                    String   @id @default(uuid()) @db.Uuid
+  accountId             String?  @map("account_id") @db.Uuid
+  account               Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  accountIdentifierHash String?  @map("account_identifier_hash") @db.VarChar(64)
+  eventType             String   @map("event_type") @db.VarChar(80)
+  loginMethod           String?  @map("login_method") @db.VarChar(20)
+  clientKind            String?  @map("client_kind") @db.VarChar(20)
+  sourceHash            String?  @map("source_hash") @db.VarChar(64)
+  outcome               String   @db.VarChar(40)
+  metadata              Json?
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  @@index([accountId, createdAt])
+  @@index([eventType, createdAt])
+  @@map("auth_security_events")
 }
 
 model Organization {
@@ -446,10 +497,28 @@ model PrivateFile {
   organizationQualifications OrganizationQualification[]
   certificateAttachments     CertificateAttachment[]
   monthlyReportAttachments   ProjectMonthlyReportAttachment[]
+  personPhotoHistory         PersonPhotoHistory[]
+  requestAttachments         ChangeRequestAttachment[]
   createdAt                  DateTime                         @default(now()) @map("created_at")
   updatedAt                  DateTime                         @updatedAt @map("updated_at")
 
   @@map("files")
+}
+
+model PersonPhotoHistory {
+  id        String      @id @default(uuid()) @db.Uuid
+  personId  String      @map("person_id") @db.Uuid
+  person    Person      @relation(fields: [personId], references: [id], onDelete: Restrict)
+  fileId    String      @map("file_id") @db.Uuid
+  file      PrivateFile @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  active    Boolean     @default(true)
+  changedBy String?     @map("changed_by") @db.Uuid
+  endedAt   DateTime?   @map("ended_at")
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  @@index([personId, active])
+  @@index([fileId])
+  @@map("person_photo_history")
 }
 
 model PersonCertificate {
@@ -772,6 +841,7 @@ model PhoneVerificationCode {
   phoneHash  String    @map("phone_hash") @db.VarChar(64)
   codeHash   String    @map("code_hash") @db.VarChar(64)
   purpose    String    @db.VarChar(40)
+  sourceHash String?   @map("source_hash") @db.VarChar(64)
   expiresAt  DateTime  @map("expires_at")
   consumedAt DateTime? @map("consumed_at")
   attempts   Int       @default(0)
@@ -779,6 +849,7 @@ model PhoneVerificationCode {
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
   @@index([phoneHash, purpose, createdAt])
+  @@index([sourceHash, createdAt])
   @@map("phone_verification_codes")
 }
 
@@ -813,6 +884,25 @@ model CoursewareVersion {
 
   @@unique([coursewareId, version])
   @@map("courseware_versions")
+}
+
+model CoursewarePublishGrant {
+  id        String    @id @default(uuid()) @db.Uuid
+  personId  String    @map("person_id") @db.Uuid
+  person    Person    @relation(fields: [personId], references: [id], onDelete: Restrict)
+  scopeType ScopeType @map("scope_type")
+  scopeId   String?   @map("scope_id") @db.Uuid
+  active    Boolean   @default(true)
+  grantedBy String    @map("granted_by") @db.Uuid
+  endedAt   DateTime? @map("ended_at")
+  endedBy   String?   @map("ended_by") @db.Uuid
+  endReason String?   @map("end_reason") @db.VarChar(500)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  @@index([personId, active])
+  @@index([scopeType, scopeId, active])
+  @@map("courseware_publish_grants")
 }
 
 model TrainingTemplate {
@@ -859,20 +949,41 @@ model QuestionBank {
 }
 
 model Question {
+  id             String            @id @default(uuid()) @db.Uuid
+  bankId         String            @map("bank_id") @db.Uuid
+  bank           QuestionBank      @relation(fields: [bankId], references: [id])
+  type           QuestionType
+  prompt         String
+  options        Json
+  correct        Json
+  explanation    String?
+  active         Boolean           @default(true)
+  currentVersion Int               @default(1) @map("current_version")
+  versions       QuestionVersion[]
+  paperItems     ExamPaperItem[]
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  @@map("questions")
+}
+
+model QuestionVersion {
   id          String          @id @default(uuid()) @db.Uuid
-  bankId      String          @map("bank_id") @db.Uuid
-  bank        QuestionBank    @relation(fields: [bankId], references: [id])
+  questionId  String          @map("question_id") @db.Uuid
+  question    Question        @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  version     Int
   type        QuestionType
   prompt      String
   options     Json
   correct     Json
   explanation String?
-  active      Boolean         @default(true)
+  createdBy   String?         @map("created_by") @db.Uuid
   paperItems  ExamPaperItem[]
   createdAt   DateTime        @default(now()) @map("created_at")
-  updatedAt   DateTime        @updatedAt @map("updated_at")
 
-  @@map("questions")
+  @@unique([questionId, version])
+  @@index([questionId, createdAt])
+  @@map("question_versions")
 }
 
 model ExamPaper {
@@ -892,15 +1003,17 @@ model ExamPaper {
 }
 
 model ExamPaperItem {
-  id         String    @id @default(uuid()) @db.Uuid
-  paperId    String    @map("paper_id") @db.Uuid
-  questionId String    @map("question_id") @db.Uuid
-  sortOrder  Int       @map("sort_order")
-  score      Decimal   @db.Decimal(6, 2)
-  paper      ExamPaper @relation(fields: [paperId], references: [id])
-  question   Question  @relation(fields: [questionId], references: [id])
-  createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
+  id                String           @id @default(uuid()) @db.Uuid
+  paperId           String           @map("paper_id") @db.Uuid
+  questionId        String           @map("question_id") @db.Uuid
+  questionVersionId String?          @map("question_version_id") @db.Uuid
+  sortOrder         Int              @map("sort_order")
+  score             Decimal          @db.Decimal(6, 2)
+  paper             ExamPaper        @relation(fields: [paperId], references: [id])
+  question          Question         @relation(fields: [questionId], references: [id])
+  questionVersion   QuestionVersion? @relation(fields: [questionVersionId], references: [id], onDelete: Restrict)
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
 
   @@unique([paperId, questionId])
   @@map("exam_paper_items")
@@ -1090,24 +1203,38 @@ model NotificationOutbox {
 }
 
 model ChangeRequest {
-  id            String              @id @default(uuid()) @db.Uuid
-  personId      String?             @map("person_id") @db.Uuid
-  person        Person?             @relation(fields: [personId], references: [id])
-  accountId     String?             @map("account_id") @db.Uuid
-  projectId     String?             @map("project_id") @db.Uuid
+  id            String                    @id @default(uuid()) @db.Uuid
+  personId      String?                   @map("person_id") @db.Uuid
+  person        Person?                   @relation(fields: [personId], references: [id])
+  accountId     String?                   @map("account_id") @db.Uuid
+  projectId     String?                   @map("project_id") @db.Uuid
   type          ChangeRequestType
-  status        ChangeRequestStatus @default(pending)
-  requestKey    String?             @map("request_key") @db.VarChar(160)
+  status        ChangeRequestStatus       @default(pending)
+  requestKey    String?                   @map("request_key") @db.VarChar(160)
   payload       Json
-  beforeSummary Json?               @map("before_summary")
-  afterSummary  Json?               @map("after_summary")
-  reviewedBy    String?             @map("reviewed_by") @db.Uuid
-  reviewedAt    DateTime?           @map("reviewed_at")
-  reviewNote    String?             @map("review_note") @db.VarChar(500)
-  createdAt     DateTime            @default(now()) @map("created_at")
-  updatedAt     DateTime            @updatedAt @map("updated_at")
+  beforeSummary Json?                     @map("before_summary")
+  afterSummary  Json?                     @map("after_summary")
+  reviewedBy    String?                   @map("reviewed_by") @db.Uuid
+  reviewedAt    DateTime?                 @map("reviewed_at")
+  reviewNote    String?                   @map("review_note") @db.VarChar(500)
+  createdAt     DateTime                  @default(now()) @map("created_at")
+  updatedAt     DateTime                  @updatedAt @map("updated_at")
+  attachments   ChangeRequestAttachment[]
 
   @@map("change_requests")
+}
+
+model ChangeRequestAttachment {
+  id              String        @id @default(uuid()) @db.Uuid
+  changeRequestId String        @map("change_request_id") @db.Uuid
+  fileId          String        @map("file_id") @db.Uuid
+  changeRequest   ChangeRequest @relation(fields: [changeRequestId], references: [id], onDelete: Restrict)
+  file            PrivateFile   @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@unique([changeRequestId, fileId])
+  @@index([fileId])
+  @@map("change_request_attachments")
 }
 
 model AuditLog {
@@ -1141,4 +1268,31 @@ model UserPreference {
 
   @@unique([accountId, key])
   @@map("user_preferences")
+}
+
+model SensitiveExportJob {
+  id                String                   @id @default(uuid()) @db.Uuid
+  requestedBy       String                   @map("requested_by") @db.Uuid
+  requester         Account                  @relation(fields: [requestedBy], references: [id], onDelete: Restrict)
+  scopeType         SensitiveExportScopeType @map("scope_type")
+  scopeId           String?                  @map("scope_id") @db.Uuid
+  scopeSnapshot     Json                     @map("scope_snapshot")
+  categories        Json
+  requestKey        String                   @map("request_key") @db.VarChar(64)
+  status            SensitiveExportStatus    @default(pending)
+  storageKey        String?                  @map("storage_key") @db.VarChar(300)
+  size              Int?
+  sha256            String?                  @db.VarChar(64)
+  downloadTokenHash String?                  @map("download_token_hash") @db.VarChar(64)
+  downloadExpiresAt DateTime?                @map("download_expires_at")
+  completedAt       DateTime?                @map("completed_at")
+  downloadedAt      DateTime?                @map("downloaded_at")
+  expiresAt         DateTime                 @map("expires_at")
+  error             String?                  @db.VarChar(1000)
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+
+  @@index([requestedBy, createdAt])
+  @@index([status, expiresAt])
+  @@map("sensitive_export_jobs")
 }

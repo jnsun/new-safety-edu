@@ -12,6 +12,7 @@ import {
 } from "../access.js";
 import { decryptField } from "../crypto.js";
 import { verifySensitiveToken } from "../auth.js";
+import { writeCriticalAudit } from "../transaction-audit.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 const idParam = z.object({ id: z.string().uuid() });
@@ -94,6 +95,8 @@ export async function registerSafetyManagementRoutes(
             },
           },
           roleAssignments: { orderBy: { createdAt: "desc" } },
+          changeRequests: { orderBy: { createdAt: "desc" }, take: 100, select: { id: true, type: true, status: true, reviewNote: true, reviewedAt: true, createdAt: true } },
+          photoHistory: { orderBy: { createdAt: "desc" }, include: { file: { select: { id: true, originalName: true, mimeType: true, size: true } } } },
           organizations: {
             include: { organization: true },
             orderBy: { createdAt: "desc" },
@@ -121,6 +124,8 @@ export async function registerSafetyManagementRoutes(
           },
         },
       });
+      const accountId = person.account?.id;
+      const timeline = await prisma.auditLog.findMany({ where: { OR: [{ objectType: "person", objectId: id }, ...(accountId ? [{ objectType: "account", objectId: accountId }] : []), { metadata: { path: ["personId"], equals: id } }] }, select: { id: true, action: true, objectType: true, objectId: true, result: true, metadata: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 200 });
       await auditCritical(
         principal.accountId,
         "person.detail_read",
@@ -142,6 +147,7 @@ export async function registerSafetyManagementRoutes(
             certificateNoIv: undefined,
             certificateNoTag: undefined,
           })),
+          timeline,
         },
       };
     },
@@ -225,18 +231,7 @@ export async function registerSafetyManagementRoutes(
       });
       if (!(await canAccessPerson(request.principal!, row.personId)))
         forbidden();
-      await prisma.personCertificate.update({
-        where: { id },
-        data: { active: false, status: "revoked" },
-      });
-      await auditCritical(
-        request.principal!.accountId,
-        "person_certificate.retire",
-        "person_certificate",
-        id,
-        undefined,
-        "var/audit-fallback.ndjson",
-      );
+      await prisma.$transaction(async (tx) => { await tx.personCertificate.update({ where: { id }, data: { active: false, status: "revoked" } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "person_certificate.retire", objectType: "person_certificate", objectId: id }); });
       return { data: { id, active: false } };
     },
   );
@@ -335,18 +330,7 @@ export async function registerSafetyManagementRoutes(
         !(await canAccessOrganization(request.principal!, row.organizationId))
       )
         forbidden();
-      await prisma.organizationQualification.update({
-        where: { id },
-        data: { active: false, status: "revoked" },
-      });
-      await auditCritical(
-        request.principal!.accountId,
-        "organization_qualification.retire",
-        "organization_qualification",
-        id,
-        undefined,
-        "var/audit-fallback.ndjson",
-      );
+      await prisma.$transaction(async (tx) => { await tx.organizationQualification.update({ where: { id }, data: { active: false, status: "revoked" } }); await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "organization_qualification.retire", objectType: "organization_qualification", objectId: id }); });
       return { data: { id, active: false } };
     },
   );

@@ -1,6 +1,8 @@
 import { Prisma, type OrganizationType, type PersonType, type RoleName, type ScopeType } from "@prisma/client";
 import type { Principal } from "./auth.js";
 import { assertAccountMergeAllowed } from "./account-merge-policy.js";
+import { decidePersonTransfer } from "./person-transfer-policy.js";
+import { changeRequestKey } from "./request-policy.js";
 
 type Tx = Prisma.TransactionClient;
 type ScopedRole = { role: RoleName; scopeType: ScopeType; scopeId: string | null };
@@ -40,20 +42,69 @@ export function canJoinProject(_personType: PersonType, primaryOrganizationType:
   return primaryOrganizationType === "business_entity";
 }
 
-export async function setPrimaryOrganization(tx: Tx, input: { personId: string; organizationId: string; actorId: string; reason: string }) {
+export async function setPrimaryOrganization(tx: Tx, input: { personId: string; organizationId: string; actorId: string; reason: string; actorIsCompanyAdmin?: boolean; keepCrossEntityProjectAdminRoles?: boolean }) {
   const current = await tx.organizationMembership.findFirst({
     where: { personId: input.personId, active: true, primary: true },
-    orderBy: { createdAt: "desc" }
+    orderBy: { createdAt: "desc" },
+    include: { organization: { select: { type: true } } }
   });
   if (current?.organizationId === input.organizationId) return current;
+  const target = await tx.organization.findUniqueOrThrow({ where: { id: input.organizationId }, select: { type: true } });
+  const currentRoles = current ? await tx.roleAssignment.findMany({
+    where: { personId: input.personId, OR: [{ active: true }, { activationPending: true }] }
+  }) : [];
+  const projectRoles = currentRoles.filter((role) => role.role === "project_admin" && role.scopeType === "project" && role.scopeId);
+  const projects = projectRoles.length ? await tx.project.findMany({ where: { id: { in: projectRoles.map((role) => role.scopeId!) } }, select: { id: true, responsibleOrganizationId: true } }) : [];
+  const crossProjectIds = new Set(projects.filter((project) => project.responsibleOrganizationId !== input.organizationId).map((project) => project.id));
+  const decision = decidePersonTransfer({
+    currentOrganizationType: current?.organization.type ?? null,
+    targetOrganizationType: target.type,
+    isCurrentLeader: currentRoles.some((role) => role.role === "org_leader" && role.scopeType === "organization" && role.scopeId === current?.organizationId),
+    hasCrossEntityProjectAdminRole: projectRoles.some((role) => role.scopeId && crossProjectIds.has(role.scopeId)),
+    keepCrossEntityProjectAdminRoles: input.keepCrossEntityProjectAdminRoles ?? false,
+    actorIsCompanyAdmin: input.actorIsCompanyAdmin ?? false
+  });
   const now = new Date();
+  const rolesToEnd = currentRoles.filter((role) =>
+    (decision.endOrganizationRoles && role.scopeType === "organization" && role.scopeId === current?.organizationId && ["org_leader", "org_admin", "field_reporter"].includes(role.role))
+    || (decision.endProjectRoles && role.role === "project_admin" && role.scopeType === "project" && role.scopeId && (target.type === "department" || crossProjectIds.has(role.scopeId)))
+  );
+  if (rolesToEnd.length) {
+    await tx.roleAssignment.updateMany({ where: { id: { in: rolesToEnd.map(({ id }) => id) } }, data: { active: false, activationPending: false, endedAt: now, endedBy: input.actorId, endReason: "人员调离原组织" } });
+  }
+  if (decision.endProjectMemberships) {
+    await tx.projectMember.updateMany({ where: { personId: input.personId, status: { in: ["pending", "active", "approved"] } }, data: { status: "removed", reviewedBy: input.actorId, reviewedAt: now, endedAt: now, endedBy: input.actorId, endReason: "人员调入普通部门" } });
+  }
+  if (rolesToEnd.length) {
+    const account = await tx.account.findUnique({ where: { personId: input.personId }, select: { id: true } });
+    if (account) {
+      await tx.account.update({ where: { id: account.id }, data: { sessionVersion: { increment: 1 } } });
+      await tx.refreshSession.updateMany({ where: { accountId: account.id, revokedAt: null }, data: { revokedAt: now } });
+    }
+  }
   await tx.organizationMembership.updateMany({
     where: { personId: input.personId, active: true, primary: true },
     data: { active: false, primary: false, endedAt: now, endedBy: input.actorId, endReason: input.reason }
   });
-  return tx.organizationMembership.create({
+  const membership = await tx.organizationMembership.create({
     data: { personId: input.personId, organizationId: input.organizationId, primary: true, active: true }
   });
+  await tx.auditLog.create({ data: {
+    actorId: input.actorId,
+    action: "organization.membership_transfer",
+    objectType: "person",
+    objectId: input.personId,
+    result: "success",
+    metadata: {
+      fromOrganizationId: current?.organizationId ?? null,
+      toOrganizationId: input.organizationId,
+      endedRoleCount: rolesToEnd.length,
+      endedProjectMemberships: decision.endProjectMemberships,
+      keptCrossEntityProjectAdminRoles: input.keepCrossEntityProjectAdminRoles ?? false,
+      reason: input.reason
+    }
+  } });
+  return membership;
 }
 
 export async function grantRole(tx: Tx, input: { personId: string; role: RoleName; scopeType: ScopeType; scopeId: string | null; actorId: string; reason: string }) {
@@ -81,7 +132,9 @@ export async function grantRole(tx: Tx, input: { personId: string; role: RoleNam
   }
   const assignment = { ...identity, ...state };
   try {
-    return await tx.roleAssignment.create({ data: assignment });
+    const created = await tx.roleAssignment.create({ data: assignment });
+    await tx.notification.create({ data: { personId: input.personId, title: "管理角色变更", body: state.activationPending ? "你已获得一项待账号激活的管理授权。" : "你已获得一项管理授权，请重新登录或刷新后查看。", dedupeKey: `role-grant:${created.id}` } });
+    return created;
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     const concurrent = await tx.roleAssignment.findFirst({ where: { ...identity, OR: [{ active: true }, { activationPending: true }] } });
@@ -93,10 +146,12 @@ export async function grantRole(tx: Tx, input: { personId: string; role: RoleNam
 export async function revokeRole(tx: Tx, input: { roleId: string; actorId: string; reason: string }) {
   const role = await tx.roleAssignment.findUniqueOrThrow({ where: { id: input.roleId } });
   if (!role.active && !role.activationPending) return role;
-  return tx.roleAssignment.update({
+  const revoked = await tx.roleAssignment.update({
     where: { id: input.roleId },
     data: { active: false, activationPending: false, endedAt: new Date(), endedBy: input.actorId, endReason: input.reason }
   });
+  if (role.personId) await tx.notification.create({ data: { personId: role.personId, title: "管理角色变更", body: "你的一项管理授权已结束，详情请查看本人角色权限。", dedupeKey: `role-revoke:${role.id}` } });
+  return revoked;
 }
 
 export async function activatePendingRoles(tx: Tx, input: { personId: string; accountId: string; actorId: string }) {
@@ -163,19 +218,20 @@ async function isEmptyAccount(tx: Tx, accountId: string) {
 }
 
 export async function requestAccountMerge(tx: Tx, input: { sourceAccountId: string; targetAccountId: string; personId: string; reason: string }) {
+  const requestKey = changeRequestKey("account_merge", input.sourceAccountId, input.targetAccountId);
   const existing = await tx.changeRequest.findFirst({
-    where: { accountId: input.sourceAccountId, personId: input.personId, type: "account_merge", status: "pending", payload: { path: ["targetAccountId"], equals: input.targetAccountId } },
+    where: { type: "account_merge", status: "pending", requestKey },
     orderBy: { createdAt: "desc" }
   });
   if (existing) return existing;
   try {
     return await tx.changeRequest.create({
-      data: { accountId: input.sourceAccountId, personId: input.personId, type: "account_merge", payload: { targetAccountId: input.targetAccountId, reason: input.reason } }
+      data: { accountId: input.sourceAccountId, personId: input.personId, type: "account_merge", requestKey, payload: { targetAccountId: input.targetAccountId, reason: input.reason } }
     });
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     return tx.changeRequest.findFirstOrThrow({
-      where: { accountId: input.sourceAccountId, personId: input.personId, type: "account_merge", status: "pending", payload: { path: ["targetAccountId"], equals: input.targetAccountId } },
+      where: { type: "account_merge", status: "pending", requestKey },
       orderBy: { createdAt: "desc" }
     });
   }

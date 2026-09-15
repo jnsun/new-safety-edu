@@ -6,7 +6,7 @@ export type QualificationImportReference = {
   types: Array<{ id: string; name: string; category: "company" | "personal"; subtype1Label: string | null; subtype1Options: unknown; subtype2Label: string | null; subtype2Options: unknown }>;
 };
 export type QualificationImportRow = {
-  rowNumber: number; status: "ready" | "invalid"; reasons: string[]; warnings: string[];
+  rowNumber: number; status: "ready" | "invalid" | "conflict"; reasons: string[]; warnings: string[]; existingId?: string; conflictAction?: "skip" | "renew" | "void_and_create";
   category?: "company" | "personal"; ownerId?: string; ownerName: string; typeId?: string; typeName: string; name: string;
   certificateNo?: string; subtype1Value?: string; subtype2Value?: string; issuingAuthority?: string; issuedAt?: string;
   validFrom?: string; expiresAt?: string; isLongTerm: boolean; holderPosition?: string; scope?: string; remark?: string;

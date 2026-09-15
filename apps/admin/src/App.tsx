@@ -47,6 +47,7 @@ import { api, json } from "./api";
 import { CoursewarePage, QuestionsPage, TrainingPage } from "./Day2Pages";
 import { DashboardPage, RecordsPage, ReportsPage } from "./Day4Pages";
 import { PersonImport } from "./PersonImport";
+import { SensitiveExports } from "./SensitiveExports";
 import {
   MonthlyReportsPage,
   QualificationsPage,
@@ -127,6 +128,8 @@ type Account = {
   mustChangePassword: boolean;
   lastLoginAt: string | null;
   createdAt: string;
+  availableActions: string[];
+  profileCompleteness: { complete: boolean; missing: string[] } | null;
   loginMethods: { password: boolean; phone: boolean; wechat: boolean };
   person: {
     name: string;
@@ -213,6 +216,8 @@ function Login() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryPhone, setRecoveryPhone] = useState("");
   const wechat = useQuery({
     queryKey: ["wechat-web-config"],
     queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config"),
@@ -263,6 +268,7 @@ function Login() {
           <Button block type="primary" htmlType="submit" loading={busy}>
             登录
           </Button>
+          <Button block type="link" onClick={() => setRecoveryOpen(true)}>忘记密码</Button>
         </Form>
         {wechat.data?.enabled && (
           <>
@@ -285,6 +291,16 @@ function Login() {
           </>
         )}
       </Card>
+      <Modal title="通过已验证手机号找回密码" open={recoveryOpen} footer={null} onCancel={() => setRecoveryOpen(false)}>
+        <Alert type="info" showIcon message="验证码五分钟有效。未配置正式短信服务时，本功能不会发送模拟验证码。" style={{ marginBottom: 16 }} />
+        <Form layout="vertical" onFinish={async (values) => { try { await api("/api/auth/password-recovery/confirm", json("POST", values)); message.success("密码已更新，请使用新密码登录"); setRecoveryOpen(false); } catch (error) { message.error((error as Error).message); } }}>
+          <Form.Item name="phone" label="已验证手机号" rules={[{ required: true, pattern: /^1\d{10}$/ }]}><Input onChange={(event) => setRecoveryPhone(event.target.value)} /></Form.Item>
+          <Button style={{ marginBottom: 16 }} onClick={async () => { try { await api("/api/auth/password-recovery/code", json("POST", { phone: recoveryPhone })); message.success("如该号码可用，验证码已发送"); } catch (error) { message.error((error as Error).message); } }}>发送验证码</Button>
+          <Form.Item name="code" label="短信验证码" rules={[{ required: true, len: 6 }]}><Input inputMode="numeric" /></Form.Item>
+          <Form.Item name="newPassword" label="新密码" rules={[{ required: true, min: 12, max: 128 }]}><Input.Password autoComplete="new-password" /></Form.Item>
+          <Button type="primary" htmlType="submit">确认重置</Button>
+        </Form>
+      </Modal>
     </div>
   );
 }
@@ -316,10 +332,11 @@ function AccountsPanel({
   const [deleteAccount, setDeleteAccount] = useState<Account>();
   const [methodAccount, setMethodAccount] = useState<Account>();
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [personMergeOpen, setPersonMergeOpen] = useState(false);
   const accountCreate = useMutation({
     mutationFn: (v: Record<string, unknown>) => {
       const { organizationId: _, ...input } = v;
-      return api("/api/accounts", json("POST", input));
+      return api(companyAdmin ? "/api/accounts" : "/api/account-opening-requests", json("POST", input));
     },
     onSuccess: () => {
       setAccountOpen(false);
@@ -407,6 +424,18 @@ function AccountsPanel({
     },
     onError: (e) => message.error(e.message),
   });
+  const personMergeRequestCreate = useMutation({
+    mutationFn: async (values: { sourcePersonId: string; targetPersonId: string; reason: string; currentPassword: string }) => {
+      const sensitive = await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password: values.currentPassword }));
+      return api<{ id: string; status: string }>("/api/person-merge-requests", { ...json("POST", { sourcePersonId: values.sourcePersonId, targetPersonId: values.targetPersonId, reason: values.reason }), headers: { "x-sensitive-token": sensitive.token } });
+    },
+    onSuccess: () => {
+      message.success("人员档案合并申请已生成，请在绑定与注册审核中确认");
+      setPersonMergeOpen(false);
+      void qc.invalidateQueries({ queryKey: ["binding-requests"] });
+    },
+    onError: (e) => message.error(e.message),
+  });
   const roleRevoke = useMutation({
     mutationFn: async ({ roleId, role, reason, currentPassword }: { roleId: string; role: string; reason: string; currentPassword?: string }) => {
       const sensitive = role === "company_admin"
@@ -455,8 +484,9 @@ function AccountsPanel({
   return (
     <>
       <Space style={{ marginBottom: 12 }}>
-        <Button onClick={() => setAccountOpen(true)}>创建账号</Button>
+        <Button onClick={() => setAccountOpen(true)}>{companyAdmin ? "创建账号" : "发起账号开通"}</Button>
         {companyAdmin && <Button onClick={() => setMergeOpen(true)}>账号合并</Button>}
+        {companyAdmin && <Button onClick={() => setPersonMergeOpen(true)}>人员档案合并</Button>}
         {availableRoles.length > 0 && (
           <Button
             type="primary"
@@ -492,6 +522,8 @@ function AccountsPanel({
             dataIndex: "status",
             render: (v: string) => labels[v] ?? v,
           },
+          { title: "资料", render: (_: unknown, row: Account) => row.profileCompleteness ? <Tag color={row.profileCompleteness.complete ? "green" : "orange"}>{row.profileCompleteness.complete ? "完整" : `待补：${row.profileCompleteness.missing.join("、")}`}</Tag> : "未关联" },
+          { title: "登录记录", render: (_: unknown, row: Account) => <Space direction="vertical" size={0}><Typography.Text>{row.lastLoginAt ? `最近 ${new Date(row.lastLoginAt).toLocaleString()}` : "尚未登录"}</Typography.Text><Typography.Text type="secondary">创建 {new Date(row.createdAt).toLocaleDateString()}</Typography.Text></Space> },
           {
             title: "登录方式",
             render: (_: unknown, row: Account) => (
@@ -526,12 +558,12 @@ function AccountsPanel({
                 title: "操作",
                 render: (_: unknown, row: Account) => (
                   <Space size={0} wrap>
-                    {row.status !== "merged" && <Button type="link" onClick={() => setEditAccount(row)}>修改用户名</Button>}
-                    {row.id !== principal.accountId && row.status !== "merged" && <Button type="link" onClick={() => setResetAccount(row)}>重置密码</Button>}
-                    {row.status !== "merged" && <Button type="link" onClick={() => setMethodAccount(row)}>登录方式</Button>}
-                    {row.id !== principal.accountId && ["active", "pending"].includes(row.status) && <Button danger type="link" onClick={() => setStatusAccount({ account: row, nextStatus: "disabled" })}>停用</Button>}
-                    {row.id !== principal.accountId && row.status === "disabled" && <Button type="link" onClick={() => setStatusAccount({ account: row, nextStatus: "active" })}>启用</Button>}
-                    {row.id !== principal.accountId && !row.person && row.status !== "merged" && <Button danger type="link" onClick={() => setDeleteAccount(row)}>删除误建账号</Button>}
+                    {row.availableActions.includes("edit_username") && <Button type="link" onClick={() => setEditAccount(row)}>修改用户名</Button>}
+                    {row.availableActions.includes("reset_password") && <Button type="link" onClick={() => setResetAccount(row)}>重置密码</Button>}
+                    {row.availableActions.includes("manage_login_methods") && <Button type="link" onClick={() => setMethodAccount(row)}>登录方式</Button>}
+                    {row.availableActions.includes("disable") && <Button danger type="link" onClick={() => setStatusAccount({ account: row, nextStatus: "disabled" })}>停用</Button>}
+                    {row.availableActions.includes("enable") && <Button type="link" onClick={() => setStatusAccount({ account: row, nextStatus: "active" })}>启用</Button>}
+                    {row.availableActions.includes("delete_empty") && <Button danger type="link" onClick={() => setDeleteAccount(row)}>删除误建账号</Button>}
                   </Space>
                 ),
               }]
@@ -556,6 +588,26 @@ function AccountsPanel({
           <Form.Item name="reason" label="合并原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>
           <Form.Item name="currentPassword" label="当前管理员密码（二次验证）" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>
           <Button type="primary" htmlType="submit" loading={mergeRequestCreate.isPending}>生成合并申请</Button>
+        </Form>
+      </Modal>
+      <Modal
+        title="发起人员档案合并"
+        open={personMergeOpen}
+        footer={null}
+        destroyOnHidden
+        onCancel={() => setPersonMergeOpen(false)}
+      >
+        <Alert type="warning" showIcon message="来源档案将变为只读的已合并档案。已完成培训、考试和签字历史不会迁移；存在身份、手机号、主部门或双账号冲突时服务端会拒绝。" style={{ marginBottom: 16 }} />
+        <Form layout="vertical" onFinish={(values) => personMergeRequestCreate.mutate(values)}>
+          <Form.Item name="sourcePersonId" label="来源档案（合并后只读）" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="label" options={persons.filter((row) => row.id !== principal.personId && row.status !== "merged").map((row) => ({ value: row.id, label: `${row.name} · ${row.organizations.find((item) => item.primary)?.organization.name ?? "未设置主部门"}` }))} />
+          </Form.Item>
+          <Form.Item name="targetPersonId" label="主档案（继续使用）" rules={[{ required: true }]}>
+            <Select showSearch optionFilterProp="label" options={persons.filter((row) => row.id !== principal.personId && row.status === "active").map((row) => ({ value: row.id, label: `${row.name} · ${row.organizations.find((item) => item.primary)?.organization.name ?? "未设置主部门"}` }))} />
+          </Form.Item>
+          <Form.Item name="reason" label="合并原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>
+          <Form.Item name="currentPassword" label="当前管理员密码（二次验证）" rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item>
+          <Button type="primary" htmlType="submit" loading={personMergeRequestCreate.isPending}>生成合并申请</Button>
         </Form>
       </Modal>
       <Modal
@@ -679,26 +731,26 @@ function AccountsPanel({
         </Form>
       </Modal>
       <Modal
-        title="创建管理员/人员账号"
+        title={companyAdmin ? "创建管理员/人员账号" : "发起账号开通"}
         open={accountOpen}
         footer={null}
         onCancel={() => setAccountOpen(false)}
       >
         <Form layout="vertical" onFinish={(v) => accountCreate.mutate(v)}>
-          <Form.Item
+          {companyAdmin && <Form.Item
             name="username"
             label="用户名"
             rules={[{ required: true }]}
           >
             <Input />
-          </Form.Item>
-          <Form.Item
+          </Form.Item>}
+          {companyAdmin && <Form.Item
             name="password"
             label="初始密码"
             rules={[{ required: true, min: 12 }]}
           >
             <Input.Password />
-          </Form.Item>
+          </Form.Item>}
           <Form.Item
             name="organizationId"
             label="所在部门"
@@ -727,12 +779,13 @@ function AccountsPanel({
                 .map((p) => ({ value: p.id, label: p.name }))}
             />
           </Form.Item>
+          {!companyAdmin && <Form.Item name="reason" label="开通原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>}
           <Button
             type="primary"
             htmlType="submit"
             loading={accountCreate.isPending}
           >
-            创建账号
+            {companyAdmin ? "创建账号" : "提交开通"}
           </Button>
         </Form>
       </Modal>
@@ -801,6 +854,7 @@ function BindingRequests({ persons }: { persons: Person[] }) {
           id: string;
           type: string;
           status: string;
+          personId: string | null;
           projectId: string | null;
           createdAt: string;
           payload: Record<string, unknown>;
@@ -810,13 +864,14 @@ function BindingRequests({ persons }: { persons: Person[] }) {
   async function approve(row: { id: string; type: string }) {
     if (row.type === "binding" && !selected[row.id])
       return message.warning("请选择要绑定的人员档案");
+    const highRiskMerge = ["account_merge", "person_merge"].includes(row.type);
     const path =
-      row.type === "account_merge"
+      highRiskMerge
         ? `/api/management/requests/${row.id}/approve`
         : `/api/binding-requests/${row.id}/approve`;
     try {
-      if (row.type === "account_merge") {
-        const password = window.prompt("账号合并不可撤销，请输入当前管理员密码再次验证");
+      if (highRiskMerge) {
+        const password = window.prompt(`${row.type === "person_merge" ? "人员档案" : "账号"}合并不可撤销，请输入当前管理员密码再次验证`);
         if (!password) return;
         const note = window.prompt("请输入确认合并原因");
         if (!note?.trim()) return;
@@ -825,21 +880,22 @@ function BindingRequests({ persons }: { persons: Person[] }) {
       } else {
         await api(path, json("POST", row.type === "binding" ? { personId: selected[row.id] } : {}));
       }
-      message.success(row.type === "account_merge" ? "账号已合并" : "审核通过");
+      message.success(highRiskMerge ? `${row.type === "person_merge" ? "人员档案" : "账号"}已合并` : "审核通过");
       void requests.refetch();
     } catch (error) {
       message.error((error as Error).message);
     }
   }
-  async function rejectMerge(row: { id: string }) {
-    const password = window.prompt("拒绝账号合并前，请输入当前管理员密码再次验证");
+  async function rejectMerge(row: { id: string; type: string }) {
+    const kind = row.type === "person_merge" ? "人员档案" : "账号";
+    const password = window.prompt(`拒绝${kind}合并前，请输入当前管理员密码再次验证`);
     if (!password) return;
     const note = window.prompt("请输入拒绝原因");
     if (!note?.trim()) return;
     try {
       const sensitive = await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password }));
       await api(`/api/management/requests/${row.id}/reject`, { ...json("POST", { note }), headers: { "x-sensitive-token": sensitive.token } });
-      message.success("已拒绝账号合并申请");
+      message.success(`已拒绝${kind}合并申请`);
       void requests.refetch();
     } catch (error) { message.error((error as Error).message); }
   }
@@ -854,6 +910,8 @@ function BindingRequests({ persons }: { persons: Person[] }) {
           render: (_: unknown, row) =>
             row.type === "account_merge"
               ? "账号合并"
+              : row.type === "person_merge"
+                ? "人员档案合并"
               : row.type === "registration"
                 ? "新档案注册"
                 : row.payload.organizationName
@@ -866,6 +924,11 @@ function BindingRequests({ persons }: { persons: Person[] }) {
             <Space direction="vertical" size={0}>
               <span>来源：{String(row.payload.sourceAccountLabel ?? "账号信息不可用")}</span>
               <Typography.Text type="secondary">目标：{String(row.payload.targetAccountLabel ?? "账号信息不可用")}</Typography.Text>
+            </Space>
+          ) : row.type === "person_merge" ? (
+            <Space direction="vertical" size={0}>
+              <span>来源：{persons.find((person) => person.id === row.personId)?.name ?? "档案信息不可用"}</span>
+              <Typography.Text type="secondary">目标：{persons.find((person) => person.id === row.payload.targetPersonId)?.name ?? "档案信息不可用"}</Typography.Text>
             </Space>
           ) : String(row.payload.name ?? "待匹配人员"),
         },
@@ -909,9 +972,9 @@ function BindingRequests({ persons }: { persons: Person[] }) {
                 disabled={row.type === "binding" && !persons.length}
                 onClick={() => void approve(row)}
               >
-                {row.type === "account_merge" ? "确认合并" : "审核通过"}
+                {["account_merge", "person_merge"].includes(row.type) ? "确认合并" : "审核通过"}
               </Button>
-              {row.type === "account_merge" && <Button danger size="small" onClick={() => void rejectMerge(row)}>拒绝</Button>}
+              {["account_merge", "person_merge"].includes(row.type) && <Button danger size="small" onClick={() => void rejectMerge(row)}>拒绝</Button>}
             </Space>
           ),
         },
@@ -1094,6 +1157,7 @@ function People({ principal }: { principal: Principal }) {
                     organizationId: row.organizations.find(
                       (item) => item.primary,
                     )?.organization.id,
+                    keepCrossEntityProjectAdminRoles: false,
                   }
                 : {},
             );
@@ -1122,6 +1186,9 @@ function People({ principal }: { principal: Principal }) {
   );
   const companyAdmin = principal.roles.some(
     (role) => role.role === "company_admin",
+  );
+  const canExportSensitive = principal.roles.some((role) =>
+    ["company_admin", "org_leader", "org_admin", "project_admin"].includes(role.role),
   );
   return (
     <>
@@ -1193,6 +1260,13 @@ function People({ principal }: { principal: Principal }) {
             label: "绑定与注册审核",
             children: <BindingRequests persons={query.data ?? []} />,
           },
+          ...(canExportSensitive
+            ? [{
+                key: "sensitive-exports",
+                label: "敏感资料导出",
+                children: <SensitiveExports principal={principal} organizations={organizations.data ?? []} projects={projects.data ?? []} />,
+              }]
+            : []),
         ]}
       />
       <Modal
@@ -1306,6 +1380,9 @@ function People({ principal }: { principal: Principal }) {
                     .map((o) => ({ value: o.id, label: o.name }))}
                 />
               </Form.Item>
+              <Form.Item name="keepCrossEntityProjectAdminRoles" label="跨经营实体项目管理员权限">
+                <Select options={[{ value: false, label: "结束原项目管理员权限（默认）" }, { value: true, label: "保留，并作为跨实体授权" }]} />
+              </Form.Item>
               <Form.Item name="nationalId" label="身份证号码">
                 <Input.Password autoComplete="off" placeholder="不修改请留空" />
               </Form.Item>
@@ -1364,7 +1441,7 @@ function PersonDetail({
     if (!password) return;
     try {
       const auth = await api<{ token: string }>(
-        "/api/auth/reauthenticate",
+        `/api/persons/${person!.id}/sensitive-access`,
         json("POST", { password }),
       );
       const sensitive = await api<{ nationalId: string }>(
@@ -1751,6 +1828,21 @@ function PersonDetail({
                   ]}
                 />
               ),
+            },
+            {
+              key: "requests",
+              label: "申请与变更",
+              children: <Table size="small" rowKey="id" pagination={false} dataSource={row.changeRequests ?? []} columns={[{ title: "类型", dataIndex: "type" }, { title: "状态", dataIndex: "status", render: (value: string) => labels[value] ?? value }, { title: "提交时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() }, { title: "处理时间", dataIndex: "reviewedAt", render: (value: string) => value ? new Date(value).toLocaleString() : "—" }, { title: "处理意见", dataIndex: "reviewNote", render: (value: string) => value || "—" }]} />,
+            },
+            {
+              key: "timeline",
+              label: "操作记录",
+              children: <Table size="small" rowKey="id" pagination={{ pageSize: 20 }} dataSource={row.timeline ?? []} columns={[{ title: "时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() }, { title: "动作", dataIndex: "action" }, { title: "对象", dataIndex: "objectType" }, { title: "结果", dataIndex: "result", render: (value: string) => value || "—" }]} />,
+            },
+            {
+              key: "photos",
+              label: "照片历史",
+              children: <Table size="small" rowKey="id" pagination={false} dataSource={row.photoHistory ?? []} columns={[{ title: "文件", render: (_: unknown, item: any) => item.file?.originalName ?? "—" }, { title: "状态", dataIndex: "active", render: (value: boolean) => value ? "当前照片" : "历史照片" }, { title: "记录时间", dataIndex: "createdAt", render: (value: string) => new Date(value).toLocaleString() }, { title: "结束时间", dataIndex: "endedAt", render: (value: string) => value ? new Date(value).toLocaleString() : "—" }]} />,
             },
           ]}
         />
@@ -2332,19 +2424,22 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
       >
         <Form
           layout="inline"
-          onFinish={async (v) => {
-            await api(
-              `/api/projects/${memberProject!.id}/members`,
+          onFinish={async (v: { personIds: string[] }) => {
+            const result = await api<{ summary: { added: number; skipped: number; failed: number } }>(
+              `/api/projects/${memberProject!.id}/members/bulk`,
               json("POST", v),
             );
+            message.success(`新增 ${result.summary.added} 人，跳过 ${result.summary.skipped} 人，失败 ${result.summary.failed} 人`);
             void members.refetch();
             void qc.invalidateQueries({ queryKey: ["projects"] });
           }}
         >
-          <Form.Item name="personId" rules={[{ required: true }]}>
+          <Form.Item name="personIds" rules={[{ required: true }]}>
             <Select
-              style={{ width: 220 }}
-              placeholder="选择人员"
+              mode="multiple"
+              maxTagCount="responsive"
+              style={{ width: 320 }}
+              placeholder="选择一名或多名人员"
               options={(people.data ?? [])
                 .filter(
                   (p) =>
@@ -2359,7 +2454,7 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
             />
           </Form.Item>
           <Button type="primary" htmlType="submit">
-            加入项目
+            批量加入项目
           </Button>
         </Form>
         <Table
@@ -2534,6 +2629,7 @@ function PlatformPortal() {
 function Shell({ principal }: { principal: Principal }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const wechatWeb = useQuery({ queryKey: ["wechat-web-config"], queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config") });
   const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(
     () =>
@@ -2584,6 +2680,7 @@ function Shell({ principal }: { principal: Principal }) {
                   .join(" / ") || "无角色"}
               </Tag>
               <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
+              {wechatWeb.data?.enabled && <Button icon={<WechatOutlined />} href="/api/auth/wechat-web/bind/start">绑定网页登录微信</Button>}
               <Button
                 onClick={async () => {
                   await api("/api/auth/logout", { method: "POST" });

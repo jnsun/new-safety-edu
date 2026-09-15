@@ -22,14 +22,18 @@ import { registerPhoneAuthRoutes } from "./routes/phone-auth.js";
 import { registerWechatWebAuthRoutes } from "./routes/wechat-web-auth.js";
 import { registerQualificationRoutes } from "./routes/qualifications.js";
 import { registerProjectReportingRoutes } from "./routes/project-reporting.js";
+import { registerSensitiveExportRoutes } from "./routes/sensitive-exports.js";
+import { cleanupExpiredSensitiveExports } from "./sensitive-export.js";
+import { assertCsrfRequest } from "./csrf.js";
 
 const env = loadEnv();
-const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.newPassword", "body.code", "body.refreshToken", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
+const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.newPassword", "body.code", "body.refreshToken", "body.token", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
 
 app.decorateRequest("principal", null);
 await app.register(cookie, { secret: env.COOKIE_SECRET });
 await app.register(cors, { origin: env.NODE_ENV === "production" ? env.PUBLIC_BASE_URL : true, credentials: true });
 await app.register(multipart);
+app.addHook("onRequest", async (request) => assertCsrfRequest({ method: request.method, url: request.url, headers: request.headers, cookies: request.cookies, publicBaseUrl: env.PUBLIC_BASE_URL }));
 
 app.setErrorHandler((error, _request, reply) => {
   const tagged = error as Error & { statusCode?: number; code?: string };
@@ -55,8 +59,9 @@ await registerDay4Routes(app, { env, ...guards });
 await registerSafetyManagementRoutes(app, { env, ...guards });
 await registerQualificationRoutes(app, { env, authenticate: guards.authenticate });
 await registerProjectReportingRoutes(app, { authenticate: guards.authenticate });
-await registerPhoneAuthRoutes(app, { env });
-await registerWechatWebAuthRoutes(app, { env });
+await registerSensitiveExportRoutes(app, { env, ...guards });
+await registerPhoneAuthRoutes(app, { env, authenticate: guards.authenticate });
+await registerWechatWebAuthRoutes(app, { env, authenticate: guards.authenticate, requireManager: guards.requireManager });
 
 app.get("/api/health", async () => {
   await prisma.$queryRaw`SELECT 1`;
@@ -81,5 +86,8 @@ void generateScheduledReminders(env).catch((error) => app.log.error({ err: error
 const outboxTimer = setInterval(() => void processNotificationOutbox(env).catch(() => app.log.error("wechat_delivery_failed")), 60 * 1000);
 outboxTimer.unref();
 void processNotificationOutbox(env).catch(() => app.log.error("wechat_delivery_failed"));
+const sensitiveExportCleanupTimer = setInterval(() => void cleanupExpiredSensitiveExports(env).catch((error) => app.log.error({ err: error }, "sensitive_export_cleanup_failed")), 10 * 60 * 1000);
+sensitiveExportCleanupTimer.unref();
+void cleanupExpiredSensitiveExports(env).catch((error) => app.log.error({ err: error }, "sensitive_export_cleanup_failed"));
 
 await app.listen({ port: env.PORT, host: "0.0.0.0" });

@@ -13,10 +13,17 @@ import { decryptNationalId, encryptNationalId, hashNationalId, normalizePhone } 
 import { maskPhone, nationalIdError } from "../person-import-core.js";
 import { createPerson, maskPerson, personSafeSelect } from "../people.js";
 import { issueSensitiveToken, issueSession, rotateRefreshToken, verifySensitiveToken, type Principal } from "../auth.js";
-import { autoDispatch } from "./day2.js";
+import { autoDispatchInTransaction } from "./day2.js";
 import { activatePendingRoles, assertAccountMergeCandidate, canGrantScopedRole, canJoinProject, canManagePersonStatus, disablePerson, grantRole, reactivatePerson, requestAccountMerge, revokeRole, setPrimaryOrganization } from "../identity.js";
 import { accountDeletionBlockers, assertAccountStatusChange, normalizeUsername } from "../account-lifecycle.js";
 import { accountStatusAfterLoginMethodChange, assertLoginMethodCanBeRemoved } from "../session-login-policy.js";
+import { assertPersonMergeCandidate, requestPersonMerge } from "../person-merge.js";
+import { assertOwnedFiles } from "../file-association-policy.js";
+import { assertPasswordAllowed, decidePasswordFailure, securityHash } from "../auth-security.js";
+import { setCsrfCookie } from "../csrf.js";
+import { writeCriticalAudit } from "../transaction-audit.js";
+import { assertMembershipTransition } from "../project-membership.js";
+import { changeRequestKey } from "../request-policy.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -27,6 +34,11 @@ const principalOf = (request: FastifyRequest): Principal => {
 };
 
 const idParam = z.object({ id: z.string().uuid() });
+
+async function notifyAccountSecurity(tx: Prisma.TransactionClient, accountId: string, action: string, body: string) {
+  const account = await tx.account.findUnique({ where: { id: accountId }, select: { personId: true, sessionVersion: true } });
+  if (account?.personId) await tx.notification.upsert({ where: { dedupeKey: `account-security:${accountId}:${action}:${account.sessionVersion}` }, update: {}, create: { personId: account.personId, title: "账号安全提醒", body, dedupeKey: `account-security:${accountId}:${action}:${account.sessionVersion}` } });
+}
 
 async function personWhere(principal: Principal): Promise<Prisma.PersonWhereInput> {
   if (isCompanyAdmin(principal)) return {};
@@ -47,14 +59,29 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const input = loginSchema.parse(request.body);
     let usernameNormalized: string;
     try { usernameNormalized = normalizeUsername(input.username); } catch { throw Object.assign(new Error("用户名或密码错误"), { statusCode: 401, code: "INVALID_CREDENTIALS" }); }
-    const account = await prisma.account.findUnique({ where: { usernameNormalized } });
+    const account = await prisma.account.findUnique({ where: { usernameNormalized } }); const now = new Date();
+    const identifierHash = securityHash(usernameNormalized, deps.env.JWT_SECRET); const sourceHash = securityHash(request.ip, deps.env.JWT_SECRET);
+    if (account?.loginLockedUntil && account.loginLockedUntil > now) {
+      await prisma.authSecurityEvent.create({ data: { accountId: account.id, accountIdentifierHash: identifierHash, eventType: "password_login_limited", loginMethod: "password", clientKind: "web", sourceHash, outcome: "blocked" } });
+      throw Object.assign(new Error("登录尝试过于频繁，请稍后再试"), { statusCode: 429, code: "LOGIN_TEMPORARILY_LIMITED" });
+    }
     if (!account?.passwordHash || !account.passwordLoginEnabled || account.status !== "active" || !await argon2.verify(account.passwordHash, input.password)) {
+      const previousFailures = account && (!account.loginLockedUntil || account.loginLockedUntil > now) ? account.failedLoginCount : 0;
+      const failure = decidePasswordFailure(previousFailures, now);
+      await prisma.$transaction(async (tx) => {
+        if (account) await tx.account.update({ where: { id: account.id }, data: { failedLoginCount: failure.failedCount, loginLockedUntil: failure.lockedUntil } });
+        await tx.authSecurityEvent.create({ data: { accountId: account?.id ?? null, accountIdentifierHash: identifierHash, eventType: "password_login_failed", loginMethod: "password", clientKind: "web", sourceHash, outcome: failure.lockedUntil ? "temporarily_limited" : "failed" } });
+      });
       throw Object.assign(new Error("用户名或密码错误"), { statusCode: 401, code: "INVALID_CREDENTIALS" });
     }
-    await prisma.account.update({ where: { id: account.id }, data: { lastLoginAt: new Date() } });
-    const session = await issueSession(account.id, deps.env, { clientKind: "web", userAgent: request.headers["user-agent"] });
+    await prisma.$transaction(async (tx) => {
+      await tx.account.update({ where: { id: account.id }, data: { lastLoginAt: now, failedLoginCount: 0, loginLockedUntil: null } });
+      await tx.authSecurityEvent.create({ data: { accountId: account.id, accountIdentifierHash: identifierHash, eventType: "password_login_succeeded", loginMethod: "password", clientKind: "web", sourceHash, outcome: "success" } });
+    });
+    const session = await issueSession(account.id, deps.env, { clientKind: "web", loginMethod: "password", userAgent: request.headers["user-agent"] });
     reply.setCookie("safety_session", session.accessToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/", maxAge: 900 });
-    reply.setCookie("safety_refresh", session.refreshToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/api/auth", maxAge: 30 * 86400 });
+    reply.setCookie("safety_refresh", session.refreshToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/api/auth", maxAge: 8 * 60 * 60 });
+    setCsrfCookie(reply, deps.env);
     audit(account.id, "auth.login", "account", account.id);
     return { data: { accountId: account.id } };
   });
@@ -73,8 +100,9 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
   });
 
   app.post("/api/auth/change-password", authenticated, async (request, reply) => {
-    const principal = principalOf(request); const input = z.object({ currentPassword: z.string().min(8).max(200), newPassword: z.string().min(12).max(200) }).refine((value) => value.currentPassword !== value.newPassword, { message: "新密码不能与当前密码相同", path: ["newPassword"] }).parse(request.body);
-    const account = await prisma.account.findUniqueOrThrow({ where: { id: principal.accountId } }); if (!account.passwordHash || !await argon2.verify(account.passwordHash, input.currentPassword)) throw Object.assign(new Error("当前密码错误"), { statusCode: 401, code: "INVALID_CURRENT_PASSWORD" });
+    const principal = principalOf(request); const input = z.object({ currentPassword: z.string().min(8).max(200), newPassword: z.string().min(12).max(128) }).refine((value) => value.currentPassword !== value.newPassword, { message: "新密码不能与当前密码相同", path: ["newPassword"] }).parse(request.body);
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: principal.accountId }, include: { person: { select: { name: true, phone: true } } } }); if (!account.passwordHash || !await argon2.verify(account.passwordHash, input.currentPassword)) throw Object.assign(new Error("当前密码错误"), { statusCode: 401, code: "INVALID_CURRENT_PASSWORD" });
+    assertPasswordAllowed(input.newPassword, { username: account.usernameNormalized, phone: account.person?.phone ?? account.verifiedPhone, name: account.person?.name ?? null });
     const passwordHash = await argon2.hash(input.newPassword);
     await prisma.$transaction(async (tx) => {
       await tx.account.update({ where: { id: principal.accountId }, data: { passwordHash, passwordLoginEnabled: true, mustChangePassword: false, sessionVersion: { increment: 1 } } });
@@ -112,7 +140,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       select: {
         username: true, passwordLoginEnabled: true, verifiedPhone: true,
         wechatBindings: { where: { active: true }, select: { id: true, boundAt: true } },
-        refreshSessions: { where: { revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true, clientKind: true, lastUsedAt: true, createdAt: true }, orderBy: { createdAt: "desc" } }
+        refreshSessions: { where: { revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true, clientKind: true, loginMethod: true, lastUsedAt: true, createdAt: true, absoluteExpiresAt: true }, orderBy: { createdAt: "desc" } }
       }
     });
     const roleRows = await prisma.roleAssignment.findMany({ where: principal.personId ? { personId: principal.personId, active: true } : { accountId: principal.accountId, personId: null, active: true }, select: { id: true, role: true, scopeType: true, scopeId: true, createdAt: true } });
@@ -132,7 +160,19 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     } };
   });
 
+  app.post("/api/auth/sessions/:id/revoke", authenticated, async (request, reply) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params);
+    await prisma.$transaction(async (tx) => {
+      const revoked = await tx.refreshSession.updateMany({ where: { id, accountId: principal.accountId, revokedAt: null }, data: { revokedAt: new Date() } });
+      if (revoked.count !== 1) throw Object.assign(new Error("设备会话不存在或已经退出"), { statusCode: 404, code: "SESSION_NOT_FOUND" });
+      await tx.authSecurityEvent.create({ data: { accountId: principal.accountId, eventType: "session_revoked", clientKind: "self_service", outcome: "success", metadata: { sessionId: id, current: id === principal.sessionId } } });
+    });
+    if (id === principal.sessionId) { reply.clearCookie("safety_session", { path: "/" }); reply.clearCookie("safety_refresh", { path: "/api/auth" }); }
+    return reply.code(204).send();
+  });
+
   app.get("/api/auth/me", authenticated, async (request) => ({ data: principalOf(request) }));
+  app.get("/api/auth/csrf", authenticated, async (_request, reply) => ({ data: { token: setCsrfCookie(reply, deps.env) } }));
   app.post("/api/auth/refresh", async (request, reply) => {
     const body = z.object({ refreshToken: z.string().min(20).optional() }).parse(request.body ?? {});
     const fromCookie = !body.refreshToken && request.cookies.safety_refresh;
@@ -141,7 +181,8 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const session = await rotateRefreshToken(refreshToken, deps.env);
     if (fromCookie) {
       reply.setCookie("safety_session", session.accessToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/", maxAge: 900 });
-      reply.setCookie("safety_refresh", session.refreshToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/api/auth", maxAge: 30 * 86400 });
+      reply.setCookie("safety_refresh", session.refreshToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/api/auth", maxAge: 8 * 60 * 60 });
+      setCsrfCookie(reply, deps.env);
     }
     return { data: session };
   });
@@ -188,8 +229,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     if (input.parentId !== undefined) throw Object.assign(new Error("当前版本不允许调整组织层级"), { statusCode: 409, code: "ORGANIZATION_PARENT_IMMUTABLE" });
     if (input.type && input.type !== current.type) throw Object.assign(new Error("组织类型建立后不能直接修改"), { statusCode: 409, code: "ORGANIZATION_TYPE_IMMUTABLE" });
     if (current.type === "company" && (input.type && input.type !== "company" || input.parentId)) throw Object.assign(new Error("公司根组织不能更改类型或设置上级"), { statusCode: 409, code: "COMPANY_ROOT_IMMUTABLE" });
-    const organization = await prisma.organization.update({ where: { id }, data: { ...(input.name ? { name: input.name } : {}) } });
-    await auditCritical(principal.accountId, "organization.update", "organization", id, { fields: Object.keys(input) }, "var/audit-fallback.ndjson");
+    const organization = await prisma.$transaction(async (tx) => { const updated = await tx.organization.update({ where: { id }, data: { ...(input.name ? { name: input.name } : {}) } }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "organization.update", objectType: "organization", objectId: id, metadata: { fields: Object.keys(input) } }); return updated; });
     return { data: organization };
   });
 
@@ -206,8 +246,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     if (organization.type === "company" || organization._count.children + organization._count.memberships + organization._count.projects + scopedReferences.reduce((sum, count) => sum + count, 0) > 0) {
       throw Object.assign(new Error("该组织已被人员、下级组织、项目、权限或培训资料使用，不能删除"), { statusCode: 409, code: "ORGANIZATION_IN_USE" });
     }
-    await prisma.organization.delete({ where: { id } });
-    await auditCritical(principal.accountId, "organization.delete", "organization", id, { name: organization.name }, "var/audit-fallback.ndjson");
+    await prisma.$transaction(async (tx) => { await tx.organization.delete({ where: { id } }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "organization.delete", objectType: "organization", objectId: id, metadata: { name: organization.name } }); });
     return reply.code(204).send();
   });
 
@@ -281,8 +320,21 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     }
     const status = z.object({ status: z.enum(["active", "paused", "ended"]) }).parse(request.body).status;
     if (current.status === "ended") throw Object.assign(new Error("已结束项目为只读"), { statusCode: 409, code: "PROJECT_ENDED" });
-    const project = await prisma.project.update({ where: { id }, data: { status } });
-    await auditCritical(principal.accountId, "project.status_change", "project", id, { from: current.status, to: status }, "var/audit-fallback.ndjson");
+    const project = await prisma.$transaction(async (tx) => {
+      const updated = await tx.project.update({ where: { id }, data: { status } });
+      if (status === "ended") {
+        const now = new Date();
+        await tx.projectMember.updateMany({ where: { projectId: id, status: { in: ["active", "approved"] } }, data: { status: "ended", endedAt: now, endedBy: principal.accountId, endReason: "项目结束" } });
+        await tx.projectMember.updateMany({ where: { projectId: id, status: "pending" }, data: { status: "cancelled", endedAt: now, endedBy: principal.accountId, endReason: "项目结束" } });
+        await tx.changeRequest.updateMany({ where: { projectId: id, status: "pending" }, data: { status: "cancelled", reviewedBy: principal.accountId, reviewedAt: now, reviewNote: "项目结束" } });
+        const roles = await tx.roleAssignment.findMany({ where: { role: "project_admin", scopeType: "project", scopeId: id, OR: [{ active: true }, { activationPending: true }] }, select: { id: true, accountId: true } });
+        await tx.roleAssignment.updateMany({ where: { id: { in: roles.map(({ id: roleId }) => roleId) } }, data: { active: false, activationPending: false, endedAt: now, endedBy: principal.accountId, endReason: "项目结束" } });
+        const accountIds = roles.flatMap(({ accountId }) => accountId ? [accountId] : []);
+        if (accountIds.length) { await tx.account.updateMany({ where: { id: { in: accountIds } }, data: { sessionVersion: { increment: 1 } } }); await tx.refreshSession.updateMany({ where: { accountId: { in: accountIds }, revokedAt: null }, data: { revokedAt: now } }); }
+      }
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project.status_change", objectType: "project", objectId: id, metadata: { from: current.status, to: status } });
+      return updated;
+    });
     return { data: project };
   });
 
@@ -300,11 +352,30 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request);
     const { id } = idParam.parse(request.params);
     if (!await canAccessPerson(principal, id)) forbidden();
-    await verifySensitiveToken(request, deps.env);
+    await verifySensitiveToken(request, deps.env, { targetPersonId: id, field: "nationalId", action: "read" });
     const person = await prisma.person.findUniqueOrThrow({ where: { id } });
     if (!person.nationalIdCipher || !person.nationalIdIv || !person.nationalIdTag) throw Object.assign(new Error("该人员尚未补录身份证号码"), { statusCode: 404, code: "NATIONAL_ID_MISSING" });
     audit(principal.accountId, "person.sensitive_read", "person", id);
     return { data: { nationalId: decryptNationalId(person.nationalIdCipher, person.nationalIdIv, person.nationalIdTag, deps.env) } };
+  });
+
+  app.post("/api/persons/lookup-by-national-id", manager, async (request) => {
+    const principal = principalOf(request); if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以按身份证精确查找");
+    const { nationalId, password } = z.object({ nationalId: z.string().trim().min(6).max(30), password: z.string().min(8).max(200) }).parse(request.body); const problem = nationalIdError(nationalId); if (problem) throw Object.assign(new Error(problem), { statusCode: 400, code: "INVALID_NATIONAL_ID" });
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: principal.accountId }, select: { passwordHash: true } }); if (!account.passwordHash || !await argon2.verify(account.passwordHash, password)) throw Object.assign(new Error("当前密码错误"), { statusCode: 401, code: "INVALID_CURRENT_PASSWORD" });
+    const person = await prisma.person.findUnique({ where: { nationalIdHash: hashNationalId(nationalId, deps.env) }, select: personSafeSelect }); await auditCritical(principal.accountId, "person.exact_national_id_lookup", "person", person?.id, { found: !!person }, "var/audit-fallback.ndjson"); return { data: person ? maskPerson(person) : null };
+  });
+
+  app.post("/api/persons/:id/sensitive-access", manager, async (request) => {
+    const principal = principalOf(request);
+    const { id } = idParam.parse(request.params);
+    const { password } = z.object({ password: z.string().min(8).max(200) }).parse(request.body);
+    if (!await canAccessPerson(principal, id)) forbidden();
+    const account = await prisma.account.findUniqueOrThrow({ where: { id: principal.accountId }, select: { passwordHash: true } });
+    if (!account.passwordHash) throw Object.assign(new Error("当前账号未配置密码，暂不能查看完整身份证号码"), { statusCode: 409, code: "REAUTH_METHOD_UNAVAILABLE" });
+    if (!await argon2.verify(account.passwordHash, password)) throw Object.assign(new Error("当前密码错误"), { statusCode: 401, code: "INVALID_CURRENT_PASSWORD" });
+    await auditCritical(principal.accountId, "person.sensitive_access_grant", "person", id, { field: "nationalId", action: "read" }, "var/audit-fallback.ndjson");
+    return { data: { token: await issueSensitiveToken(principal.accountId, deps.env, { targetPersonId: id, field: "nationalId", action: "read" }), expiresIn: 300 } };
   });
 
   app.patch("/api/persons/:id", manager, async (request) => {
@@ -315,10 +386,11 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       name: z.string().trim().min(2).max(80).optional(),
       phone: z.string().regex(/^1\d{10}$/).optional(),
       organizationId: z.string().uuid().optional(),
+      keepCrossEntityProjectAdminRoles: z.boolean().optional(),
       nationalId: z.string().trim().min(6).max(30).optional(),
       photoFileId: z.string().uuid().optional()
     }).refine((value) => Object.keys(value).length > 0, "至少填写一项资料").parse(request.body);
-    const currentMemberships = await prisma.organizationMembership.findMany({ where: { personId: id, active: true }, select: { organizationId: true } });
+    const [currentMemberships, currentPerson] = await Promise.all([prisma.organizationMembership.findMany({ where: { personId: id, active: true }, select: { organizationId: true } }), prisma.person.findUniqueOrThrow({ where: { id }, select: { photoFileId: true } })]);
     if (!canManagePersonStatus(principal, currentMemberships.map((item) => item.organizationId))) forbidden("只有人员所属组织负责人、管理员或公司管理员可以维护人员资料");
     if (!isCompanyAdmin(principal) && (input.name || input.phone || input.organizationId || input.nationalId)) forbidden("姓名、手机号、身份证和所属组织只能由公司管理员直接调整");
     if (input.organizationId) {
@@ -334,16 +406,17 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       if (await prisma.person.findFirst({ where: { id: { not: id }, nationalIdHash: hashNationalId(input.nationalId, deps.env) }, select: { id: true } })) throw Object.assign(new Error("该身份证号码已有人员档案"), { statusCode: 409, code: "NATIONAL_ID_EXISTS" });
     }
     if (input.photoFileId) {
-      const file = await prisma.privateFile.findUnique({ where: { id: input.photoFileId }, select: { kind: true } });
-      if (file?.kind !== "photo") throw Object.assign(new Error("所选文件不是个人照片"), { statusCode: 400, code: "INVALID_PHOTO" });
+      const file = await prisma.privateFile.findUnique({ where: { id: input.photoFileId }, select: { id: true, kind: true, uploadedBy: true } });
+      assertOwnedFiles(file ? [file] : [], [input.photoFileId], principal.accountId, "photo");
     }
     const person = await prisma.$transaction(async (tx) => {
       if (input.organizationId) {
-        await setPrimaryOrganization(tx, { personId: id, organizationId: input.organizationId, actorId: principal.accountId, reason: "公司管理员直接调整主组织" });
+        await setPrimaryOrganization(tx, { personId: id, organizationId: input.organizationId, actorId: principal.accountId, reason: "公司管理员直接调整主组织", actorIsCompanyAdmin: true, ...(input.keepCrossEntityProjectAdminRoles !== undefined ? { keepCrossEntityProjectAdminRoles: input.keepCrossEntityProjectAdminRoles } : {}) });
       }
-      return tx.person.update({ where: { id }, data: { ...(input.name ? { name: input.name } : {}), ...(phone ? { phone } : {}), ...(input.photoFileId ? { photoFileId: input.photoFileId } : {}), ...(input.nationalId ? encryptNationalId(input.nationalId, deps.env) : {}) }, select: personSafeSelect });
+      if (input.photoFileId && input.photoFileId !== currentPerson.photoFileId) { await tx.personPhotoHistory.updateMany({ where: { personId: id, active: true }, data: { active: false, endedAt: new Date(), changedBy: principal.accountId } }); await tx.personPhotoHistory.create({ data: { personId: id, fileId: input.photoFileId, changedBy: principal.accountId } }); }
+      const updated = await tx.person.update({ where: { id }, data: { ...(input.name ? { name: input.name } : {}), ...(phone ? { phone } : {}), ...(input.photoFileId ? { photoFileId: input.photoFileId } : {}), ...(input.nationalId ? encryptNationalId(input.nationalId, deps.env) : {}) }, select: personSafeSelect });
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "person.profile_update", objectType: "person", objectId: id, metadata: { fields: Object.keys(input) } }); return updated;
     });
-    await auditCritical(principal.accountId, "person.profile_update", "person", id, { fields: Object.keys(input) }, "var/audit-fallback.ndjson");
     return { data: maskPerson(person) };
   });
 
@@ -354,12 +427,16 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const memberships = await prisma.organizationMembership.findMany({ where: { personId: id, active: true }, select: { organizationId: true } });
     if (!canManagePersonStatus(principal, memberships.map((item) => item.organizationId))) forbidden("项目管理员不能停用或启用人员档案");
     const input = z.object({ status: z.enum(["active", "disabled"]), reason: z.string().trim().min(2).max(500) }).parse(request.body); const status = input.status;
+    const canReactivateDirectly = isCompanyAdmin(principal) || principal.roles.some((role) => role.role === "org_leader" && role.scopeType === "organization" && !!role.scopeId && memberships.some((membership) => membership.organizationId === role.scopeId));
+    if (status === "active" && !canReactivateDirectly) {
+      const requestKey = changeRequestKey("person_reactivation", id); const existing = await prisma.changeRequest.findFirst({ where: { type: "person_reactivation", requestKey, status: "pending" } }); if (existing) return { data: { requestId: existing.id, status: existing.status } };
+      const row = await prisma.changeRequest.create({ data: { accountId: principal.accountId, personId: id, type: "person_reactivation", requestKey, payload: { reason: input.reason } } }); return { data: { requestId: row.id, status: row.status } };
+    }
     const person = await prisma.$transaction(async (tx) => {
       if (status === "disabled") await disablePerson(tx, { personId: id, actorId: principal.accountId, reason: input.reason });
       else await reactivatePerson(tx, { personId: id });
-      return tx.person.findUniqueOrThrow({ where: { id }, select: personSafeSelect });
+      const updated = await tx.person.findUniqueOrThrow({ where: { id }, select: personSafeSelect }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "person.status_change", objectType: "person", objectId: id, reason: input.reason, metadata: { status } }); return updated;
     });
-    await auditCritical(principal.accountId, "person.status_change", "person", id, { status, reason: input.reason }, "var/audit-fallback.ndjson");
     return { data: maskPerson(person) };
   });
 
@@ -371,8 +448,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const data = Object.fromEntries(Object.entries(input).filter(([key, value]) => value !== undefined && !["plannedStartAt", "plannedEndAt"].includes(key))) as Prisma.ProjectUncheckedUpdateInput;
     if (input.plannedStartAt !== undefined) data.plannedStartAt = new Date(`${input.plannedStartAt}T00:00:00.000Z`);
     if (input.plannedEndAt !== undefined) data.plannedEndAt = new Date(`${input.plannedEndAt}T00:00:00.000Z`);
-    const project = await prisma.project.update({ where: { id }, data });
-    await auditCritical(principal.accountId, "project.update", "project", id, { fields: Object.keys(input) }, "var/audit-fallback.ndjson"); return { data: project };
+    const project = await prisma.$transaction(async (tx) => { const updated = await tx.project.update({ where: { id }, data }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project.update", objectType: "project", objectId: id, metadata: { fields: Object.keys(input) } }); return updated; }); return { data: project };
   });
 
   app.delete("/api/persons/:id", manager, async (request, reply) => {
@@ -386,9 +462,14 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     ]);
     const references = account + audits + Object.values(person._count).reduce((sum, count) => sum + count, 0);
     if (references) throw Object.assign(new Error("该人员已有账号、组织、项目、培训、证照、申请或审计记录，只能停用"), { statusCode: 409, code: "PERSON_IN_USE" });
-    await prisma.person.delete({ where: { id } });
-    await auditCritical(principal.accountId, "person.delete_empty", "person", id, { name: person.name, reason }, "var/audit-fallback.ndjson");
+    await prisma.$transaction(async (tx) => { await tx.person.delete({ where: { id } }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "person.delete_empty", objectType: "person", objectId: id, reason, metadata: { name: person.name } }); });
     return reply.code(204).send();
+  });
+
+  app.get("/api/persons/:id/deletion-preview", manager, async (request) => {
+    const principal = principalOf(request); if (!isCompanyAdmin(principal)) forbidden(); const { id } = idParam.parse(request.params);
+    const [person, account, audits] = await Promise.all([prisma.person.findUniqueOrThrow({ where: { id }, include: { _count: { select: { organizations: true, projectMemberships: true, assignments: true, signatures: true, changeRequests: true, notifications: true, certificates: true, photoHistory: true } } } }), prisma.account.count({ where: { personId: id } }), prisma.auditLog.count({ where: { objectType: "person", objectId: id } })]);
+    const facts = { account, audits, ...person._count }; const reasons = Object.entries(facts).filter(([, count]) => count > 0).map(([name, count]) => `${name}:${count}`); return { data: { canDelete: reasons.length === 0, reasons } };
   });
 
   app.post("/api/persons/import", manager, async () => {
@@ -410,25 +491,28 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
         passwordLoginEnabled: true, mustChangePassword: true, lastLoginAt: true, createdAt: true,
         wechatBindings: { where: { active: true }, select: { id: true } },
         roles: true,
-        person: { select: { name: true, status: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { id: true, name: true } } } } } }
+        person: { select: { name: true, status: true, nationalIdLast4: true, photoFileId: true, phone: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { id: true, name: true } } } } } }
       },
       orderBy: { createdAt: "desc" }
     });
     return { data: accounts.map(({ verifiedPhone, wechatBindings, ...account }) => ({
       ...account,
       verifiedPhoneMasked: verifiedPhone ? maskPhone(verifiedPhone) : null,
-      loginMethods: { password: account.passwordLoginEnabled, phone: Boolean(verifiedPhone), wechat: wechatBindings.length > 0 }
+      loginMethods: { password: account.passwordLoginEnabled, phone: Boolean(verifiedPhone), wechat: wechatBindings.length > 0 },
+      profileCompleteness: account.person ? { complete: Boolean(account.person.phone && account.person.nationalIdLast4 && account.person.photoFileId && account.person.organizations.length), missing: [!account.person.phone && "手机号", !account.person.nationalIdLast4 && "身份证", !account.person.photoFileId && "照片", !account.person.organizations.length && "主组织"].filter(Boolean) } : null,
+      availableActions: isCompanyAdmin(principal) ? [account.status !== "merged" && "edit_username", account.id !== principal.accountId && account.status !== "merged" && "reset_password", account.status !== "merged" && "manage_login_methods", account.id !== principal.accountId && ["active", "pending"].includes(account.status) && "disable", account.id !== principal.accountId && account.status === "disabled" && "enable", account.id !== principal.accountId && !account.personId && account.status !== "merged" && "delete_empty"].filter(Boolean) : []
     })) };
   });
 
   app.post("/api/accounts", manager, async (request, reply) => {
     const principal = principalOf(request);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以直接创建用户名密码账号");
-    const input = z.object({ username: z.string(), password: z.string().min(12).max(200), personId: z.string().uuid() }).parse(request.body);
+    const input = z.object({ username: z.string(), password: z.string().min(12).max(128), personId: z.string().uuid() }).parse(request.body);
     const usernameNormalized = normalizeUsername(input.username);
-    const person = await prisma.person.findUniqueOrThrow({ where: { id: input.personId }, select: { status: true, account: { select: { id: true } } } });
+    const person = await prisma.person.findUniqueOrThrow({ where: { id: input.personId }, select: { status: true, name: true, phone: true, account: { select: { id: true } } } });
     if (person.status !== "active") throw Object.assign(new Error("只能为正常人员创建账号"), { statusCode: 409, code: "PERSON_NOT_ACTIVE" });
     if (person.account) throw Object.assign(new Error("该人员已关联账号"), { statusCode: 409, code: "PERSON_ACCOUNT_EXISTS" });
+    assertPasswordAllowed(input.password, { username: usernameNormalized, phone: person.phone, name: person.name });
     const passwordHash = await argon2.hash(input.password);
     const account = await prisma.$transaction(async (tx) => {
       const created = await tx.account.create({ data: { username: usernameNormalized, usernameNormalized, passwordHash, passwordLoginEnabled: true, mustChangePassword: true, personId: input.personId }, select: { id: true, username: true, status: true, personId: true } });
@@ -437,6 +521,23 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       return created;
     });
     return reply.code(201).send({ data: account });
+  });
+
+  app.post("/api/account-opening-requests", manager, async (request, reply) => {
+    const principal = principalOf(request); const input = z.object({ personId: z.string().uuid(), reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    if (!await canAccessPerson(principal, input.personId)) forbidden("只能为管理范围内人员发起账号开通");
+    const person = await prisma.person.findUniqueOrThrow({ where: { id: input.personId }, select: { status: true, account: { select: { id: true, status: true } } } });
+    if (person.status !== "active") throw Object.assign(new Error("只能为正常人员发起账号开通"), { statusCode: 409, code: "PERSON_NOT_ACTIVE" });
+    if (person.account?.status === "active") throw Object.assign(new Error("该人员账号已经激活"), { statusCode: 409, code: "PERSON_ACCOUNT_ACTIVE" });
+    if (person.account && person.account.status !== "pending") throw Object.assign(new Error("该人员账号当前不能重新开通，请由公司管理员处理"), { statusCode: 409, code: "ACCOUNT_REQUIRES_ADMIN" });
+    const requestKey = changeRequestKey("account_opening", input.personId, "self_activation");
+    const row = await prisma.$transaction(async (tx) => {
+      const existing = await tx.changeRequest.findFirst({ where: { type: "account_opening", requestKey, status: "pending" } }); if (existing) return existing;
+      const account = person.account ?? await tx.account.create({ data: { personId: input.personId, status: "pending" }, select: { id: true, status: true } });
+      const created = await tx.changeRequest.create({ data: { accountId: account.id, personId: input.personId, type: "account_opening", requestKey, payload: { reason: input.reason, activationMethod: "wechat_or_verified_phone" } } });
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "account.opening_request", objectType: "change_request", objectId: created.id, requestId: created.id, reason: input.reason, metadata: { personId: input.personId } }); return created;
+    }, { isolationLevel: "Serializable" });
+    return reply.code(202).send({ data: { id: row.id, status: row.status } });
   });
 
   app.post("/api/account-merge-requests", manager, async (request, reply) => {
@@ -455,12 +556,37 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     return reply.code(201).send({ data: { id: row.id, status: row.status } });
   });
 
+  app.get("/api/persons/:id/merge-preview", manager, async (request) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以预检人员合并");
+    const { id } = idParam.parse(request.params);
+    const { targetPersonId } = z.object({ targetPersonId: z.string().uuid() }).parse(request.query);
+    const { source, target } = await prisma.$transaction((tx) => assertPersonMergeCandidate(tx, { sourcePersonId: id, targetPersonId, actorPersonId: principal.personId }));
+    const safe = (person: typeof source) => ({ id: person.id, name: person.name, type: person.type, status: person.status, phoneMasked: maskPhone(person.phone), nationalIdLast4: person.nationalIdLast4, organizationName: person.organizations[0]?.organization.name ?? null, hasAccount: Boolean(person.account), counts: person._count });
+    return { data: { source: safe(source), target: safe(target), historyPolicy: "已完成培训、考试和签字继续保留在只读源档案" } };
+  });
+
+  app.post("/api/person-merge-requests", manager, async (request, reply) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以发起人员合并");
+    await verifySensitiveToken(request, deps.env);
+    const input = z.object({ sourcePersonId: z.string().uuid(), targetPersonId: z.string().uuid(), reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    const row = await prisma.$transaction(async (tx) => {
+      const created = await requestPersonMerge(tx, { ...input, actorPersonId: principal.personId, accountId: principal.accountId });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "person.merge_request", objectType: "change_request", objectId: created.id, result: "success", metadata: { sourcePersonId: input.sourcePersonId, targetPersonId: input.targetPersonId, reason: input.reason } } });
+      return created;
+    }, { isolationLevel: "Serializable" });
+    return reply.code(201).send({ data: { id: row.id, status: row.status } });
+  });
+
   app.post("/api/accounts/:id/reset-password", manager, async (request, reply) => {
     const principal = principalOf(request);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以重置其他账号密码");
     const { id } = idParam.parse(request.params);
     if (id === principal.accountId) throw Object.assign(new Error("请使用修改密码功能变更本人密码"), { statusCode: 409, code: "USE_CHANGE_PASSWORD" });
-    const input = z.object({ newPassword: z.string().min(12).max(200) }).parse(request.body);
+    const input = z.object({ newPassword: z.string().min(12).max(128) }).parse(request.body);
+    const identity = await prisma.account.findUniqueOrThrow({ where: { id }, select: { usernameNormalized: true, verifiedPhone: true, person: { select: { name: true, phone: true } } } });
+    assertPasswordAllowed(input.newPassword, { username: identity.usernameNormalized, phone: identity.person?.phone ?? identity.verifiedPhone, name: identity.person?.name ?? null });
     const passwordHash = await argon2.hash(input.newPassword);
     await prisma.$transaction(async (tx) => {
       const target = await tx.account.findUniqueOrThrow({ where: { id }, select: { status: true } });
@@ -468,6 +594,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       await tx.account.update({ where: { id }, data: { passwordHash, passwordLoginEnabled: true, mustChangePassword: true, sessionVersion: { increment: 1 } } });
       await tx.refreshSession.updateMany({ where: { accountId: id, revokedAt: null }, data: { revokedAt: new Date() } });
       await tx.auditLog.create({ data: { actorId: principal.accountId, action: "account.password_reset", objectType: "account", objectId: id, result: "success" } });
+      await notifyAccountSecurity(tx, id, "password-reset", "管理员已重置你的登录密码，所有原会话已失效，请使用临时密码重新登录并修改密码。");
     });
     return reply.code(204).send();
   });
@@ -487,6 +614,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       await tx.account.update({ where: { id }, data: { username: usernameNormalized, usernameNormalized, sessionVersion: { increment: 1 } } });
       await tx.refreshSession.updateMany({ where: { accountId: id, revokedAt: null }, data: { revokedAt: new Date() } });
       await tx.auditLog.create({ data: { actorId: principal.accountId, action: "account.username_change", objectType: "account", objectId: id, result: "success", metadata: { before: target.username, after: usernameNormalized, reason: input.reason } } });
+      await notifyAccountSecurity(tx, id, "username-change", "你的后台登录用户名已变更，所有原会话已失效。");
     }, { isolationLevel: "Serializable" });
     if (id === principal.accountId) reply.clearCookie("safety_session", { path: "/" });
     return reply.code(204).send();
@@ -505,6 +633,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       await tx.account.update({ where: { id }, data: { status: input.status, sessionVersion: { increment: 1 } } });
       await tx.refreshSession.updateMany({ where: { accountId: id, revokedAt: null }, data: { revokedAt: new Date() } });
       await tx.auditLog.create({ data: { actorId: principal.accountId, action: input.status === "active" ? "account.enable" : "account.disable", objectType: "account", objectId: id, result: "success", metadata: { before: target.status, after: input.status, reason: input.reason } } });
+      await notifyAccountSecurity(tx, id, input.status === "active" ? "enabled" : "disabled", input.status === "active" ? "你的账号已重新启用，请重新登录。" : "你的账号已被停用，现有会话已经失效。");
     }, { isolationLevel: "Serializable" });
     return reply.code(204).send();
   });
@@ -553,6 +682,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       }
       await tx.refreshSession.updateMany({ where: { accountId: id, revokedAt: null }, data: { revokedAt: new Date() } });
       await tx.auditLog.create({ data: { actorId: principal.accountId, action: `account.login_method_remove.${method}`, objectType: "account", objectId: id, result: "success", metadata: { method, reason, before, after } } });
+      await notifyAccountSecurity(tx, id, `login-method-${method}`, `你的${method === "password" ? "密码" : method === "phone" ? "手机号" : "微信"}登录方式已解除，所有原会话已失效。`);
     }, { isolationLevel: "Serializable" });
     if (id === principal.accountId) {
       reply.clearCookie("safety_session", { path: "/" });
@@ -582,13 +712,20 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     }
     if (input.role === "project_admin" && project?.status !== "active") throw Object.assign(new Error("暂停或结束项目不能新增项目管理员"), { statusCode: 409, code: "PROJECT_READ_ONLY" });
     if (!isCompanyAdmin(principal) && input.role === "project_admin" && project && !await prisma.organizationMembership.findFirst({ where: { personId: input.personId, organizationId: project.responsibleOrganizationId, active: true, primary: true } })) {
-      forbidden("经营实体负责人或管理员只能从本实体在用人员中设置项目管理员");
+      const targetOrganizationId = target.organizations[0]?.organizationId;
+      if (!targetOrganizationId) forbidden("目标人员缺少当前责任经营实体");
+      const requestKey = changeRequestKey("cross_entity_project_admin", input.personId, scopeId ?? "");
+      const existing = await prisma.changeRequest.findFirst({ where: { type: "cross_entity_project_admin", requestKey, status: "pending" } });
+      if (existing) return reply.code(202).send({ data: { requestId: existing.id, status: existing.status } });
+      const requestRow = await prisma.changeRequest.create({ data: { accountId: principal.accountId, personId: input.personId, projectId: scopeId, type: "cross_entity_project_admin", requestKey, payload: { role: input.role, scopeType: input.scopeType, scopeId, reason: input.reason, targetOrganizationId, projectResponsibleOrganizationId: project.responsibleOrganizationId } } });
+      return reply.code(202).send({ data: { requestId: requestRow.id, status: requestRow.status } });
     }
     const role = await prisma.$transaction(async (tx) => {
       const created = await grantRole(tx, { personId: input.personId, role: input.role, scopeType: input.scopeType, scopeId, actorId: principal.accountId, reason: input.reason });
       if (input.role === "project_admin" && scopeId) {
         const currentMember = await tx.projectMember.findFirst({ where: { projectId: scopeId, personId: input.personId, status: { in: ["active", "approved"] } } });
         if (!currentMember) await tx.projectMember.create({ data: { projectId: scopeId, personId: input.personId, status: "active", reviewedBy: principal.accountId, reviewedAt: new Date() } });
+        await autoDispatchInTransaction(tx, "project_induction", input.personId, deps.env, scopeId);
       }
       if (created.accountId) {
         await tx.account.update({ where: { id: created.accountId }, data: { sessionVersion: { increment: 1 } } });
@@ -597,7 +734,6 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       await tx.auditLog.create({ data: { actorId: principal.accountId, action: "role.grant", objectType: "role_assignment", objectId: created.id, result: "success", metadata: { personId: input.personId, role: input.role, scopeType: input.scopeType, scopeId, reason: input.reason, activationPending: created.activationPending } } });
       return created;
     });
-    if (input.role === "project_admin" && scopeId) await autoDispatch("project_induction", input.personId, deps.env, scopeId);
     return reply.code(201).send({ data: role });
   });
 
@@ -629,7 +765,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
     if (!await canAccessProject(principal, id)) forbidden();
     const members = await prisma.projectMember.findMany({ where: { projectId: id }, include: { person: { select: personSafeSelect } }, orderBy: { createdAt: "desc" } });
-    return { data: members.map((member) => ({ ...member, person: maskPerson(member.person) })) };
+    return { data: members };
   });
 
   app.post("/api/projects/:id/members", manager, async (request, reply) => {
@@ -641,9 +777,13 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     if (!await canAccessPerson(principal, personId)) forbidden();
     const person = await prisma.person.findUniqueOrThrow({ where: { id: personId }, select: { type: true, status: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { type: true } } } } } });
     if (person.status !== "active" || !canJoinProject(person.type, person.organizations[0]?.organization.type ?? null)) throw Object.assign(new Error("只有当前主组织为经营实体的在用人员可以加入项目"), { statusCode: 409, code: "PROJECT_MEMBER_INELIGIBLE" });
-    const member = await prisma.projectMember.create({ data: { projectId: id, personId, status: "active", reviewedBy: principal.accountId, reviewedAt: new Date() } });
-    audit(principal.accountId, "project_member.add", "project_member", member.id);
-    await autoDispatch("project_induction", personId, deps.env, id);
+    const member = await prisma.$transaction(async (tx) => {
+      const previous = await tx.projectMember.findFirst({ where: { projectId: id, personId, status: { in: ["ended", "removed", "withdrawn", "rejected", "cancelled"] } }, orderBy: { createdAt: "desc" }, select: { id: true } });
+      const created = await tx.projectMember.create({ data: { projectId: id, personId, status: "active", reviewedBy: principal.accountId, reviewedAt: new Date(), previousMembershipId: previous?.id ?? null } });
+      await autoDispatchInTransaction(tx, "project_induction", personId, deps.env, id);
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project_member.add", objectType: "project_member", objectId: created.id, metadata: { projectId: id, personId } });
+      return created;
+    }, { isolationLevel: "Serializable" });
     return reply.code(201).send({ data: member });
   });
 
@@ -657,9 +797,78 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       const person = await prisma.person.findUniqueOrThrow({ where: { id: member.personId }, select: { type: true, status: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { type: true } } } } } });
       if (person.status !== "active" || !canJoinProject(person.type, person.organizations[0]?.organization.type ?? null)) throw Object.assign(new Error("该人员当前不符合项目成员关系要求"), { statusCode: 409, code: "PROJECT_MEMBER_INELIGIBLE" });
     }
-    const updated = await prisma.projectMember.update({ where: { id }, data: { status, reviewedBy: principal.accountId, reviewedAt: new Date() } });
-    audit(principal.accountId, "project_member.review", "project_member", id, { status, note: input.note });
-    if (status === "active") await autoDispatch("project_induction", member.personId, deps.env, member.projectId);
+    const updated = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.projectMember.updateMany({ where: { id, status: "pending" }, data: { status, reviewedBy: principal.accountId, reviewedAt: new Date() } });
+      if (claimed.count !== 1) throw Object.assign(new Error("成员申请已由其他人处理"), { statusCode: 409, code: "MEMBERSHIP_ALREADY_HANDLED" });
+      if (status === "active") await autoDispatchInTransaction(tx, "project_induction", member.personId, deps.env, member.projectId);
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project_member.review", objectType: "project_member", objectId: id, reason: input.note ?? null, metadata: { status, projectId: member.projectId, personId: member.personId } });
+      return tx.projectMember.findUniqueOrThrow({ where: { id } });
+    }, { isolationLevel: "Serializable" });
     return { data: updated };
+  });
+
+  app.post("/api/me/projects/:id/join-request", authenticated, async (request, reply) => {
+    const principal = principalOf(request); if (!principal.personId) forbidden("账号尚未绑定人员档案"); const { id: projectId } = idParam.parse(request.params);
+    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId }, select: { status: true } }); if (project.status !== "active") throw Object.assign(new Error("项目当前不接受加入申请"), { statusCode: 409, code: "PROJECT_READ_ONLY" });
+    const person = await prisma.person.findUniqueOrThrow({ where: { id: principal.personId }, select: { type: true, status: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { type: true } } } } } });
+    if (person.status !== "active" || !canJoinProject(person.type, person.organizations[0]?.organization.type ?? null)) throw Object.assign(new Error("当前人员关系不符合项目加入条件"), { statusCode: 409, code: "PROJECT_MEMBER_INELIGIBLE" });
+    const existing = await prisma.projectMember.findFirst({ where: { projectId, personId: principal.personId, status: { in: ["pending", "active", "approved"] } }, orderBy: { createdAt: "desc" } }); if (existing) return { data: existing };
+    const member = await prisma.$transaction(async (tx) => {
+      const previous = await tx.projectMember.findFirst({ where: { projectId, personId: principal.personId!, status: { in: ["ended", "removed", "withdrawn", "rejected", "cancelled"] } }, orderBy: { createdAt: "desc" }, select: { id: true } });
+      const created = await tx.projectMember.create({ data: { projectId, personId: principal.personId!, status: "pending", previousMembershipId: previous?.id ?? null } });
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project_member.apply", objectType: "project_member", objectId: created.id, metadata: { projectId, personId: principal.personId } }); return created;
+    }, { isolationLevel: "Serializable" });
+    return reply.code(201).send({ data: member });
+  });
+
+  app.post("/api/projects/:id/members/bulk", manager, async (request) => {
+    const principal = principalOf(request); const { id: projectId } = idParam.parse(request.params);
+    if (!await canAccessProject(principal, projectId)) forbidden();
+    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+    if (project.status !== "active") throw Object.assign(new Error("暂停或结束项目不能新增成员"), { statusCode: 409, code: "PROJECT_READ_ONLY" });
+    const { personIds } = z.object({ personIds: z.array(z.string().uuid()).min(1).max(1000) }).parse(request.body);
+    const results: Array<{ personId: string; status: "added" | "skipped" | "failed"; reason?: string }> = [];
+    for (const personId of [...new Set(personIds)]) {
+      try {
+        if (!await canAccessPerson(principal, personId)) { results.push({ personId, status: "failed", reason: "无权管理该人员" }); continue; }
+        const person = await prisma.person.findUnique({ where: { id: personId }, select: { type: true, status: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { type: true } } } } } });
+        if (!person || person.status !== "active" || !canJoinProject(person.type, person.organizations[0]?.organization.type ?? null)) { results.push({ personId, status: "failed", reason: "人员当前不符合项目成员条件" }); continue; }
+        const current = await prisma.projectMember.findFirst({ where: { projectId, personId, status: { in: ["pending", "active", "approved"] } }, select: { id: true } });
+        if (current) { results.push({ personId, status: "skipped", reason: "已存在有效或待审核项目关系" }); continue; }
+        await prisma.$transaction(async (tx) => {
+          const previous = await tx.projectMember.findFirst({ where: { projectId, personId, status: { in: ["ended", "removed", "withdrawn", "rejected", "cancelled"] } }, orderBy: { createdAt: "desc" }, select: { id: true } });
+          const created = await tx.projectMember.create({ data: { projectId, personId, status: "active", reviewedBy: principal.accountId, reviewedAt: new Date(), previousMembershipId: previous?.id ?? null } });
+          await autoDispatchInTransaction(tx, "project_induction", personId, deps.env, projectId);
+          await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project_member.bulk_add", objectType: "project_member", objectId: created.id, metadata: { projectId, personId } });
+        }, { isolationLevel: "Serializable" });
+        results.push({ personId, status: "added" });
+      } catch (error) { results.push({ personId, status: "failed", reason: error instanceof Error ? error.message : "加入失败" }); }
+    }
+    return { data: { results, summary: { added: results.filter((item) => item.status === "added").length, skipped: results.filter((item) => item.status === "skipped").length, failed: results.filter((item) => item.status === "failed").length } } };
+  });
+
+  app.post("/api/me/project-members/:id/withdraw", authenticated, async (request) => {
+    const principal = principalOf(request); if (!principal.personId) forbidden(); const { id } = idParam.parse(request.params); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    const member = await prisma.projectMember.findFirst({ where: { id, personId: principal.personId }, select: { status: true, projectId: true } }); if (!member) forbidden(); assertMembershipTransition(member.status, "withdrawn");
+    await prisma.$transaction(async (tx) => { const changed = await tx.projectMember.updateMany({ where: { id, status: "pending" }, data: { status: "withdrawn", endedAt: new Date(), endedBy: principal.accountId, endReason: reason } }); if (!changed.count) throw Object.assign(new Error("加入申请已被处理"), { statusCode: 409, code: "MEMBERSHIP_ALREADY_HANDLED" }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project_member.withdraw", objectType: "project_member", objectId: id, reason, metadata: { projectId: member.projectId } }); });
+    return { data: { status: "withdrawn" } };
+  });
+
+  app.post("/api/project-members/:id/cancel", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body); const member = await prisma.projectMember.findUniqueOrThrow({ where: { id }, select: { status: true, projectId: true } }); if (!await canAccessProject(principal, member.projectId)) forbidden(); assertMembershipTransition(member.status, "cancelled");
+    await prisma.$transaction(async (tx) => { const changed = await tx.projectMember.updateMany({ where: { id, status: "pending" }, data: { status: "cancelled", endedAt: new Date(), endedBy: principal.accountId, endReason: reason } }); if (!changed.count) throw Object.assign(new Error("加入申请已被处理"), { statusCode: 409, code: "MEMBERSHIP_ALREADY_HANDLED" }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project_member.cancel", objectType: "project_member", objectId: id, reason, metadata: { projectId: member.projectId } }); });
+    return { data: { status: "cancelled" } };
+  });
+
+  app.post("/api/project-members/:id/end", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    const member = await prisma.projectMember.findUniqueOrThrow({ where: { id }, include: { project: true } }); if (!await canAccessProject(principal, member.projectId)) forbidden(); if (member.project.status === "ended") throw Object.assign(new Error("已结束项目为只读"), { statusCode: 409, code: "PROJECT_ENDED" });
+    return { data: await prisma.$transaction(async (tx) => {
+      const ended = await tx.projectMember.updateMany({ where: { id, status: { in: ["active", "approved"] } }, data: { status: "ended", endedAt: new Date(), endedBy: principal.accountId, endReason: reason } });
+      if (ended.count !== 1) throw Object.assign(new Error("成员关系不是当前有效状态"), { statusCode: 409, code: "MEMBERSHIP_NOT_ACTIVE" });
+      await tx.trainingAssignment.updateMany({ where: { personId: member.personId, batch: { projectId: member.projectId, type: "project_induction" }, status: { notIn: ["completed", "cancelled"] } }, data: { status: "cancelled", cancelledAt: new Date() } });
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "project_member.end", objectType: "project_member", objectId: id, reason, metadata: { projectId: member.projectId, personId: member.personId } });
+      return tx.projectMember.findUniqueOrThrow({ where: { id } });
+    }) };
   });
 }
