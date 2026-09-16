@@ -15,4 +15,5 @@ await api("/api/auth/logout", { method: "POST" });
 
 assert.equal(new Headers(captured?.headers).get("content-type"), "application/json");
 assert.equal(new Headers(captured?.headers).get("x-csrf-token"), "csrf-test-token");
+assert.equal(captured?.body, "{}");
 console.log("ADMIN_API_CHECK=PASS");
