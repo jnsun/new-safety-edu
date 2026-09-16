@@ -14,6 +14,7 @@
     "check:admin-api": "tsx scripts/check-admin-api.mts",
     "check:people-bulk-management": "tsx scripts/check-people-bulk-management.mts",
     "check:person-import": "pnpm --filter @safety/api check:person-import",
+    "check:person-import-upsert": "tsx scripts/check-person-import-upsert.mts",
     "check:phase1-invariants": "pnpm --filter @safety/api check:phase1-invariants",
     "check:phase1-policy": "pnpm --filter @safety/api check:phase1-policy",
     "check:phases2-7": "pnpm --filter @safety/api check:phases2-7",

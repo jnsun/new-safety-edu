@@ -11,9 +11,10 @@ import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { audit, auditCritical } from "../audit.js";
 import { canAccessOrganization, forbidden, isCompanyAdmin } from "../access.js";
-import { hashNationalId, sha256 } from "../crypto.js";
+import { encryptNationalId, hashNationalId, sha256 } from "../crypto.js";
 import { createPerson } from "../people.js";
 import { maskNationalId, maskPhone, maskPhotoFilename, nationalIdError, parsePhoneWorkbook, parseSourceWorkbook, photoIdentity, type PhoneRow, type SourcePersonRow } from "../person-import-core.js";
+import { planExistingPersonImport, type ExistingPersonImportMatch, type PersonImportPlan } from "../person-import-upsert-policy.js";
 import { autoDispatch } from "./day2.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -25,13 +26,14 @@ type Meta = {
   phoneFilename?: string;
   photoFilename?: string;
   mappings: Record<string, string>;
+  createDepartments?: string[];
   excludedRows: number[];
   photoAssignments: Record<string, string>;
   importedRows?: Record<string, string>;
   confirmedAt?: string;
   result?: ImportResult;
 };
-type RowStatus = "ready" | "failed" | "conflict" | "pending_data";
+type RowStatus = "ready" | "unchanged" | "failed" | "conflict" | "pending_data";
 type PreviewRow = {
   rowNumber: number;
   name: string;
@@ -43,11 +45,12 @@ type PreviewRow = {
   photoName?: string;
   excluded: boolean;
   status: RowStatus;
+  action?: "create" | "update" | "skip" | "conflict";
   reasons: string[];
 };
 type ImportResult = {
-  counts: { success: number; failed: number; conflict: number; pendingData: number };
-  rows: Array<{ rowNumber: number; name: string; status: "success" | "failed" | "conflict" | "pending_data"; reasons: string[] }>;
+  counts: { success: number; created: number; updated: number; skipped: number; failed: number; conflict: number; pendingData: number };
+  rows: Array<{ rowNumber: number; name: string; status: "created" | "updated" | "skipped" | "failed" | "conflict" | "pending_data"; reasons: string[] }>;
 };
 type OpenZipEntry = { type: "File" | "Directory"; path: string; uncompressedSize?: number; pathBuffer?: Buffer; isUnicode?: boolean; buffer(): Promise<Buffer> };
 type PhotoEntry = { id: string; name: string; entry: OpenZipEntry };
@@ -56,6 +59,8 @@ const sessionId = z.string().uuid();
 const DAY_MS = 24 * 60 * 60 * 1000;
 const allowedPhoto = new Set([".jpg", ".jpeg", ".png"]);
 const normalizeName = (value: string) => value.replace(/\s+/g, "");
+const usableDepartment = (value: string) => value && value.replace(/\s+/g, "") !== "工作部门" ? value : "";
+const departmentCandidates = (row: SourcePersonRow) => [...new Set([usableDepartment(row.workDepartment), usableDepartment(row.sourceDepartment)].filter(Boolean))];
 const importRoot = (env: Env) => resolve(env.UPLOAD_ROOT, ".person-imports");
 const sessionRoot = (env: Env, id: string) => resolve(importRoot(env), sessionId.parse(id));
 
@@ -70,7 +75,7 @@ async function loadMeta(env: Env, id: string, accountId: string): Promise<Meta> 
   const meta = JSON.parse(await readFile(resolve(sessionRoot(env, id), "meta.json"), "utf8")) as Meta;
   if (meta.accountId !== accountId) forbidden("无权访问该导入预览");
   if (Date.now() - Date.parse(meta.createdAt) > DAY_MS) throw Object.assign(new Error("导入预览已过期，请重新上传"), { statusCode: 410, code: "IMPORT_EXPIRED" });
-  return meta;
+  return { ...meta, createDepartments: meta.createDepartments ?? [] };
 }
 
 async function cleanupExpired(env: Env) {
@@ -185,9 +190,22 @@ async function analysis(env: Env, meta: Meta, principal: NonNullable<FastifyRequ
   const candidateIds = included.filter((row) => !nationalIdError(row.nationalId)).map((row) => row.nationalId);
   const hashes = candidateIds.map((id) => hashNationalId(id, env));
   const candidatePhones = phones.map((row) => row.phone).filter((phone) => /^1\d{10}$/.test(phone));
-  const existing = await prisma.person.findMany({ where: { OR: [{ nationalIdHash: { in: hashes } }, { phone: { in: candidatePhones }, status: "active" }] }, select: { nationalIdHash: true, phone: true, status: true } });
-  const existingHashes = new Set(existing.flatMap((row) => row.nationalIdHash ? [row.nationalIdHash] : []));
-  const existingPhones = new Set(existing.filter((row) => row.status === "active").map((row) => row.phone));
+  const existing = await prisma.person.findMany({
+    where: { OR: [{ nationalIdHash: { in: hashes } }, { phone: { in: candidatePhones } }] },
+    select: { id: true, name: true, nationalIdHash: true, phone: true, status: true, photoFileId: true, organizations: { where: { active: true, primary: true }, select: { organizationId: true }, take: 2 } }
+  });
+  const existingMatch = (person: (typeof existing)[number]): ExistingPersonImportMatch => ({
+    id: person.id, name: person.name, phone: person.phone, nationalIdHash: person.nationalIdHash, photoFileId: person.photoFileId,
+    primaryOrganizationId: person.organizations.length === 1 ? person.organizations[0]!.organizationId : person.organizations.length ? "multiple" : null,
+    status: person.status
+  });
+  const existingByHash = new Map<string, ExistingPersonImportMatch[]>();
+  const existingByPhone = new Map<string, ExistingPersonImportMatch[]>();
+  for (const person of existing) {
+    const match = existingMatch(person);
+    if (person.nationalIdHash) existingByHash.set(person.nationalIdHash, [...(existingByHash.get(person.nationalIdHash) ?? []), match]);
+    if (person.phone) existingByPhone.set(person.phone, [...(existingByPhone.get(person.phone) ?? []), match]);
+  }
 
   const organizations = await prisma.organization.findMany({ select: { id: true, name: true, type: true, parentId: true, parent: { select: { name: true } } }, orderBy: { name: "asc" } });
   const accessibleOrganizations = new Map<string, (typeof organizations)[number]>();
@@ -198,15 +216,13 @@ async function analysis(env: Env, meta: Meta, principal: NonNullable<FastifyRequ
     const exact = [...accessibleOrganizations.values()].filter((organization) => organization.type !== "company" && organization.name === sourceName);
     return exact.length === 1 ? exact[0] : undefined;
   };
-  const usableDepartment = (value: string) => value && value.replace(/\s+/g, "") !== "工作部门" ? value : "";
-  const departmentCandidates = (row: SourcePersonRow) => [...new Set([usableDepartment(row.workDepartment), usableDepartment(row.sourceDepartment)].filter(Boolean))];
   const organizationOf = (row: SourcePersonRow) => departmentCandidates(row).map(mappedOrganization).find(Boolean);
   const phoneOf = (row: SourcePersonRow) => {
     if (!meta.phoneFilename) return row.phone;
     const matches = phoneById.get(row.nationalId) ?? [];
     return matches.length === 1 ? matches[0]!.phone : "";
   };
-  const prepared = new Map<number, { source: SourcePersonRow; phone: string; organizationId?: string; photo?: PhotoEntry; nationalId?: string }>();
+  const prepared = new Map<number, { source: SourcePersonRow; phone: string; organizationId?: string; photo?: PhotoEntry; nationalId?: string; mode: "create" | "update"; personId?: string; fields: PersonImportPlan["fields"] }>();
   const phoneOwners = new Map<string, number[]>();
   for (const row of included) {
     const phone = phoneOf(row);
@@ -219,11 +235,12 @@ async function analysis(env: Env, meta: Meta, principal: NonNullable<FastifyRequ
     if (!row.name || row.name.length < 2) failed.push("缺少有效姓名");
     const idProblem = nationalIdError(row.nationalId); if (idProblem) warnings.push(`${idProblem}，将留空待后补`);
     if (!excluded && !idProblem && (sourceIdCounts.get(row.nationalId) ?? 0) > 1) conflicts.push("主表身份证号码重复");
-    if (!idProblem && existingHashes.has(hashNationalId(row.nationalId, env))) conflicts.push("生产库已存在相同身份证档案");
     const department = departmentCandidates(row)[0] ?? "";
     const organization = organizationOf(row);
-    const organizationId = organization?.id;
-    if (!organizationId) warnings.push(department ? "部门未精确匹配，将留空待后补" : "未提供工作部门或来源部门，将留空待后补");
+    const createDepartment = Boolean(department && (meta.createDepartments ?? []).includes(department));
+    const organizationId = organization?.id ?? (createDepartment ? `new:${department}` : undefined);
+    if (!organizationId) warnings.push(department ? "部门未精确匹配，请选择现有组织或勾选导入时创建" : "未提供工作部门或来源部门，将留空待后补");
+    else if (createDepartment && !organization) warnings.push("确认时按 Excel 原名创建部门");
     const phoneMatches = phoneById.get(row.nationalId) ?? [];
     const phone = phoneOf(row);
     if (meta.phoneFilename && phoneMatches.length > 1) conflicts.push("同一身份证对应多条手机号记录");
@@ -231,14 +248,24 @@ async function analysis(env: Env, meta: Meta, principal: NonNullable<FastifyRequ
     if (!/^1\d{10}$/.test(phone)) failed.push(phone ? "手机号格式错误" : "缺少手机号");
     else {
       if ((phoneOwners.get(phone) ?? []).length > 1) conflicts.push("同一手机号匹配了多名人员");
-      if (existingPhones.has(phone)) conflicts.push("生产库已存在相同手机号档案");
     }
     const photo = assignments.get(row.rowNumber);
     if (!photo) warnings.push(meta.photoFilename ? "照片未唯一匹配，将留空待后补" : "尚未上传照片 ZIP，将留空待后补");
     if (excluded) pending.unshift("已人工排除，不参加本次初始化");
-    const status: RowStatus = excluded ? "pending_data" : conflicts.length ? "conflict" : failed.length ? "failed" : "ready";
-    if (status === "ready") prepared.set(row.rowNumber, { source: row, phone, ...(organizationId ? { organizationId } : {}), ...(photo ? { photo } : {}), ...(!idProblem ? { nationalId: row.nationalId } : {}) });
-    return { rowNumber: row.rowNumber, name: row.name || "未填写", workDepartment: row.workDepartment || "—", sourceDepartment: row.sourceDepartment || "—", nationalIdMasked: maskNationalId(row.nationalId), phoneMasked: maskPhone(phone), ...(photo ? { photoId: photo.id, photoName: maskPhotoFilename(photo.name) } : {}), excluded, status, reasons: [...conflicts, ...failed, ...pending, ...warnings] };
+    const nationalIdHash = !idProblem ? hashNationalId(row.nationalId, env) : undefined;
+    const plan = planExistingPersonImport({
+      ...(nationalIdHash ? { nationalIdHash } : {}), phone, name: row.name,
+      ...(organizationId ? { organizationId } : {}), hasPhoto: Boolean(photo),
+      matchesByNationalId: nationalIdHash ? existingByHash.get(nationalIdHash) ?? [] : [],
+      matchesByPhone: /^1\d{10}$/.test(phone) ? existingByPhone.get(phone) ?? [] : []
+    });
+    if (plan.mode === "conflict") conflicts.push(...plan.reasons);
+    const status: RowStatus = excluded ? "pending_data" : conflicts.length ? "conflict" : failed.length ? "failed" : plan.mode === "skip" ? "unchanged" : "ready";
+    if (status === "ready") prepared.set(row.rowNumber, {
+      source: row, phone, ...(organization?.id ? { organizationId: organization.id } : {}), ...(photo ? { photo } : {}), ...(!idProblem ? { nationalId: row.nationalId } : {}),
+      mode: plan.mode as "create" | "update", ...(plan.personId ? { personId: plan.personId } : {}), fields: plan.fields
+    });
+    return { rowNumber: row.rowNumber, name: row.name || "未填写", workDepartment: row.workDepartment || "—", sourceDepartment: row.sourceDepartment || "—", nationalIdMasked: maskNationalId(row.nationalId), phoneMasked: maskPhone(phone), ...(photo ? { photoId: photo.id, photoName: maskPhotoFilename(photo.name) } : {}), excluded, status, action: plan.mode, reasons: [...conflicts, ...failed, ...pending, ...(plan.mode === "conflict" ? [] : plan.reasons), ...warnings] };
   });
   const statusCounts = (status: RowStatus) => previewRows.filter((row) => row.status === status).length;
   const departments = [...new Set(source.flatMap(departmentCandidates))].sort((a, b) => a.localeCompare(b, "zh-CN")).map((sourceName) => {
@@ -250,13 +277,13 @@ async function analysis(env: Env, meta: Meta, principal: NonNullable<FastifyRequ
       id: meta.id,
       createdAt: meta.createdAt,
       files: { source: meta.sourceFilename, phone: meta.phoneFilename ?? null, photos: meta.photoFilename ?? null },
-      counts: { total: source.length, ready: statusCounts("ready"), failed: statusCounts("failed"), conflict: statusCounts("conflict"), pendingData: statusCounts("pending_data") },
+      counts: { total: source.length, ready: statusCounts("ready"), create: previewRows.filter((row) => row.status === "ready" && row.action === "create").length, update: previewRows.filter((row) => row.status === "ready" && row.action === "update").length, unchanged: statusCounts("unchanged"), failed: statusCounts("failed"), conflict: statusCounts("conflict"), pendingData: statusCounts("pending_data") },
       phoneStats: { total: phones.length, matched: phonePreview.filter((row) => row.status === "matched").length, failed: phonePreview.filter((row) => row.status === "failed").length, conflict: phonePreview.filter((row) => row.status === "conflict").length, unmatched: phonePreview.filter((row) => row.status === "unmatched").length },
       phoneIssues: phonePreview.filter((row) => row.status !== "matched"),
       photoStats: { total: photos.entries.length + photos.invalid.length, valid: photos.entries.length, invalid: photos.invalid.length, matched: usedPhotoIds.size, conflict: photoPreview.filter((row) => row.status === "conflict").length, unmatched: photoPreview.filter((row) => row.status === "unmatched").length },
       photoErrors: photos.invalid.map((item) => ({ ...item, name: maskPhotoFilename(item.name) })),
       photoIssues: photoPreview.filter((row) => row.status !== "matched"),
-      departments,
+      departments: departments.map((department) => ({ ...department, createOnConfirm: (meta.createDepartments ?? []).includes(department.sourceName) })),
       organizations: [...accessibleOrganizations.values()],
       photoOptions: photos.entries.map(({ id, name }) => ({ id, name: maskPhotoFilename(name) })),
       rows: previewRows,
@@ -265,6 +292,22 @@ async function analysis(env: Env, meta: Meta, principal: NonNullable<FastifyRequ
     },
     prepared
   };
+}
+
+async function ensureSelectedDepartments(meta: Meta, actorId: string) {
+  const names = [...new Set(meta.createDepartments ?? [])];
+  if (!names.length) return;
+  const company = await prisma.organization.findFirst({ where: { type: "company", parentId: null }, orderBy: { createdAt: "asc" }, select: { id: true } });
+  if (!company) throw Object.assign(new Error("尚未建立公司根组织，不能自动创建部门"), { statusCode: 409, code: "COMPANY_ORGANIZATION_REQUIRED" });
+  await prisma.$transaction(async (tx) => {
+    for (const name of names) {
+      const matches = await tx.organization.findMany({ where: { name, type: { not: "company" } }, select: { id: true }, take: 2 });
+      if (matches.length > 1) throw Object.assign(new Error(`组织名称“${name}”存在多条记录，请人工映射`), { statusCode: 409, code: "AMBIGUOUS_ORGANIZATION" });
+      if (matches.length === 1) continue;
+      const organization = await tx.organization.create({ data: { name, type: "department", parentId: company.id } });
+      await tx.auditLog.create({ data: { actorId, action: "person_import.organization_create", objectType: "organization", objectId: organization.id, result: "success", metadata: { sourceName: name, importId: meta.id } } });
+    }
+  });
 }
 
 export async function registerPersonImportRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard; requireManager: Guard }) {
@@ -279,7 +322,7 @@ export async function registerPersonImportRoutes(app: FastifyInstance, deps: { e
     const id = randomUUID(); const root = sessionRoot(deps.env, id); await mkdir(root, { recursive: true, mode: 0o700 });
     try {
       const filename = await storeUpload(request, resolve(root, "source"), 10 * 1024 * 1024, [".xlsx", ".csv"]);
-      const meta: Meta = { id, accountId: actor.accountId, createdAt: new Date().toISOString(), sourceFilename: filename, mappings: {}, excludedRows: [], photoAssignments: {} };
+      const meta: Meta = { id, accountId: actor.accountId, createdAt: new Date().toISOString(), sourceFilename: filename, mappings: {}, createDepartments: [], excludedRows: [], photoAssignments: {} };
       await saveMeta(deps.env, meta); audit(actor.accountId, "person_import.preview", "person_import", id, { sourceRows: (await parseSourceWorkbook(await readFile(resolve(root, "source")), filename)).length });
       return reply.code(201).send({ data: (await analysis(deps.env, meta, actor)).preview });
     } catch (error) { await rm(root, { recursive: true, force: true }); throw error; }
@@ -302,8 +345,11 @@ export async function registerPersonImportRoutes(app: FastifyInstance, deps: { e
   app.put("/api/person-imports/:id/config", guard, async (request) => {
     const actor = principal(request); const id = sessionId.parse((request.params as { id: string }).id); const meta = await loadMeta(deps.env, id, actor.accountId);
     if (meta.confirmedAt) throw Object.assign(new Error("该导入已确认"), { statusCode: 409, code: "IMPORT_CONFIRMED" });
-    const input = z.object({ mappings: z.record(z.string().max(120), z.string().uuid()), excludedRows: z.array(z.number().int().min(2)).max(1000), photoAssignments: z.record(z.string().regex(/^\d+$/), z.string().length(64)) }).parse(request.body);
-    meta.mappings = input.mappings; meta.excludedRows = [...new Set(input.excludedRows)]; meta.photoAssignments = input.photoAssignments; await saveMeta(deps.env, meta);
+    const input = z.object({ mappings: z.record(z.string().max(120), z.string().uuid()), createDepartments: z.array(z.string().trim().min(1).max(120)).max(200).default([]), excludedRows: z.array(z.number().int().min(2)).max(1000), photoAssignments: z.record(z.string().regex(/^\d+$/), z.string().length(64)) }).parse(request.body);
+    const source = await parseSourceWorkbook(await readFile(resolve(sessionRoot(deps.env, id), "source")), meta.sourceFilename);
+    const allowedDepartments = new Set(source.flatMap(departmentCandidates));
+    if (input.createDepartments.some((name) => !allowedDepartments.has(name))) throw Object.assign(new Error("待创建部门必须来自当前 Excel"), { statusCode: 400, code: "INVALID_IMPORT_DEPARTMENT" });
+    meta.mappings = input.mappings; meta.createDepartments = [...new Set(input.createDepartments.filter((name) => !input.mappings[name]))]; meta.excludedRows = [...new Set(input.excludedRows)]; meta.photoAssignments = input.photoAssignments; await saveMeta(deps.env, meta);
     return { data: (await analysis(deps.env, meta, actor)).preview };
   });
 
@@ -319,35 +365,51 @@ export async function registerPersonImportRoutes(app: FastifyInstance, deps: { e
     const lockHandle = await import("node:fs/promises").then(({ open }) => open(lock, "wx", 0o600)).catch(() => null);
     if (!lockHandle) throw Object.assign(new Error("导入正在确认，请勿重复提交"), { statusCode: 409, code: "IMPORT_CONFIRMING" });
     try {
+      await ensureSelectedDepartments(meta, actor.accountId);
       const current = await analysis(deps.env, meta, actor); const rows: ImportResult["rows"] = [];
       for (const row of current.preview.rows as PreviewRow[]) {
-        if (meta.importedRows?.[String(row.rowNumber)]) { rows.push({ rowNumber: row.rowNumber, name: row.name, status: "success", reasons: [] }); continue; }
+        if (meta.importedRows?.[String(row.rowNumber)]) { rows.push({ rowNumber: row.rowNumber, name: row.name, status: "skipped", reasons: ["本批次已处理"] }); continue; }
+        if (row.status === "unchanged") { rows.push({ rowNumber: row.rowNumber, name: row.name, status: "skipped", reasons: row.reasons }); continue; }
         if (row.status !== "ready") { rows.push({ rowNumber: row.rowNumber, name: row.name, status: row.status, reasons: row.reasons }); continue; }
         const item = current.prepared.get(row.rowNumber)!;
-        const buffer = item.photo ? await item.photo.entry.buffer() : null;
-        const mimeType = item.photo && buffer ? imageMime(item.photo.name, buffer) : null;
+        const selectedPhoto = item.mode === "create" || item.fields.includes("photo") ? item.photo : undefined;
+        const buffer = selectedPhoto ? await selectedPhoto.entry.buffer() : null;
+        const mimeType = selectedPhoto && buffer ? imageMime(selectedPhoto.name, buffer) : null;
         const storageKey = buffer && mimeType ? `${new Date().getUTCFullYear()}/${randomUUID()}` : null;
         const filePath = storageKey ? resolve(deps.env.UPLOAD_ROOT, storageKey) : null;
         if (filePath && buffer) { await mkdir(resolve(filePath, ".."), { recursive: true }); await writeFile(filePath, buffer, { mode: 0o600 }); }
-        let person: Awaited<ReturnType<typeof createPerson>> | null = null;
+        let personId: string | null = null;
         try {
-          person = await prisma.$transaction(async (tx) => {
-            const file = storageKey && buffer && mimeType && item.photo ? await tx.privateFile.create({ data: { kind: "photo", storageKey, originalName: `人员照片${extname(item.photo.name).toLowerCase()}`, mimeType, size: buffer.length, sha256: sha256(buffer), uploadedBy: actor.accountId } }) : null;
-            return createPerson({ name: item.source.name, phone: item.phone, type: "employee", ...(item.organizationId ? { organizationId: item.organizationId } : {}), ...(item.nationalId ? { nationalId: item.nationalId } : {}), ...(file ? { photoFileId: file.id } : {}) }, actor, deps.env, tx);
+          personId = await prisma.$transaction(async (tx) => {
+            const file = storageKey && buffer && mimeType && selectedPhoto ? await tx.privateFile.create({ data: { kind: "photo", storageKey, originalName: `人员照片${extname(selectedPhoto.name).toLowerCase()}`, mimeType, size: buffer.length, sha256: sha256(buffer), uploadedBy: actor.accountId } }) : null;
+            if (item.mode === "create") {
+              const person = await createPerson({ name: item.source.name, phone: item.phone, type: "employee", ...(item.organizationId ? { organizationId: item.organizationId } : {}), ...(item.nationalId ? { nationalId: item.nationalId } : {}), ...(file ? { photoFileId: file.id } : {}) }, actor, deps.env, tx);
+              await tx.auditLog.create({ data: { actorId: actor.accountId, action: "person.import_create", objectType: "person", objectId: person.id, result: "success", metadata: { importId: id, rowNumber: row.rowNumber } } });
+              return person.id;
+            }
+            const update = {
+              ...(item.fields.includes("phone") ? { phone: item.phone } : {}),
+              ...(item.fields.includes("nationalId") && item.nationalId ? encryptNationalId(item.nationalId, deps.env) : {}),
+              ...(file ? { photoFile: { connect: { id: file.id } }, photoHistory: { create: { fileId: file.id, changedBy: actor.accountId } } } : {}),
+              ...(item.fields.includes("organization") && item.organizationId ? { organizations: { create: { organizationId: item.organizationId, primary: true } } } : {})
+            };
+            const person = await tx.person.update({ where: { id: item.personId! }, data: update, select: { id: true } });
+            await tx.auditLog.create({ data: { actorId: actor.accountId, action: "person.import_fill_missing", objectType: "person", objectId: person.id, result: "success", metadata: { importId: id, rowNumber: row.rowNumber, fields: item.fields } } });
+            return person.id;
           });
         } catch (error) {
           if (filePath) await unlink(filePath).catch(() => undefined);
           const tagged = error as Error & { statusCode?: number };
           const conflict = (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") || tagged.statusCode === 409;
-          rows.push({ rowNumber: row.rowNumber, name: row.name, status: conflict ? "conflict" : "failed", reasons: [conflict ? "手机号或身份证档案已存在" : tagged.statusCode && tagged.statusCode < 500 ? tagged.message : "人员创建失败，请查看服务端日志"] });
+          rows.push({ rowNumber: row.rowNumber, name: row.name, status: conflict ? "conflict" : "failed", reasons: [conflict ? "人员资料或组织关系发生冲突" : tagged.statusCode && tagged.statusCode < 500 ? tagged.message : "人员写入失败，请查看服务端日志"] });
           continue;
         }
-        audit(actor.accountId, "person.import_create", "person", person.id, { importId: id, rowNumber: row.rowNumber });
-        meta.importedRows = { ...(meta.importedRows ?? {}), [String(row.rowNumber)]: person.id }; await saveMeta(deps.env, meta);
-        await autoDispatch("three_level", person.id, deps.env).catch(() => audit(actor.accountId, "person.import_auto_dispatch_retry_required", "person", person!.id, { importId: id }));
-        rows.push({ rowNumber: row.rowNumber, name: row.name, status: "success", reasons: row.reasons });
+        meta.importedRows = { ...(meta.importedRows ?? {}), [String(row.rowNumber)]: personId! }; await saveMeta(deps.env, meta);
+        if (item.mode === "create") await autoDispatch("three_level", personId!, deps.env).catch(() => audit(actor.accountId, "person.import_auto_dispatch_retry_required", "person", personId!, { importId: id }));
+        rows.push({ rowNumber: row.rowNumber, name: row.name, status: item.mode === "create" ? "created" : "updated", reasons: row.reasons });
       }
-      const result: ImportResult = { counts: { success: rows.filter((row) => row.status === "success").length, failed: rows.filter((row) => row.status === "failed").length, conflict: rows.filter((row) => row.status === "conflict").length, pendingData: rows.filter((row) => row.status === "pending_data").length }, rows };
+      const created = rows.filter((row) => row.status === "created").length; const updated = rows.filter((row) => row.status === "updated").length;
+      const result: ImportResult = { counts: { success: created + updated, created, updated, skipped: rows.filter((row) => row.status === "skipped").length, failed: rows.filter((row) => row.status === "failed").length, conflict: rows.filter((row) => row.status === "conflict").length, pendingData: rows.filter((row) => row.status === "pending_data").length }, rows };
       meta.confirmedAt = new Date().toISOString(); meta.result = result; await saveMeta(deps.env, meta);
       await auditCritical(actor.accountId, "person_import.confirm", "person_import", id, result.counts as unknown as Prisma.InputJsonValue, "var/audit-fallback.ndjson");
       return { data: result };
