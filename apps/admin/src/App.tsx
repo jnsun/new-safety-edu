@@ -12,6 +12,7 @@ import {
   App as AntApp,
   Button,
   Card,
+  Checkbox,
   Collapse,
   Descriptions,
   Form,
@@ -42,6 +43,7 @@ import {
   CalendarOutlined,
   WechatOutlined,
   SearchOutlined,
+  AccountBookOutlined,
 } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
@@ -53,6 +55,8 @@ import {
   MonthlyReportsPage,
   QualificationsPage,
 } from "./SafetyManagementPages";
+import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
+import { receivablesErrorKind, receivablesNavigation, receivablesPortalMode, receivablesQueryKey, receivablesScopeFingerprint, receivablesScopeQueryPrefix, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 
 type Principal = {
   accountId: string;
@@ -190,7 +194,7 @@ const trainingMenuItems: NonNullable<MenuProps["items"]> = [
   ["/reports", "报表与设置", <SettingOutlined />],
 ].map(([key, label, icon]) => ({ key: key as string, label, icon }));
 
-const moduleMenuItems = (pathname: string): NonNullable<MenuProps["items"]> =>
+const moduleMenuItems = (pathname: string, receivablesAccess?: ReceivablesAccess): NonNullable<MenuProps["items"]> =>
   pathname === "/"
     ? [{ key: "/", label: "首页", icon: <DashboardOutlined /> }]
     : pathname.startsWith("/monthly-reports")
@@ -211,7 +215,16 @@ const moduleMenuItems = (pathname: string): NonNullable<MenuProps["items"]> =>
               icon: <SafetyCertificateOutlined />,
             },
           ]
-        : trainingMenuItems;
+        : pathname.startsWith("/receivables")
+          ? [
+              { key: "/", label: "返回平台首页", icon: <DashboardOutlined /> },
+              ...(receivablesAccess ? receivablesNavigation(receivablesAccess).map((item) => ({
+                key: item.path,
+                label: item.label,
+                icon: item.path === "/receivables" ? <DashboardOutlined /> : item.path === "/receivables/ledger" ? <AccountBookOutlined /> : item.path.includes("imports") ? <UploadOutlined /> : <SettingOutlined />,
+              })) : []),
+            ]
+          : trainingMenuItems;
 
 function Login() {
   const navigate = useNavigate();
@@ -228,6 +241,7 @@ function Login() {
     setBusy(true);
     try {
       await api("/api/auth/login", json("POST", values));
+      qc.removeQueries({ queryKey: ["receivables"] });
       qc.setQueryData(["me"], await api<Principal>("/api/auth/me"));
       navigate("/");
     } catch (error) {
@@ -1869,6 +1883,8 @@ function PersonDetail({
 
 function OrganizationProjects({ principal }: { principal: Principal }) {
   const qc = useQueryClient();
+  const receivablesAccess = useReceivablesAccess(principal.accountId);
+  const currentReceivablesAccess = usableReceivablesAccess(receivablesAccess);
   const organizations = useQuery({
     queryKey: ["organizations"],
     queryFn: () => api<Organization[]>("/api/organizations"),
@@ -1933,6 +1949,20 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
       void qc.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (e) => message.error(e.message),
+  });
+  const receivablesRecovery = useMutation({
+    mutationFn: (values: { organizationId: string; reason: string; confirm: boolean }) => api<ReceivablesAccess>("/api/receivables/setup/organization", json("PUT", { ...values, confirm: true })),
+    onSuccess: async () => {
+      message.success("财务资产部绑定已更新，请由部门负责人继续完成应收账款配置");
+      await qc.invalidateQueries({ queryKey: receivablesQueryKey(principal.accountId, "access") });
+    },
+    onError: async (error) => {
+      message.error(error.message);
+      if (receivablesErrorKind(error) === "revoked") {
+        if (currentReceivablesAccess) qc.removeQueries({ queryKey: receivablesScopeQueryPrefix(principal.accountId, receivablesScopeFingerprint(currentReceivablesAccess)) });
+        await receivablesAccess.refetch();
+      }
+    },
   });
   const companyAdmin = principal.roles.some(
     (role) => role.role === "company_admin",
@@ -2025,6 +2055,16 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
           </Button>
         )}
       </Space>
+      {receivablesAccess.isError && <Alert className="receivables-inline-alert" type="error" showIcon message="应收账款恢复权限核验失败" description="组织和项目数据仍可使用；为避免越权，恢复入口暂时隐藏。" action={<Button onClick={() => void receivablesAccess.refetch()}>重新核验</Button>} />}
+      {currentReceivablesAccess?.canRecover && <Card className="filters receivables-recovery" title="应收账款组织恢复">
+        <Alert type="info" showIcon message="此处只绑定财务资产部" description="页面不会加载台账、金额、导入或导出数据。绑定后由财务资产部负责人继续授权和配置。" />
+        <Form layout="vertical" onFinish={(values) => receivablesRecovery.mutate(values)}>
+          <Form.Item name="organizationId" label="财务资产部" rules={[{ required: true, message: "请选择部门" }]}><Select showSearch optionFilterProp="label" options={(organizations.data ?? []).filter((organization) => organization.type === "department").map((organization) => ({ value: organization.id, label: organization.name }))} /></Form.Item>
+          <Form.Item name="reason" label="绑定或换绑原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea maxLength={500} showCount /></Form.Item>
+          <Form.Item name="confirm" valuePropName="checked" rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error("请确认绑定影响")) }]}><Checkbox>我确认该部门是当前财务资产部；换绑会使原配置进入待确认状态</Checkbox></Form.Item>
+          <Button type="primary" htmlType="submit" loading={receivablesRecovery.isPending}>确认绑定</Button>
+        </Form>
+      </Card>}
       <Tabs
         items={[
           {
@@ -2595,24 +2635,28 @@ const platformModules = [
     icon: <ScheduleOutlined />,
     tone: "teal",
   },
-  {
-    title: "事故事件管理",
-    description: "事故、未遂事件和调查记录",
-    path: null,
-    icon: <SettingOutlined />,
-    tone: "slate",
-  },
 ] as const;
 
-function PlatformPortal() {
+function PlatformPortal({ accountId }: { accountId: string }) {
   const navigate = useNavigate();
+  const access = useReceivablesAccess(accountId);
+  const currentAccess = usableReceivablesAccess(access);
+  const portalMode = currentAccess ? receivablesPortalMode(currentAccess) : "hidden";
+  const modules = portalMode === "hidden" ? platformModules : [...platformModules, {
+    title: "应收账款管理",
+    description: "合同应收、开票回款与催收台账",
+    path: portalMode === "enabled" ? "/receivables" : portalMode === "confirm" ? "/receivables/departments" : null,
+    icon: <AccountBookOutlined />,
+    tone: "slate",
+  } as const];
   return (
     <div className="module-grid">
-      {platformModules.map((item) => (
+      {modules.map((item) => (
         <button
           type="button"
           className={`module-card module-${item.tone}${item.path ? "" : " module-planned"}`}
           key={item.title}
+          disabled={item.title === "应收账款管理" && portalMode === "recover"}
           onClick={() =>
             item.path
               ? navigate(item.path)
@@ -2623,7 +2667,7 @@ function PlatformPortal() {
           <span className="module-title">{item.title}</span>
           <span className="module-description">{item.description}</span>
           <span className="module-enter">
-            {item.path ? "进入模块 ›" : "待规划"}
+            {item.title === "应收账款管理" && portalMode === "confirm" ? "待确认 ›" : item.path ? "进入模块 ›" : item.title === "应收账款管理" ? "待配置" : "待规划"}
           </span>
         </button>
       ))}
@@ -2633,17 +2677,21 @@ function PlatformPortal() {
 
 function Shell({ principal }: { principal: Principal }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const location = useLocation();
   const wechatWeb = useQuery({ queryKey: ["wechat-web-config"], queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config") });
+  const inReceivables = location.pathname.startsWith("/receivables");
+  const receivablesAccess = useReceivablesAccess(principal.accountId, inReceivables);
+  const currentReceivablesAccess = usableReceivablesAccess(receivablesAccess);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(
     () =>
-      location.pathname === "/" ? "/" : `/${location.pathname.split("/")[1]}`,
-    [location.pathname],
+      location.pathname === "/" ? "/" : inReceivables ? location.pathname.replace(/\/$/, "") || "/receivables" : `/${location.pathname.split("/")[1]}`,
+    [inReceivables, location.pathname],
   );
   const sidebarItems = useMemo(
-    () => moduleMenuItems(location.pathname),
-    [location.pathname],
+    () => moduleMenuItems(location.pathname, currentReceivablesAccess),
+    [location.pathname, currentReceivablesAccess],
   );
   const workspaceTitle =
     location.pathname === "/"
@@ -2652,7 +2700,9 @@ function Shell({ principal }: { principal: Principal }) {
         ? "野外项目报送"
         : location.pathname.startsWith("/qualifications")
           ? "资质证照管理"
-          : "培训教育";
+          : inReceivables
+            ? "应收账款管理"
+            : "培训教育";
   return (
     <>
       <Layout className="app-shell">
@@ -2679,15 +2729,16 @@ function Shell({ principal }: { principal: Principal }) {
           <Layout.Header className="topbar">
             <span className="topbar-title">{workspaceTitle}</span>
             <Space>
-              <Tag>
+              {!inReceivables && <Tag>
                 {principal.roles
                   .map((r) => labels[r.role] ?? r.role)
                   .join(" / ") || "无角色"}
-              </Tag>
+              </Tag>}
               <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
               {wechatWeb.data?.enabled && <Typography.Text type="secondary">更换微信请退出后使用新微信扫码，并通过已登记手机号验证。</Typography.Text>}
               <Button
                 onClick={async () => {
+                  queryClient.removeQueries({ queryKey: ["receivables"] });
                   await api("/api/auth/logout", { method: "POST" });
                   navigate("/login");
                 }}
@@ -2698,7 +2749,7 @@ function Shell({ principal }: { principal: Principal }) {
           </Layout.Header>
           <Layout.Content className="content">
             <Routes>
-              <Route path="/" element={<PlatformPortal />} />
+              <Route path="/" element={<PlatformPortal accountId={principal.accountId} />} />
               <Route path="/training-dashboard" element={<DashboardPage />} />
               <Route
                 path="/people"
@@ -2724,6 +2775,7 @@ function Shell({ principal }: { principal: Principal }) {
                   />
                 }
               />
+              <Route path="/receivables/*" element={<ReceivablesPage accountId={principal.accountId} />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Layout.Content>

@@ -226,34 +226,85 @@ enum SensitiveExportScopeType {
   self
 }
 
+enum ReceivableGrantRole {
+  admin
+  reporter
+  readonly
+}
+
+enum ReceivableRecordStatus {
+  active
+  voided
+}
+
+enum ReceivableDetailSource {
+  manual
+  opening_import
+}
+
+enum ReceivableImportStatus {
+  previewed
+  applied
+  failed
+  rolled_back
+}
+
+enum ReceivableExportStatus {
+  pending
+  processing
+  completed
+  failed
+  expired
+}
+
 model Account {
-  id                   String               @id @default(uuid()) @db.Uuid
-  username             String?              @unique @db.VarChar(80)
-  usernameNormalized   String?              @unique @map("username_normalized") @db.VarChar(80)
-  passwordHash         String?              @map("password_hash")
-  mustChangePassword   Boolean              @default(false) @map("must_change_password")
-  passwordLoginEnabled Boolean              @default(false) @map("password_login_enabled")
-  status               AccountStatus        @default(active)
-  sessionVersion       Int                  @default(0) @map("session_version")
-  lastLoginAt          DateTime?            @map("last_login_at")
-  failedLoginCount     Int                  @default(0) @map("failed_login_count")
-  loginLockedUntil     DateTime?            @map("login_locked_until")
-  personId             String?              @unique @map("person_id") @db.Uuid
-  verifiedPhone        String?              @unique @map("verified_phone") @db.VarChar(20)
-  mergedIntoAccountId  String?              @map("merged_into_account_id") @db.Uuid
-  mergedAt             DateTime?            @map("merged_at")
-  person               Person?              @relation(fields: [personId], references: [id])
-  mergedInto           Account?             @relation("AccountMerge", fields: [mergedIntoAccountId], references: [id])
-  mergedAccounts       Account[]            @relation("AccountMerge")
-  roles                RoleAssignment[]
-  wechatBindings       WechatBinding[]
-  refreshSessions      RefreshSession[]
-  usernameHistory      UsernameHistory[]
-  preferences          UserPreference[]
-  sensitiveExportJobs  SensitiveExportJob[]
-  securityEvents       AuthSecurityEvent[]
-  createdAt            DateTime             @default(now()) @map("created_at")
-  updatedAt            DateTime             @updatedAt @map("updated_at")
+  id                                     String                       @id @default(uuid()) @db.Uuid
+  username                               String?                      @unique @db.VarChar(80)
+  usernameNormalized                     String?                      @unique @map("username_normalized") @db.VarChar(80)
+  passwordHash                           String?                      @map("password_hash")
+  mustChangePassword                     Boolean                      @default(false) @map("must_change_password")
+  passwordLoginEnabled                   Boolean                      @default(false) @map("password_login_enabled")
+  status                                 AccountStatus                @default(active)
+  sessionVersion                         Int                          @default(0) @map("session_version")
+  lastLoginAt                            DateTime?                    @map("last_login_at")
+  failedLoginCount                       Int                          @default(0) @map("failed_login_count")
+  loginLockedUntil                       DateTime?                    @map("login_locked_until")
+  personId                               String?                      @unique @map("person_id") @db.Uuid
+  verifiedPhone                          String?                      @unique @map("verified_phone") @db.VarChar(20)
+  mergedIntoAccountId                    String?                      @map("merged_into_account_id") @db.Uuid
+  mergedAt                               DateTime?                    @map("merged_at")
+  person                                 Person?                      @relation(fields: [personId], references: [id])
+  mergedInto                             Account?                     @relation("AccountMerge", fields: [mergedIntoAccountId], references: [id])
+  mergedAccounts                         Account[]                    @relation("AccountMerge")
+  roles                                  RoleAssignment[]
+  wechatBindings                         WechatBinding[]
+  refreshSessions                        RefreshSession[]
+  usernameHistory                        UsernameHistory[]
+  preferences                            UserPreference[]
+  sensitiveExportJobs                    SensitiveExportJob[]
+  securityEvents                         AuthSecurityEvent[]
+  receivableGrants                       ReceivableAccessGrant[]      @relation("ReceivableGrantAccount")
+  receivableGrantsGiven                  ReceivableAccessGrant[]      @relation("ReceivableGrantGrantedBy")
+  receivableGrantsRevoked                ReceivableAccessGrant[]      @relation("ReceivableGrantRevokedBy")
+  receivableConfigurationsConfirmed      ReceivableSetting[]          @relation("ReceivableConfigurationConfirmer")
+  receivableDepartmentsDeactivated       ReceivableDepartment[]       @relation("ReceivableDepartmentDeactivatedBy")
+  receivableDictionaryOptionsDeactivated ReceivableDictionaryOption[] @relation("ReceivableDictionaryDeactivatedBy")
+  receivableLedgersCreated               ReceivableLedger[]           @relation("ReceivableLedgerCreatedBy")
+  receivableLedgersUpdated               ReceivableLedger[]           @relation("ReceivableLedgerUpdatedBy")
+  receivableLedgersVoided                ReceivableLedger[]           @relation("ReceivableLedgerVoidedBy")
+  receivableLedgerRevisions              ReceivableLedgerRevision[]   @relation("ReceivableLedgerRevisionChangedBy")
+  receivableInvoicesCreated              ReceivableInvoice[]          @relation("ReceivableInvoiceCreatedBy")
+  receivableInvoicesVoided               ReceivableInvoice[]          @relation("ReceivableInvoiceVoidedBy")
+  receivableReceiptsCreated              ReceivableReceipt[]          @relation("ReceivableReceiptCreatedBy")
+  receivableReceiptsVoided               ReceivableReceipt[]          @relation("ReceivableReceiptVoidedBy")
+  receivableAttachmentsUploaded          ReceivableAttachment[]       @relation("ReceivableAttachmentUploadedBy")
+  receivableAttachmentsVoided            ReceivableAttachment[]       @relation("ReceivableAttachmentVoidedBy")
+  receivableImportBatchesRequested       ReceivableImportBatch[]      @relation("ReceivableImportRequestedBy")
+  receivableImportBatchesApplied         ReceivableImportBatch[]      @relation("ReceivableImportAppliedBy")
+  receivableImportBatchesRolledBack      ReceivableImportBatch[]      @relation("ReceivableImportRolledBackBy")
+  receivableExportJobs                   ReceivableExportJob[]
+  createdAt                              DateTime                     @default(now()) @map("created_at")
+  updatedAt                              DateTime                     @updatedAt @map("updated_at")
 
   @@index([mergedIntoAccountId])
   @@map("accounts")
@@ -387,6 +438,7 @@ model Organization {
   qualifications          OrganizationQualification[]
   monthlyReports          ProjectMonthlyReport[]
   departmentMonthStatuses DepartmentMonthStatus[]
+  receivableSetting       ReceivableSetting?
   createdAt               DateTime                    @default(now()) @map("created_at")
   updatedAt               DateTime                    @updatedAt @map("updated_at")
 
@@ -500,6 +552,8 @@ model PrivateFile {
   monthlyReportAttachments   ProjectMonthlyReportAttachment[]
   personPhotoHistory         PersonPhotoHistory[]
   requestAttachments         ChangeRequestAttachment[]
+  receivableAttachments      ReceivableAttachment[]           @relation("ReceivableAttachmentFile")
+  receivableImportBatches    ReceivableImportBatch[]          @relation("ReceivableImportOriginalFile")
   createdAt                  DateTime                         @default(now()) @map("created_at")
   updatedAt                  DateTime                         @updatedAt @map("updated_at")
 
@@ -1296,4 +1350,309 @@ model SensitiveExportJob {
   @@index([requestedBy, createdAt])
   @@index([status, expiresAt])
   @@map("sensitive_export_jobs")
+}
+
+model ReceivableSetting {
+  id                       Int           @id @default(1)
+  financeOrganizationId    String?       @unique @map("finance_organization_id") @db.Uuid
+  financeOrganization      Organization? @relation(fields: [financeOrganizationId], references: [id], onDelete: Restrict)
+  configurationConfirmedAt DateTime?     @map("configuration_confirmed_at")
+  configurationConfirmedBy String?       @map("configuration_confirmed_by") @db.Uuid
+  configurationConfirmer   Account?      @relation("ReceivableConfigurationConfirmer", fields: [configurationConfirmedBy], references: [id], onDelete: Restrict)
+  createdAt                DateTime      @default(now()) @map("created_at")
+  updatedAt                DateTime      @updatedAt @map("updated_at")
+
+  @@map("receivable_settings")
+}
+
+model ReceivableDepartment {
+  id               String                      @id @default(uuid()) @db.Uuid
+  name             String                      @unique @db.VarChar(160)
+  code             String?                     @unique @db.VarChar(40)
+  sortOrder        Int                         @default(0) @map("sort_order")
+  active           Boolean                     @default(true)
+  revision         Int                         @default(1)
+  deactivatedAt    DateTime?                   @map("deactivated_at")
+  deactivatedBy    String?                     @map("deactivated_by") @db.Uuid
+  deactivator      Account?                    @relation("ReceivableDepartmentDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
+  deactivateReason String?                     @map("deactivate_reason") @db.VarChar(500)
+  grantDepartments ReceivableGrantDepartment[]
+  ledgers          ReceivableLedger[]
+  createdAt        DateTime                    @default(now()) @map("created_at")
+  updatedAt        DateTime                    @updatedAt @map("updated_at")
+
+  @@index([active, sortOrder])
+  @@map("receivable_departments")
+}
+
+model ReceivableAccessGrant {
+  id           String                      @id @default(uuid()) @db.Uuid
+  accountId    String                      @map("account_id") @db.Uuid
+  account      Account                     @relation("ReceivableGrantAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  role         ReceivableGrantRole
+  canCreate    Boolean                     @default(false) @map("can_create")
+  canExport    Boolean                     @default(false) @map("can_export")
+  canViewAll   Boolean                     @default(false) @map("can_view_all")
+  active       Boolean                     @default(true)
+  revision     Int                         @default(1)
+  grantedBy    String                      @map("granted_by") @db.Uuid
+  grantor      Account                     @relation("ReceivableGrantGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+  grantedAt    DateTime                    @default(now()) @map("granted_at")
+  revokedAt    DateTime?                   @map("revoked_at")
+  revokedBy    String?                     @map("revoked_by") @db.Uuid
+  revoker      Account?                    @relation("ReceivableGrantRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+  revokeReason String?                     @map("revoke_reason") @db.VarChar(500)
+  departments  ReceivableGrantDepartment[]
+  createdAt    DateTime                    @default(now()) @map("created_at")
+  updatedAt    DateTime                    @updatedAt @map("updated_at")
+
+  @@index([accountId, active])
+  @@index([role, active])
+  @@map("receivable_access_grants")
+}
+
+model ReceivableGrantDepartment {
+  id                  String                @id @default(uuid()) @db.Uuid
+  grantId             String                @map("grant_id") @db.Uuid
+  grant               ReceivableAccessGrant @relation(fields: [grantId], references: [id], onDelete: Restrict)
+  financeDepartmentId String                @map("finance_department_id") @db.Uuid
+  financeDepartment   ReceivableDepartment  @relation(fields: [financeDepartmentId], references: [id], onDelete: Restrict)
+  canRead             Boolean               @default(true) @map("can_read")
+  canWrite            Boolean               @default(false) @map("can_write")
+  createdAt           DateTime              @default(now()) @map("created_at")
+
+  @@unique([grantId, financeDepartmentId])
+  @@index([financeDepartmentId])
+  @@map("receivable_grant_departments")
+}
+
+model ReceivableLedger {
+  id                     String                     @id @default(uuid()) @db.Uuid
+  financeDepartmentId    String                     @map("finance_department_id") @db.Uuid
+  financeDepartment      ReceivableDepartment       @relation(fields: [financeDepartmentId], references: [id], onDelete: Restrict)
+  contractNo             String                     @map("contract_no") @db.VarChar(160)
+  contractNoNormalized   String                     @unique @map("contract_no_normalized") @db.VarChar(160)
+  projectName            String?                    @map("project_name") @db.VarChar(240)
+  customerName           String?                    @map("customer_name") @db.VarChar(240)
+  customerType           String?                    @map("customer_type") @db.VarChar(120)
+  creditorUnit           String?                    @map("creditor_unit") @db.VarChar(120)
+  workNature             String?                    @map("work_nature") @db.VarChar(160)
+  sector                 String?                    @db.VarChar(160)
+  projectStatus          String?                    @map("project_status") @db.VarChar(120)
+  settlementMethod       String?                    @map("settlement_method") @db.VarChar(120)
+  contractAmount         Decimal?                   @map("contract_amount") @db.Decimal(18, 4)
+  finalAmount            Decimal?                   @map("final_amount") @db.Decimal(18, 4)
+  writeoffAmount         Decimal                    @default(0) @map("writeoff_amount") @db.Decimal(18, 4)
+  openingChargeDate      DateTime?                  @map("opening_charge_date") @db.Date
+  debtStatus             String?                    @map("debt_status") @db.VarChar(120)
+  collectionOwner        String?                    @map("collection_owner") @db.VarChar(120)
+  collectionNotes        String?                    @map("collection_notes")
+  status                 ReceivableRecordStatus     @default(active)
+  revision               Int                        @default(1)
+  voidedAt               DateTime?                  @map("voided_at")
+  voidedBy               String?                    @map("voided_by") @db.Uuid
+  voider                 Account?                   @relation("ReceivableLedgerVoidedBy", fields: [voidedBy], references: [id], onDelete: Restrict)
+  voidReason             String?                    @map("void_reason") @db.VarChar(500)
+  createdBy              String                     @map("created_by") @db.Uuid
+  creator                Account                    @relation("ReceivableLedgerCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy              String?                    @map("updated_by") @db.Uuid
+  updater                Account?                   @relation("ReceivableLedgerUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  createdByImportBatchId String?                    @map("created_by_import_batch_id") @db.Uuid
+  createdByImportBatch   ReceivableImportBatch?     @relation("ReceivableImportCreatedLedgers", fields: [createdByImportBatchId], references: [id], onDelete: Restrict)
+  revisions              ReceivableLedgerRevision[]
+  invoices               ReceivableInvoice[]
+  receipts               ReceivableReceipt[]
+  attachments            ReceivableAttachment[]
+  importItems            ReceivableImportItem[]
+  createdAt              DateTime                   @default(now()) @map("created_at")
+  updatedAt              DateTime                   @updatedAt @map("updated_at")
+
+  @@index([financeDepartmentId, status])
+  @@index([status, debtStatus])
+  @@index([createdByImportBatchId])
+  @@map("receivable_ledgers")
+}
+
+model ReceivableLedgerRevision {
+  id             String                 @id @default(uuid()) @db.Uuid
+  ledgerId       String                 @map("ledger_id") @db.Uuid
+  ledger         ReceivableLedger       @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+  revision       Int
+  beforeSnapshot Json                   @map("before_snapshot")
+  reason         String                 @db.VarChar(500)
+  changedBy      String                 @map("changed_by") @db.Uuid
+  changer        Account                @relation("ReceivableLedgerRevisionChangedBy", fields: [changedBy], references: [id], onDelete: Restrict)
+  importBatchId  String?                @map("import_batch_id") @db.Uuid
+  importBatch    ReceivableImportBatch? @relation("ReceivableImportRevisions", fields: [importBatchId], references: [id], onDelete: Restrict)
+  createdAt      DateTime               @default(now()) @map("created_at")
+
+  @@unique([ledgerId, revision])
+  @@index([importBatchId])
+  @@map("receivable_ledger_revisions")
+}
+
+model ReceivableInvoice {
+  id          String                 @id @default(uuid()) @db.Uuid
+  ledgerId    String                 @map("ledger_id") @db.Uuid
+  ledger      ReceivableLedger       @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+  invoiceNo   String?                @map("invoice_no") @db.VarChar(120)
+  invoiceDate DateTime               @map("invoice_date") @db.Date
+  amount      Decimal                @db.Decimal(18, 4)
+  note        String?
+  source      ReceivableDetailSource @default(manual)
+  status      ReceivableRecordStatus @default(active)
+  revision    Int                    @default(1)
+  voidedAt    DateTime?              @map("voided_at")
+  voidedBy    String?                @map("voided_by") @db.Uuid
+  voider      Account?               @relation("ReceivableInvoiceVoidedBy", fields: [voidedBy], references: [id], onDelete: Restrict)
+  voidReason  String?                @map("void_reason") @db.VarChar(500)
+  createdBy   String                 @map("created_by") @db.Uuid
+  creator     Account                @relation("ReceivableInvoiceCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  createdAt   DateTime               @default(now()) @map("created_at")
+  updatedAt   DateTime               @updatedAt @map("updated_at")
+
+  @@index([ledgerId, status, invoiceDate])
+  @@map("receivable_invoices")
+}
+
+model ReceivableReceipt {
+  id          String                 @id @default(uuid()) @db.Uuid
+  ledgerId    String                 @map("ledger_id") @db.Uuid
+  ledger      ReceivableLedger       @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+  receiptDate DateTime               @map("receipt_date") @db.Date
+  referenceNo String?                @map("reference_no") @db.VarChar(120)
+  amount      Decimal                @db.Decimal(18, 4)
+  note        String?
+  source      ReceivableDetailSource @default(manual)
+  status      ReceivableRecordStatus @default(active)
+  revision    Int                    @default(1)
+  voidedAt    DateTime?              @map("voided_at")
+  voidedBy    String?                @map("voided_by") @db.Uuid
+  voider      Account?               @relation("ReceivableReceiptVoidedBy", fields: [voidedBy], references: [id], onDelete: Restrict)
+  voidReason  String?                @map("void_reason") @db.VarChar(500)
+  createdBy   String                 @map("created_by") @db.Uuid
+  creator     Account                @relation("ReceivableReceiptCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  createdAt   DateTime               @default(now()) @map("created_at")
+  updatedAt   DateTime               @updatedAt @map("updated_at")
+
+  @@index([ledgerId, status, receiptDate])
+  @@map("receivable_receipts")
+}
+
+model ReceivableAttachment {
+  id         String                 @id @default(uuid()) @db.Uuid
+  ledgerId   String                 @map("ledger_id") @db.Uuid
+  ledger     ReceivableLedger       @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+  fileId     String                 @unique @map("file_id") @db.Uuid
+  file       PrivateFile            @relation("ReceivableAttachmentFile", fields: [fileId], references: [id], onDelete: Restrict)
+  category   String                 @db.VarChar(120)
+  status     ReceivableRecordStatus @default(active)
+  revision   Int                    @default(1)
+  uploadedBy String                 @map("uploaded_by") @db.Uuid
+  uploader   Account                @relation("ReceivableAttachmentUploadedBy", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  voidedAt   DateTime?              @map("voided_at")
+  voidedBy   String?                @map("voided_by") @db.Uuid
+  voider     Account?               @relation("ReceivableAttachmentVoidedBy", fields: [voidedBy], references: [id], onDelete: Restrict)
+  voidReason String?                @map("void_reason") @db.VarChar(500)
+  createdAt  DateTime               @default(now()) @map("created_at")
+  updatedAt  DateTime               @updatedAt @map("updated_at")
+
+  @@index([ledgerId, status])
+  @@map("receivable_attachments")
+}
+
+model ReceivableDictionaryOption {
+  id               String    @id @default(uuid()) @db.Uuid
+  category         String    @db.VarChar(80)
+  value            String    @db.VarChar(240)
+  sortOrder        Int       @default(0) @map("sort_order")
+  active           Boolean   @default(true)
+  revision         Int       @default(1)
+  deactivatedAt    DateTime? @map("deactivated_at")
+  deactivatedBy    String?   @map("deactivated_by") @db.Uuid
+  deactivator      Account?  @relation("ReceivableDictionaryDeactivatedBy", fields: [deactivatedBy], references: [id], onDelete: Restrict)
+  deactivateReason String?   @map("deactivate_reason") @db.VarChar(500)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@unique([category, value])
+  @@index([category, active, sortOrder])
+  @@map("receivable_dictionary_options")
+}
+
+model ReceivableImportBatch {
+  id             String                     @id @default(uuid()) @db.Uuid
+  originalFileId String                     @unique @map("original_file_id") @db.Uuid
+  originalFile   PrivateFile                @relation("ReceivableImportOriginalFile", fields: [originalFileId], references: [id], onDelete: Restrict)
+  checksum       String                     @db.VarChar(64)
+  status         ReceivableImportStatus     @default(previewed)
+  revision       Int                        @default(1)
+  rowCount       Int                        @default(0) @map("row_count")
+  errorCount     Int                        @default(0) @map("error_count")
+  requestedBy    String                     @map("requested_by") @db.Uuid
+  requester      Account                    @relation("ReceivableImportRequestedBy", fields: [requestedBy], references: [id], onDelete: Restrict)
+  appliedAt      DateTime?                  @map("applied_at")
+  appliedBy      String?                    @map("applied_by") @db.Uuid
+  applier        Account?                   @relation("ReceivableImportAppliedBy", fields: [appliedBy], references: [id], onDelete: Restrict)
+  rolledBackAt   DateTime?                  @map("rolled_back_at")
+  rolledBackBy   String?                    @map("rolled_back_by") @db.Uuid
+  rollbackActor  Account?                   @relation("ReceivableImportRolledBackBy", fields: [rolledBackBy], references: [id], onDelete: Restrict)
+  rollbackReason String?                    @map("rollback_reason") @db.VarChar(500)
+  items          ReceivableImportItem[]
+  createdLedgers ReceivableLedger[]         @relation("ReceivableImportCreatedLedgers")
+  revisions      ReceivableLedgerRevision[] @relation("ReceivableImportRevisions")
+  createdAt      DateTime                   @default(now()) @map("created_at")
+  updatedAt      DateTime                   @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([requestedBy, createdAt])
+  @@map("receivable_import_batches")
+}
+
+model ReceivableImportItem {
+  id                   String                @id @default(uuid()) @db.Uuid
+  batchId              String                @map("batch_id") @db.Uuid
+  batch                ReceivableImportBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  rowNumber            Int                   @map("row_number")
+  contractNoNormalized String?               @map("contract_no_normalized") @db.VarChar(160)
+  normalizedData       Json                  @map("normalized_data")
+  errors               Json?
+  decision             String?               @db.VarChar(20)
+  result               String?               @db.VarChar(40)
+  ledgerId             String?               @map("ledger_id") @db.Uuid
+  ledger               ReceivableLedger?     @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
+  targetRevision       Int?                  @map("target_revision")
+  appliedRevision      Int?                  @map("applied_revision")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+
+  @@unique([batchId, rowNumber])
+  @@index([ledgerId])
+  @@index([contractNoNormalized])
+  @@map("receivable_import_items")
+}
+
+model ReceivableExportJob {
+  id                String                 @id @default(uuid()) @db.Uuid
+  requestedBy       String                 @map("requested_by") @db.Uuid
+  requester         Account                @relation(fields: [requestedBy], references: [id], onDelete: Restrict)
+  status            ReceivableExportStatus @default(pending)
+  scopeSnapshot     Json                   @map("scope_snapshot")
+  filterSnapshot    Json                   @map("filter_snapshot")
+  rowCount          Int?                   @map("row_count")
+  storageKey        String?                @map("storage_key") @db.VarChar(300)
+  size              Int?
+  sha256            String?                @db.VarChar(64)
+  downloadTokenHash String?                @map("download_token_hash") @db.VarChar(64)
+  downloadExpiresAt DateTime?              @map("download_expires_at")
+  completedAt       DateTime?              @map("completed_at")
+  downloadedAt      DateTime?              @map("downloaded_at")
+  expiresAt         DateTime               @map("expires_at")
+  error             String?                @db.VarChar(1000)
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  @@index([requestedBy, createdAt])
+  @@index([status, expiresAt])
+  @@map("receivable_export_jobs")
 }

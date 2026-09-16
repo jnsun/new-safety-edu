@@ -23,7 +23,9 @@ import { registerWechatWebAuthRoutes } from "./routes/wechat-web-auth.js";
 import { registerQualificationRoutes } from "./routes/qualifications.js";
 import { registerProjectReportingRoutes } from "./routes/project-reporting.js";
 import { registerSensitiveExportRoutes } from "./routes/sensitive-exports.js";
+import { registerReceivablesRoutes } from "./routes/receivables.js";
 import { cleanupExpiredSensitiveExports } from "./sensitive-export.js";
+import { cleanupExpiredReceivablesExports, processPendingReceivablesExports } from "./receivables-export.js";
 import { assertCsrfRequest } from "./csrf.js";
 
 const env = loadEnv();
@@ -60,6 +62,7 @@ await registerSafetyManagementRoutes(app, { env, ...guards });
 await registerQualificationRoutes(app, { env, authenticate: guards.authenticate });
 await registerProjectReportingRoutes(app, { authenticate: guards.authenticate });
 await registerSensitiveExportRoutes(app, { env, ...guards });
+await registerReceivablesRoutes(app, { authenticate: guards.authenticate, enableAccessSmokeRoute: env.NODE_ENV === "test" && process.env.RECEIVABLES_ACCESS_SMOKE === "1" });
 await registerPhoneAuthRoutes(app, { env, authenticate: guards.authenticate });
 await registerWechatWebAuthRoutes(app, { env, authenticate: guards.authenticate, requireManager: guards.requireManager });
 
@@ -76,10 +79,6 @@ if (existsSync(adminDist)) {
     : reply.sendFile("index.html"));
 }
 
-const shutdown = async () => { await app.close(); await prisma.$disconnect(); };
-process.on("SIGINT", () => void shutdown());
-process.on("SIGTERM", () => void shutdown());
-
 const reminderTimer = setInterval(() => void generateScheduledReminders(env).catch((error) => app.log.error({ err: error }, "reminder_generation_failed")), 6 * 60 * 60 * 1000);
 reminderTimer.unref();
 void generateScheduledReminders(env).catch((error) => app.log.error({ err: error }, "reminder_generation_failed"));
@@ -89,5 +88,59 @@ void processNotificationOutbox(env).catch(() => app.log.error("wechat_delivery_f
 const sensitiveExportCleanupTimer = setInterval(() => void cleanupExpiredSensitiveExports(env).catch((error) => app.log.error({ err: error }, "sensitive_export_cleanup_failed")), 10 * 60 * 1000);
 sensitiveExportCleanupTimer.unref();
 void cleanupExpiredSensitiveExports(env).catch((error) => app.log.error({ err: error }, "sensitive_export_cleanup_failed"));
+const receivablesExportEnvironment = { uploadRoot: env.UPLOAD_ROOT };
+let receivablesExportProcessRun: Promise<void> | null = null;
+let receivablesExportCleanupRun: Promise<void> | null = null;
+const processReceivablesExports = () => {
+  if (receivablesExportProcessRun) return receivablesExportProcessRun;
+  const run = processPendingReceivablesExports(receivablesExportEnvironment, 2).then(() => undefined).finally(() => { if (receivablesExportProcessRun === run) receivablesExportProcessRun = null; });
+  receivablesExportProcessRun = run;
+  return run;
+};
+const cleanReceivablesExports = () => {
+  if (receivablesExportCleanupRun) return receivablesExportCleanupRun;
+  const run = cleanupExpiredReceivablesExports(receivablesExportEnvironment).then(() => undefined).finally(() => { if (receivablesExportCleanupRun === run) receivablesExportCleanupRun = null; });
+  receivablesExportCleanupRun = run;
+  return run;
+};
+const receivablesExportProcessorTimer = setInterval(() => void processReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_processor_failed")), 1_000);
+receivablesExportProcessorTimer.unref();
+void processReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_processor_failed"));
+const receivablesExportCleanupTimer = setInterval(() => void cleanReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_cleanup_failed")), 10 * 60 * 1_000);
+receivablesExportCleanupTimer.unref();
+void cleanReceivablesExports().catch((error) => app.log.error({ err: error }, "receivables_export_cleanup_failed"));
 
-await app.listen({ port: env.PORT, host: "0.0.0.0" });
+let shutdownRun: Promise<void> | null = null;
+const shutdown = () => {
+  if (shutdownRun) return shutdownRun;
+  clearInterval(reminderTimer);
+  clearInterval(outboxTimer);
+  clearInterval(sensitiveExportCleanupTimer);
+  clearInterval(receivablesExportProcessorTimer);
+  clearInterval(receivablesExportCleanupTimer);
+  shutdownRun = (async () => {
+    await app.close();
+    await Promise.all([receivablesExportProcessRun, receivablesExportCleanupRun].filter((run): run is Promise<void> => run !== null));
+    await prisma.$disconnect();
+  })();
+  return shutdownRun;
+};
+const shutdownFromSignal = () => void shutdown().then(() => process.exit(0)).catch((error) => { app.log.error({ err: error }, "shutdown_failed"); process.exit(1); });
+process.on("SIGINT", shutdownFromSignal);
+process.on("SIGTERM", shutdownFromSignal);
+if (env.NODE_ENV === "test" && process.env.RECEIVABLES_EXPORT_SMOKE === "1" && process.send) {
+  process.on("message", (message) => {
+    if (message !== "receivables-export-smoke-shutdown") return;
+    process.send?.("receivables-export-smoke-shutdown-started");
+    void shutdown().then(() => {
+      process.send?.("receivables-export-smoke-shutdown-complete", () => process.exit(0));
+    }).catch((error) => { app.log.error({ err: error }, "shutdown_failed"); process.exit(1); });
+  });
+}
+
+const listenHost = env.NODE_ENV === "test" && process.env.RECEIVABLES_TEST_LISTEN_HOST === "127.0.0.1" ? "127.0.0.1" : "0.0.0.0";
+await app.listen({ port: env.PORT, host: listenHost });
+if (listenHost === "127.0.0.1") {
+  const address = app.server.address();
+  console.log(`RECEIVABLES_LISTEN_ADDRESS=${typeof address === "object" && address ? address.address : "unknown"}`);
+}
