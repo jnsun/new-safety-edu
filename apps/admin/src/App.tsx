@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Key } from "react";
 import {
   Navigate,
@@ -48,6 +48,7 @@ import {
 } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
+import { accountUsernamePattern, accountUsernameRuleMessage } from "./account-form";
 import { CoursewarePage, QuestionsPage, TrainingPage } from "./Day2Pages";
 import { DashboardPage, RecordsPage, ReportsPage } from "./Day4Pages";
 import { PersonImport } from "./PersonImport";
@@ -59,6 +60,45 @@ import {
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
 import { receivablesErrorKind, receivablesNavigation, receivablesPortalMode, receivablesQueryKey, receivablesScopeFingerprint, receivablesScopeQueryPrefix, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 import { personMatchesSearch } from "./person-search";
+import { platformConditionalModule } from "./platform-access";
+
+declare global {
+  interface Window {
+    WxLogin?: new (options: {
+      self_redirect: boolean;
+      id: string;
+      appid: string;
+      scope: "snsapi_login";
+      redirect_uri: string;
+      state: string;
+      style: "black";
+      lang: "zh_CN";
+    }) => unknown;
+  }
+}
+
+let wechatLoginScript: Promise<void> | null = null;
+
+function loadWechatLoginScript(): Promise<void> {
+  if (window.WxLogin) return Promise.resolve();
+  if (wechatLoginScript) return wechatLoginScript;
+  wechatLoginScript = new Promise((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[data-wechat-login="true"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener("error", () => reject(new Error("微信登录组件加载失败")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://res.wx.qq.com/connect/zh_CN/htmledition/js/wxLogin.js";
+    script.async = true;
+    script.dataset.wechatLogin = "true";
+    script.addEventListener("load", () => resolve(), { once: true });
+    script.addEventListener("error", () => reject(new Error("微信登录组件加载失败")), { once: true });
+    document.head.appendChild(script);
+  });
+  return wechatLoginScript;
+}
 
 type Principal = {
   accountId: string;
@@ -187,8 +227,6 @@ const organizationTypeLabels: Record<string, string> = {
 const trainingMenuItems: NonNullable<MenuProps["items"]> = [
   ["/", "返回平台首页", <DashboardOutlined />],
   ["/training-dashboard", "培训教育首页", <DashboardOutlined />],
-  ["/people", "人员与账号", <TeamOutlined />],
-  ["/organization", "组织与项目", <ApartmentOutlined />],
   ["/courseware", "课件与模板", <ReadOutlined />],
   ["/questions", "题库与试卷", <FileDoneOutlined />],
   ["/training", "培训安排", <ScheduleOutlined />],
@@ -196,9 +234,17 @@ const trainingMenuItems: NonNullable<MenuProps["items"]> = [
   ["/reports", "报表与设置", <SettingOutlined />],
 ].map(([key, label, icon]) => ({ key: key as string, label, icon }));
 
+const masterDataMenuItems: NonNullable<MenuProps["items"]> = [
+  { key: "/", label: "返回平台首页", icon: <DashboardOutlined /> },
+  { key: "/people", label: "人员与账号", icon: <TeamOutlined /> },
+  { key: "/organization", label: "组织与项目", icon: <ApartmentOutlined /> },
+];
+
 const moduleMenuItems = (pathname: string, receivablesAccess?: ReceivablesAccess): NonNullable<MenuProps["items"]> =>
   pathname === "/"
     ? [{ key: "/", label: "首页", icon: <DashboardOutlined /> }]
+    : pathname.startsWith("/people") || pathname.startsWith("/organization")
+      ? masterDataMenuItems
     : pathname.startsWith("/monthly-reports")
       ? [
           { key: "/", label: "返回平台首页", icon: <DashboardOutlined /> },
@@ -228,17 +274,69 @@ const moduleMenuItems = (pathname: string, receivablesAccess?: ReceivablesAccess
             ]
           : trainingMenuItems;
 
+function WechatQrLogin({ active }: { active: boolean }) {
+  const container = useRef<HTMLDivElement>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const widget = useQuery({
+    queryKey: ["wechat-web-widget-config"],
+    queryFn: () => api<{ appId: string; redirectUri: string; state: string }>("/api/auth/wechat-web/widget-config"),
+    enabled: active,
+    retry: false,
+    staleTime: 0,
+  });
+
+  useEffect(() => {
+    if (!active || !widget.data || !container.current) return;
+    let cancelled = false;
+    const mount = async () => {
+      try {
+        await loadWechatLoginScript();
+        if (cancelled || !container.current || !window.WxLogin) return;
+        container.current.replaceChildren();
+        new window.WxLogin({
+          self_redirect: false,
+          id: "wechat-login-container",
+          appid: widget.data.appId,
+          scope: "snsapi_login",
+          redirect_uri: encodeURIComponent(widget.data.redirectUri),
+          state: widget.data.state,
+          style: "black",
+          lang: "zh_CN",
+        });
+      } catch (error) {
+        if (!cancelled) setLoadError((error as Error).message);
+      }
+    };
+    void mount();
+    return () => { cancelled = true; };
+  }, [active, widget.data]);
+
+  if (widget.isError || loadError) {
+    return <Alert type="error" showIcon message="微信扫码组件暂时无法加载" description="请检查网络后重试，或切换到用户名密码登录。" />;
+  }
+  return (
+    <div className="wechat-login-panel">
+      <div id="wechat-login-container" ref={container} aria-label="微信扫码登录二维码" />
+      {!widget.data && <Typography.Text type="secondary">正在加载微信二维码…</Typography.Text>}
+    </div>
+  );
+}
+
 function Login() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryPhone, setRecoveryPhone] = useState("");
+  const [loginMode, setLoginMode] = useState<"wechat" | "password">("wechat");
   const wechat = useQuery({
     queryKey: ["wechat-web-config"],
     queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config"),
     retry: false,
   });
+  useEffect(() => {
+    if ((wechat.data && !wechat.data.enabled) || wechat.isError) setLoginMode("password");
+  }, [wechat.data, wechat.isError]);
   async function submit(values: { username: string; password: string }) {
     setBusy(true);
     try {
@@ -255,41 +353,42 @@ function Login() {
   return (
     <div className="login-shell">
       <section className="login-intro">
-        <div className="login-mark">安</div>
-        <span className="login-eyebrow">物化院有限公司</span>
-        <h1>
-          让每一次培训，
-          <br className="desktop-break" />
-          <span className="headline-nowrap">清楚、可信、可追溯。</span>
-        </h1>
+        <h1>安全生产管理平台</h1>
         <p>
-          从人员、课件和考试，到本人签字与项目确认，在一个简洁的工作台完成安全培训闭环。
+          统一连接人员、组织、项目与业务模块，让协同更清晰，过程更规范，记录更可追溯。
         </p>
       </section>
-      <Card className="login-card">
-        <Typography.Title level={2}>欢迎回来</Typography.Title>
-        <Typography.Paragraph type="secondary">
-          登录安全培训教育平台管理后台
-        </Typography.Paragraph>
-        {wechat.data?.enabled && <Button block type="primary" icon={<WechatOutlined />} href="/api/auth/wechat-web/start">微信扫码登录</Button>}
-        {wechat.data?.enabled && <div style={{ textAlign: "center", margin: "18px 0", color: "#86868b" }}>或使用备用账号</div>}
-        <Form layout="vertical" onFinish={submit}>
-          <Form.Item
-            label="用户名"
-            name="username"
-            rules={[{ required: true }]}
-          >
-            <Input autoComplete="username" />
-          </Form.Item>
-          <Form.Item label="密码" name="password" rules={[{ required: true }]}>
-            <Input.Password autoComplete="current-password" />
-          </Form.Item>
-          <Button block type="primary" htmlType="submit" loading={busy}>
-            登录
-          </Button>
-          <Button block type="link" onClick={() => setRecoveryOpen(true)}>忘记密码</Button>
-        </Form>
-      </Card>
+      <div className={`login-card-shell${loginMode === "password" ? " is-flipped" : ""}`}>
+        <div className="login-flip-inner">
+          <section className="login-face login-face-wechat" aria-hidden={loginMode !== "wechat"} inert={loginMode !== "wechat"}>
+            <Card className="login-card">
+              <Typography.Title level={2}>微信扫码登录</Typography.Title>
+              <Typography.Paragraph type="secondary">使用本人微信扫码，安全进入对应业务模块</Typography.Paragraph>
+              {wechat.isLoading && <Typography.Text type="secondary">正在检查微信登录配置…</Typography.Text>}
+              {wechat.data?.enabled && <WechatQrLogin active={loginMode === "wechat"} />}
+              {wechat.data && !wechat.data.enabled && <Alert type="warning" showIcon message="微信扫码登录尚未配置" />}
+              <Button block icon={<WechatOutlined />} onClick={() => setLoginMode("password")}>使用用户名密码登录</Button>
+            </Card>
+          </section>
+          <section className="login-face login-face-password" aria-hidden={loginMode !== "password"} inert={loginMode !== "password"}>
+            <Card className="login-card">
+              <Typography.Title level={2}>用户名密码登录</Typography.Title>
+              <Typography.Paragraph type="secondary">作为微信扫码不可用时的备用登录方式</Typography.Paragraph>
+              <Form layout="vertical" onFinish={submit}>
+                <Form.Item label="用户名" name="username" rules={[{ required: true }]}>
+                  <Input autoComplete="username" />
+                </Form.Item>
+                <Form.Item label="密码" name="password" rules={[{ required: true }]}>
+                  <Input.Password autoComplete="current-password" />
+                </Form.Item>
+                <Button block type="primary" htmlType="submit" loading={busy}>登录</Button>
+                <Button block type="link" onClick={() => setRecoveryOpen(true)}>忘记密码</Button>
+              </Form>
+              {wechat.data?.enabled && <Button block icon={<WechatOutlined />} onClick={() => setLoginMode("wechat")}>返回微信扫码登录</Button>}
+            </Card>
+          </section>
+        </div>
+      </div>
       <Modal title="通过已验证手机号找回密码" open={recoveryOpen} footer={null} onCancel={() => setRecoveryOpen(false)}>
         <Alert type="info" showIcon message="验证码五分钟有效。未配置正式短信服务时，本功能不会发送模拟验证码。" style={{ marginBottom: 16 }} />
         <Form layout="vertical" onFinish={async (values) => { try { await api("/api/auth/password-recovery/confirm", json("POST", values)); message.success("密码已更新，请使用新密码登录"); setRecoveryOpen(false); } catch (error) { message.error((error as Error).message); } }}>
@@ -721,7 +820,7 @@ function AccountsPanel({
       >
         <Alert type="warning" showIcon message="修改后旧用户名不再复用，该账号现有会话将立即失效。" style={{ marginBottom: 16 }} />
         <Form layout="vertical" initialValues={{ username: editAccount?.username ?? "" }} onFinish={(values: { username: string; reason: string }) => editAccount && usernameUpdate.mutate({ accountId: editAccount.id, ...values })}>
-          <Form.Item name="username" label="新用户名" rules={[{ required: true }, { pattern: /^[A-Za-z0-9._-]{4,40}$/, message: "仅允许英文字母、数字、点、短横线和下划线，长度 4—40 位" }]}>
+          <Form.Item name="username" label="新用户名" rules={[{ required: true }, { pattern: accountUsernamePattern, message: accountUsernameRuleMessage }]}>
             <Input autoComplete="off" />
           </Form.Item>
           <Form.Item name="reason" label="修改原因" rules={[{ required: true, min: 2, max: 500 }]}>
@@ -767,9 +866,10 @@ function AccountsPanel({
           {companyAdmin && <Form.Item
             name="username"
             label="用户名"
-            rules={[{ required: true }]}
+            extra={accountUsernameRuleMessage}
+            rules={[{ required: true }, { pattern: accountUsernamePattern, message: accountUsernameRuleMessage }]}
           >
-            <Input />
+            <Input placeholder="例如 finance.leader" />
           </Form.Item>}
           {companyAdmin && <Form.Item
             name="password"
@@ -2706,10 +2806,10 @@ const platformModules = [
     tone: "purple",
   },
   {
-    title: "风险分级管控",
-    description: "风险辨识、分级和管控措施",
-    path: null,
-    icon: <LineChartOutlined />,
+    title: "人员与组织管理",
+    description: "人员账号、角色权限、组织与项目主档",
+    path: "/people",
+    icon: <TeamOutlined />,
     tone: "cyan",
   },
   {
@@ -2740,13 +2840,20 @@ function PlatformPortal({ accountId }: { accountId: string }) {
   const access = useReceivablesAccess(accountId);
   const currentAccess = usableReceivablesAccess(access);
   const portalMode = currentAccess ? receivablesPortalMode(currentAccess) : "hidden";
-  const modules = portalMode === "hidden" ? platformModules : [...platformModules, {
-    title: "应收账款管理",
-    description: "合同应收、开票回款与催收台账",
-    path: portalMode === "enabled" ? "/receivables" : portalMode === "confirm" ? "/receivables/departments" : null,
-    icon: <AccountBookOutlined />,
-    tone: "slate",
-  } as const];
+  const conditionalModule = platformConditionalModule(portalMode === "enabled" || portalMode === "confirm");
+  const modules = [...platformModules, conditionalModule === "receivables" ? {
+      title: "应收账款管理",
+      description: "合同应收、开票回款与催收台账",
+      path: portalMode === "confirm" ? "/receivables/departments" : "/receivables",
+      icon: <AccountBookOutlined />,
+      tone: "slate",
+    } as const : {
+      title: "事故事件管理",
+      description: "事故、未遂事件和调查记录",
+      path: null,
+      icon: <FileDoneOutlined />,
+      tone: "slate",
+    } as const];
   return (
     <div className="module-grid">
       {modules.map((item) => (
@@ -2754,7 +2861,6 @@ function PlatformPortal({ accountId }: { accountId: string }) {
           type="button"
           className={`module-card module-${item.tone}${item.path ? "" : " module-planned"}`}
           key={item.title}
-          disabled={item.title === "应收账款管理" && portalMode === "recover"}
           onClick={() =>
             item.path
               ? navigate(item.path)
@@ -2765,7 +2871,7 @@ function PlatformPortal({ accountId }: { accountId: string }) {
           <span className="module-title">{item.title}</span>
           <span className="module-description">{item.description}</span>
           <span className="module-enter">
-            {item.title === "应收账款管理" && portalMode === "confirm" ? "待确认 ›" : item.path ? "进入模块 ›" : item.title === "应收账款管理" ? "待配置" : "待规划"}
+            {item.title === "应收账款管理" && portalMode === "confirm" ? "待确认 ›" : item.path ? "进入模块 ›" : "待规划"}
           </span>
         </button>
       ))}
@@ -2779,6 +2885,7 @@ function Shell({ principal }: { principal: Principal }) {
   const location = useLocation();
   const wechatWeb = useQuery({ queryKey: ["wechat-web-config"], queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config") });
   const inReceivables = location.pathname.startsWith("/receivables");
+  const inMasterData = location.pathname.startsWith("/people") || location.pathname.startsWith("/organization");
   const receivablesAccess = useReceivablesAccess(principal.accountId, inReceivables);
   const currentReceivablesAccess = usableReceivablesAccess(receivablesAccess);
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -2798,6 +2905,8 @@ function Shell({ principal }: { principal: Principal }) {
         ? "野外项目报送"
         : location.pathname.startsWith("/qualifications")
           ? "资质证照管理"
+          : inMasterData
+            ? "人员与组织管理"
           : inReceivables
             ? "应收账款管理"
             : "培训教育";

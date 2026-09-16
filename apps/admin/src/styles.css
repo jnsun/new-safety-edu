@@ -94,6 +94,17 @@ button, input, textarea, select { font: inherit; }
 .login-card h2 { margin-bottom: 4px !important; font-size: 29px !important; letter-spacing: -.035em; }
 .login-card .ant-form { margin-top: 28px; }
 .login-card .ant-btn-primary { height: 48px; margin-top: 4px; }
+.login-card-shell { width: min(440px, 100%); min-height: 610px; justify-self: end; perspective: 1400px; }
+.login-flip-inner { position: relative; width: 100%; min-height: 610px; transform-style: preserve-3d; transition: transform .58s cubic-bezier(.2, .75, .2, 1); }
+.login-card-shell.is-flipped .login-flip-inner { transform: rotateY(180deg); }
+.login-face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.login-face-password { transform: rotateY(180deg); }
+.login-face .login-card { width: 100%; height: 100%; }
+.login-face .login-card .ant-card-body { height: 100%; display: flex; flex-direction: column; }
+.login-face-password .ant-form { flex: 1; }
+.wechat-login-panel { min-height: 390px; display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; }
+#wechat-login-container { width: 300px; min-height: 390px; max-width: 100%; }
+#wechat-login-container iframe { width: 300px !important; max-width: 100%; height: 390px !important; border: 0; }
 .center { min-height: 100vh; display: grid; place-items: center; color: #6e6e73; }
 .signature-preview { max-width: 180px; max-height: 72px; object-fit: contain; }
 .module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
@@ -151,6 +162,7 @@ button, input, textarea, select { font: inherit; }
   .login-mark { margin-inline: auto; }
   .login-intro p { margin-inline: auto; }
   .login-card { justify-self: center; }
+  .login-card-shell { justify-self: center; }
 }
 @media (max-width: 768px) {
   .module-grid { grid-template-columns: 1fr; gap: 14px; }.module-card { min-height: 180px; }
@@ -166,10 +178,14 @@ button, input, textarea, select { font: inherit; }
   .login-intro h1 { font-size: 36px; line-height: 1.08; }
   .login-intro p { font-size: 17px; }
   .login-card .ant-card-body { padding: 28px 22px; }
+  .login-card-shell, .login-flip-inner { min-height: 590px; }
   .receivables-page-title { align-items: flex-start; }
   .receivables-page-title > div { flex-basis: 100%; }
   .filters .ant-form-item { width: 100%; margin-inline-end: 0; }
   .filters .ant-form-item-control-input, .filters .ant-select, .filters .ant-input-group-wrapper { width: 100% !important; }
   .receivables-column-item { grid-template-columns: minmax(140px, 1fr) auto; }
   .receivables-column-item > .ant-checkbox-wrapper:nth-child(2) { grid-column: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-flip-inner { transition: none; }
 }

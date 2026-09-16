@@ -20,6 +20,7 @@ export type ReceivablesAccessFacts = {
   accountActive: boolean;
   personActive: boolean;
   isCompanyAdmin?: boolean;
+  isFinanceOrganizationMember?: boolean;
   configured?: boolean;
   configurationConfirmed?: boolean;
   hasBoundOrgLeader?: boolean;
@@ -127,6 +128,15 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   }
 
   const grant = facts.grant;
+  if (!grant && facts.isFinanceOrganizationMember) {
+    return {
+      ...denied,
+      role: "readonly",
+      canEnter: true,
+      canReadLedger: true,
+      canViewAll: true,
+    };
+  }
   if (!grant) return denied;
   const scopes = grant.departments ?? [];
   const readDepartmentIds = [...new Set(scopes.filter(({ canRead }) => canRead).map(({ departmentId }) => departmentId))].sort();
@@ -172,11 +182,23 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   };
 }
 
-export async function resolveReceivablesAccess(principal: Principal, db: AccessDb = prisma): Promise<ReceivablesAccess> {
+export async function resolveReceivablesAccess(principal: Pick<Principal, "accountId">, db: AccessDb = prisma): Promise<ReceivablesAccess> {
   const [account, setting] = await Promise.all([
     db.account.findUnique({
       where: { id: principal.accountId },
-      select: { status: true, personId: true, person: { select: { status: true } } },
+      select: {
+        status: true,
+        personId: true,
+        person: {
+          select: {
+            status: true,
+            organizations: {
+              where: { active: true, primary: true },
+              select: { organizationId: true },
+            },
+          },
+        },
+      },
     }),
     db.receivableSetting.findUnique({
       where: { id: 1 },
@@ -186,6 +208,8 @@ export async function resolveReceivablesAccess(principal: Principal, db: AccessD
   const accountActive = account?.status === "active";
   const personActive = !!account?.personId && account.person?.status === "active";
   const configured = !!setting?.financeOrganizationId && setting.financeOrganization?.type === "department";
+  const isFinanceOrganizationMember = Boolean(configured
+    && account?.person?.organizations.some(({ organizationId }) => organizationId === setting.financeOrganizationId));
   const roleIdentity = account?.personId
     ? { personId: account.personId }
     : { accountId: principal.accountId, personId: null };
@@ -235,6 +259,7 @@ export async function resolveReceivablesAccess(principal: Principal, db: AccessD
     accountActive,
     personActive,
     isCompanyAdmin: !!companyAdmin,
+    isFinanceOrganizationMember,
     configured,
     configurationConfirmed: !!setting?.configurationConfirmedAt,
     hasBoundOrgLeader: leaderAccountIds.length === 1,

@@ -35,6 +35,24 @@ const configuredAdmin = decideReceivablesAccess({ accountActive: true, personAct
 assert.equal(configuredAdmin.canReadLedger, false);
 assert.equal(configuredAdmin.canRecover, true);
 
+const financeDepartmentMember = decideReceivablesAccess({
+  accountActive: true,
+  personActive: true,
+  configured: true,
+  isFinanceOrganizationMember: true,
+  grant: null,
+});
+assert.equal(financeDepartmentMember.role, "readonly");
+assert.equal(financeDepartmentMember.canEnter, true);
+assert.equal(financeDepartmentMember.canReadLedger, true);
+assert.equal(financeDepartmentMember.canViewAll, true);
+assert.equal(financeDepartmentMember.canWriteLedger, false);
+assert.equal(financeDepartmentMember.canCreateLedger, false);
+assert.equal(financeDepartmentMember.canExport, false);
+assert.equal(financeDepartmentMember.canManageConfiguration, false);
+assert.doesNotThrow(() => requireReceivables(financeDepartmentMember, "read", "any-department"));
+assert.throws(() => requireReceivables(financeDepartmentMember, "write", "any-department"), { code: "RECEIVABLES_FORBIDDEN", statusCode: 403 });
+
 const financeAdmin = decideReceivablesAccess({
   accountActive: true,
   personActive: true,
