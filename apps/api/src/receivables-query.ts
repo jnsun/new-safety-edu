@@ -166,13 +166,8 @@ export function normalizeReceivablesFilters(input: ReceivablesFiltersInput): Nor
 
 async function resolveQueryScope(tx: QueryTx, access: ReceivablesAccess, input: ReceivablesFiltersInput): Promise<QueryScope> {
   const filters = normalizeReceivablesFilters(input);
-  const grantedDepartmentIds = [...new Set([...access.readDepartmentIds, ...access.writeDepartmentIds])];
-  const activeDepartments = grantedDepartmentIds.length
-    ? await tx.receivableDepartment.findMany({ where: { id: { in: grantedDepartmentIds }, active: true }, select: { id: true } })
-    : [];
-  const activeDepartmentIds = new Set(activeDepartments.map(({ id }) => id));
-  const capabilityReadDepartmentIds = access.readDepartmentIds.filter((id) => activeDepartmentIds.has(id)).sort();
-  const capabilityWriteDepartmentIds = access.writeDepartmentIds.filter((id) => activeDepartmentIds.has(id)).sort();
+  const capabilityReadDepartmentIds = [...access.readDepartmentIds].sort();
+  const capabilityWriteDepartmentIds = [...access.writeDepartmentIds].sort();
   const readDepartmentIds = access.canManageAll || access.canViewAll ? null : capabilityReadDepartmentIds;
   if (filters.financeDepartmentId && readDepartmentIds !== null && !readDepartmentIds.includes(filters.financeDepartmentId)) throw forbiddenDepartment();
   return { ...filters, readDepartmentIds, capabilityReadDepartmentIds, capabilityWriteDepartmentIds, cutoffAt: null };
@@ -397,6 +392,7 @@ async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: Query
     },
   });
   if (!row) throw notFound();
+  const canWriteLedger = access.canWriteLedger && (access.canManageAll || scope.capabilityWriteDepartmentIds.includes(row.financeDepartmentId));
   const calculated = calculateReceivableAmounts({ finalAmount: row.finalAmount, writeoffAmount: row.writeoffAmount, invoiceAmounts: row.invoices, receiptAmounts: row.receipts });
   const { financeDepartment, invoices, receipts, attachments, revisions, ...ledger } = row;
   return {
@@ -410,12 +406,13 @@ async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: Query
       ...attachment,
       capabilities: {
         canDownload: attachment.status === "active" || access.canManageAll,
-        canVoid: ledger.status === "active" && attachment.status === "active" && (access.canManageAll || access.role === "reporter" && attachment.uploadedBy === accountId),
+        canVoid: ledger.status === "active" && attachment.status === "active" && (access.canManageAll || canWriteLedger && access.role === "reporter" && attachment.uploadedBy === accountId),
       },
     })),
     revisions,
     capabilities: {
       ...access,
+      canWriteLedger,
       readDepartmentIds: scope.capabilityReadDepartmentIds,
       writeDepartmentIds: scope.capabilityWriteDepartmentIds,
     },

@@ -108,12 +108,18 @@ try {
   await grant(admin.id, owner.id, "admin"); await grant(reporter.id, owner.id, "reporter", department.id); await grant(readonly.id, owner.id, "readonly", department.id); const inactiveGrant = await grant(inactiveAdmin.id, owner.id, "admin"); await prisma.receivableAccessGrant.update({ where: { id: inactiveGrant.id }, data: { active: false } });
   const [ownerToken, adminToken, reporterToken, readonlyToken, recoveryToken] = await Promise.all([token(owner.id), token(admin.id), token(reporter.id), token(readonly.id), token(recoveryAdmin.id)]);
   const ledger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-contract`, contractNoNormalized: `${marker}-contract`, finalAmount: "100.0000", createdBy: owner.id } }); ids.ledgers.push(ledger.id);
+  const inactiveHistoryLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-inactive-history`, contractNoNormalized: `${marker}-inactive-history`, finalAmount: "25.0000", createdBy: owner.id } }); ids.ledgers.push(inactiveHistoryLedger.id);
   const otherLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: other.id, contractNo: `${marker}-other`, contractNoNormalized: `${marker}-other`, finalAmount: "100.0000", createdBy: owner.id } }); ids.ledgers.push(otherLedger.id);
   const foreignInvoice = await prisma.receivableInvoice.create({ data: { ledgerId: otherLedger.id, invoiceDate: new Date("2026-09-01T00:00:00.000Z"), amount: "5.0000", createdBy: owner.id } });
   const voidedLedger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-voided`, contractNoNormalized: `${marker}-voided`, finalAmount: "100.0000", createdBy: owner.id, status: "voided", voidedAt: new Date(), voidedBy: owner.id, voidReason: "fixture" } }); ids.ledgers.push(voidedLedger.id);
   await start();
   const invoicePath = `/api/receivables/ledgers/${ledger.id}/invoices`;
   const postInvoice = (ledgerRevision: number, amount = "10.0000") => ({ method: "POST", body: json({ ledgerRevision, invoiceDate: "2026-09-15", amount }) });
+
+  await prisma.receivableDepartment.update({ where: { id: department.id }, data: { active: false } });
+  const inactiveHistoryInvoice = (await expect<Detail>(`/api/receivables/ledgers/${inactiveHistoryLedger.id}/invoices`, ownerToken, 201, { method: "POST", body: json({ ledgerRevision: 1, invoiceDate: "2026-09-14", amount: "5" }) })).data!;
+  assert.equal(inactiveHistoryInvoice.amount, "5.0000", "inactive department must retain historical money writes");
+  await prisma.receivableDepartment.update({ where: { id: department.id }, data: { active: true } });
 
   await errorWithoutMutation("missing ledgerRevision", invoicePath, ownerToken, 400, "VALIDATION_ERROR", { method: "POST", body: json({ invoiceDate: "2026-09-15", amount: "10.0000" }) });
   await errorWithoutMutation("reporter denial", invoicePath, reporterToken, 403, "RECEIVABLES_FORBIDDEN", postInvoice(1)); await errorWithoutMutation("readonly denial", invoicePath, readonlyToken, 403, "RECEIVABLES_FORBIDDEN", postInvoice(1)); await errorWithoutMutation("recovery-only admin denial", invoicePath, recoveryToken, 403, "RECEIVABLES_FORBIDDEN", postInvoice(1));

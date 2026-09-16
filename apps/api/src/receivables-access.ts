@@ -211,7 +211,7 @@ export async function resolveReceivablesAccess(principal: Principal, db: AccessD
             canCreate: true,
             canExport: true,
             canViewAll: true,
-            departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true, financeDepartment: { select: { active: true } } } },
+            departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true } },
           },
         })
       : Promise.resolve([]),
@@ -221,7 +221,6 @@ export async function resolveReceivablesAccess(principal: Principal, db: AccessD
   const grant = activeGrant ? {
     ...activeGrant,
     departments: activeGrant.departments
-      .filter(({ financeDepartment }) => financeDepartment.active)
       .map(({ financeDepartmentId, canRead, canWrite }) => ({ departmentId: financeDepartmentId, canRead, canWrite })),
   } : null;
 

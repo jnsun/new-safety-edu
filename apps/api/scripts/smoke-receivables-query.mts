@@ -44,7 +44,7 @@ type DetailResponse = {
   receipts: Array<{ id: string; status: "active" | "voided"; amount: string }>;
   attachments: Array<{ id: string; status: "active" | "voided"; capabilities: { canDownload: boolean; canVoid: boolean }; file: { id: string; originalName: string } }>;
   revisions: Array<{ id: string; reason: string }>;
-  capabilities: { role: string | null; canViewAll: boolean; canManageMoney: boolean; readDepartmentIds: string[]; writeDepartmentIds: string[] };
+  capabilities: { role: string | null; canViewAll: boolean; canWriteLedger: boolean; canManageMoney: boolean; readDepartmentIds: string[]; writeDepartmentIds: string[] };
 };
 type ReferenceDataResponse = {
   departments: Array<{ id: string; name: string; canRead: boolean; canWrite: boolean }>;
@@ -189,6 +189,7 @@ try {
   const owner = await createIdentity("owner", "org_leader", financeOrganization.id);
   const admin = await createIdentity("admin");
   const reporterA = await createIdentity("reporter-a");
+  const reporterViewAll = await createIdentity("reporter-view-all");
   const reporterB = await createIdentity("reporter-b");
   const readonlyScoped = await createIdentity("readonly-scoped");
   const readonlyAll = await createIdentity("readonly-all");
@@ -205,6 +206,7 @@ try {
   const inactiveOption = await prisma.receivableDictionaryOption.create({ data: { category: "project_status", value: `${marker}-inactive-option`, active: false } }); ids.dictionaries.push(inactiveOption.id);
   await createGrant({ accountId: admin.id, grantedBy: owner.id, role: "admin" });
   await createGrant({ accountId: reporterA.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentA.id, inactiveDepartment.id] });
+  await createGrant({ accountId: reporterViewAll.id, grantedBy: owner.id, role: "reporter", canViewAll: true, departmentIds: [departmentA.id] });
   const reporterBGrant = await createGrant({ accountId: reporterB.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentB.id] });
   await createGrant({ accountId: readonlyScoped.id, grantedBy: owner.id, role: "readonly", departmentIds: [departmentA.id, inactiveDepartment.id] });
   await createGrant({ accountId: readonlyAll.id, grantedBy: owner.id, role: "readonly", canViewAll: true });
@@ -226,9 +228,10 @@ try {
   await addInvoice(voided.id, "999", owner.id); await addReceipt(voided.id, "1200", owner.id);
   await addInvoice(otherDepartment.id, "150", owner.id); await addReceipt(otherDepartment.id, "50", owner.id);
   await addAttachment(pending.id, owner.id, "active-attachment", "active"); await addAttachment(pending.id, owner.id, "voided-attachment", "voided");
+  await addAttachment(otherDepartment.id, reporterViewAll.id, "view-all-cross-department", "active");
   const revision = await prisma.receivableLedgerRevision.create({ data: { ledgerId: pending.id, revision: 1, beforeSnapshot: {}, reason: "fixture correction", changedBy: owner.id } }); ids.revisions.push(revision.id);
 
-  const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterB, readonlyScoped, readonlyAll, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
+  const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterViewAll, reporterB, readonlyScoped, readonlyAll, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
   await startServer();
 
   const ownerReferences = (await expectStatus<ReferenceDataResponse>("/api/receivables/reference-data", tokens.owner!, 200)).data!;
@@ -274,23 +277,24 @@ try {
   }
 
   const listA = (await expectStatus<ListResponse>("/api/receivables/ledgers?page=1&pageSize=50", tokens.reporterA!, 200)).data!;
-  assert.equal(listA.total, 5, "default list must include only active unsettled ledgers in active scoped departments");
-  assert.ok(listA.rows.every((row) => row.financeDepartmentId === departmentA.id));
+  assert.equal(listA.total, 6, "default list must retain active unsettled history in inactive scoped departments");
+  assert.ok(listA.rows.every((row) => row.financeDepartmentId === departmentA.id || row.financeDepartmentId === inactiveDepartment.id));
+  assert.ok(listA.rows.some((row) => row.id === inactiveDepartmentLedger.id));
   assert.ok(!listA.rows.some((row) => row.id === settled.id || row.id === voided.id || row.id === otherDepartment.id));
   assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.reporterB!, 200)).data?.total, 1);
   const readonlyScopedList = (await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.readonlyScoped!, 200)).data!;
-  assert.equal(readonlyScopedList.total, 5);
-  assert.ok(readonlyScopedList.rows.every((row) => row.financeDepartmentId === departmentA.id));
-  assert.ok(!readonlyScopedList.rows.some((row) => row.id === inactiveDepartmentLedger.id));
+  assert.equal(readonlyScopedList.total, 6);
+  assert.ok(readonlyScopedList.rows.every((row) => row.financeDepartmentId === departmentA.id || row.financeDepartmentId === inactiveDepartment.id));
+  assert.ok(readonlyScopedList.rows.some((row) => row.id === inactiveDepartmentLedger.id));
   const readonlyScopedDetail = (await expectStatus<DetailResponse>(`/api/receivables/ledgers/${pending.id}`, tokens.readonlyScoped!, 200)).data!;
-  assert.deepEqual(readonlyScopedDetail.capabilities.readDepartmentIds, [departmentA.id], "response must not advertise inactive read departments");
+  assert.deepEqual(readonlyScopedDetail.capabilities.readDepartmentIds, [departmentA.id, inactiveDepartment.id].sort(), "response must retain historical inactive read scope");
   assert.deepEqual(readonlyScopedDetail.capabilities.writeDepartmentIds, []);
-  await expectStatus(`/api/receivables/ledgers/${inactiveDepartmentLedger.id}`, tokens.readonlyScoped!, 404);
+  await expectStatus(`/api/receivables/ledgers/${inactiveDepartmentLedger.id}`, tokens.readonlyScoped!, 200);
   assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.readonlyAll!, 200)).data?.total, 7);
   assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.admin!, 200)).data?.total, 7);
   assert.equal((await expectStatus<ListResponse>("/api/receivables/ledgers", tokens.owner!, 200)).data?.total, 7);
   await expectStatus("/api/receivables/ledgers", tokens.companyAdmin!, 403);
-  await expectStatus(`/api/receivables/ledgers?financeDepartmentId=${inactiveDepartment.id}`, tokens.reporterA!, 403);
+  assert.equal((await expectStatus<ListResponse>(`/api/receivables/ledgers?financeDepartmentId=${inactiveDepartment.id}`, tokens.reporterA!, 200)).data?.total, 1);
   await expectStatus(`/api/receivables/ledgers?financeDepartmentId=${departmentB.id}`, tokens.reporterA!, 403);
   await expectStatus("/api/receivables/ledgers?pageSize=201", tokens.owner!, 400);
   await expectStatus("/api/receivables/ledgers?sort=drop_table", tokens.owner!, 400);
@@ -373,8 +377,13 @@ try {
   ]);
   assert.equal(detail.revisions[0]?.reason, "fixture correction");
   assert.deepEqual({ role: detail.capabilities.role, canViewAll: detail.capabilities.canViewAll, canManageMoney: detail.capabilities.canManageMoney }, { role: "reporter", canViewAll: false, canManageMoney: false });
-  assert.deepEqual(detail.capabilities.readDepartmentIds, [departmentA.id]);
-  assert.deepEqual(detail.capabilities.writeDepartmentIds, [departmentA.id]);
+  assert.deepEqual(detail.capabilities.readDepartmentIds, [departmentA.id, inactiveDepartment.id].sort());
+  assert.deepEqual(detail.capabilities.writeDepartmentIds, [departmentA.id, inactiveDepartment.id].sort());
+  const viewAllOwnDepartment = (await expectStatus<DetailResponse>(`/api/receivables/ledgers/${pending.id}`, tokens.reporterViewAll!, 200)).data!;
+  assert.equal(viewAllOwnDepartment.capabilities.canWriteLedger, true, "view-all reporter retains write capability in its granted department");
+  const viewAllCrossDepartment = (await expectStatus<DetailResponse>(`/api/receivables/ledgers/${otherDepartment.id}`, tokens.reporterViewAll!, 200)).data!;
+  assert.equal(viewAllCrossDepartment.capabilities.canWriteLedger, false, "view-all must not advertise cross-department ledger writes");
+  assert.ok(viewAllCrossDepartment.attachments.every((attachment) => attachment.capabilities.canVoid === false), "view-all must not advertise cross-department attachment voids");
   const ownerDetail = (await expectStatus<DetailResponse>(`/api/receivables/ledgers/${pending.id}`, tokens.owner!, 200)).data!;
   assert.equal(ownerDetail.attachments.find((attachment) => attachment.status === "voided")?.capabilities.canDownload, true, "owner audit access must allow downloading voided attachments");
   assert.equal(ownerDetail.attachments.find((attachment) => attachment.status === "voided")?.capabilities.canVoid, false);

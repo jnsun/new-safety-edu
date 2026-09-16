@@ -10,6 +10,7 @@
 - 正式规模 capacity 完成 50,000 台账、500,000 明细，生产真实 SQL 四个目标索引命中，导出 50,000 行且 `cleanup=zero-residual`。E2E 完成七会话、5 条台账、5 行导出、22 类关键审计且零残留。
 - 真实浏览器角色边界与 390×844 无页面级横向溢出通过；Windows 附件 mode 为 `NOT_PROVABLE`。
 - 验收宿主为 Node.js 24.19.0、PostgreSQL 17.11，尚未在目标 Node.js 22.x、PostgreSQL 16.x 复验。
+- 最终复审的 targeted RED/GREEN 已关闭四项缺口：待确认 owner 私有文件 fail closed、停用归属保留历史读写但禁止新归属、非工作量结算显式空决算按合同金额带入、view-all 跨归属详情能力只读。生产 list/count/dashboard/export SQL builders 未改变，因此本轮未重跑正式 50,000/500,000 capacity；这也不构成新的完整有序 FINAL。
 - 因上述首败续跑、Windows 附件 mode 和目标运行时漂移，当前证据不满足本手册第 1、2 步准入条件；不得执行生产切换、重定向、部署或回退演练。
 
 ## 操作原则

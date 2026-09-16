@@ -281,11 +281,11 @@ try {
   assert.equal(readyViewer.body.data?.canExport, true);
   assert.deepEqual(readyViewer.body.data?.readDepartmentIds, [departmentA.id]);
   const inactiveScoped = await access(tokens.inactiveDepartmentViewer!);
-  assert.equal(inactiveScoped.body.data?.canEnter, false);
-  assert.equal(inactiveScoped.body.data?.canReadLedger, false);
-  assert.deepEqual(inactiveScoped.body.data?.readDepartmentIds, []);
+  assert.equal(inactiveScoped.body.data?.canEnter, true);
+  assert.equal(inactiveScoped.body.data?.canReadLedger, true);
+  assert.deepEqual(inactiveScoped.body.data?.readDepartmentIds, [inactiveDepartment.id], "inactive departments retain historical read scope");
   assert.deepEqual(inactiveScoped.body.data?.writeDepartmentIds, []);
-  assert.equal((await request("/api/receivables/_smoke/protected", tokens.inactiveDepartmentViewer!)).status, 403);
+  assert.equal((await request("/api/receivables/_smoke/protected", tokens.inactiveDepartmentViewer!)).status, 200);
   assert.equal((await access(tokens.companyAdmin!)).body.data?.canReadLedger, false);
 
   await prisma.receivableAccessGrant.update({ where: { id: reporterAGrant.id }, data: { active: false, revokedAt: new Date(), revokedBy: companyAdmin.id, revokeReason: "smoke revocation" } });

@@ -18,10 +18,10 @@ export type PrivateFileFacts = {
 };
 
 export function canReadPrivateFile(reader: Reader, facts: PrivateFileFacts) {
-  if (facts.receivableImportBatches.length) return reader.receivablesAccess?.role === "owner" || reader.receivablesAccess?.role === "admin";
+  if (facts.receivableImportBatches.length) return !!reader.receivablesAccess?.canReadLedger && (reader.receivablesAccess.role === "owner" || reader.receivablesAccess.role === "admin");
   if (facts.receivableAttachments.length) {
     const access = reader.receivablesAccess;
-    if (!access) return false;
+    if (!access?.canReadLedger) return false;
     return facts.receivableAttachments.every(({ financeDepartmentId, status }) => status === "voided"
       ? access.role === "owner" || access.role === "admin"
       : (access.role === "owner" || access.role === "admin" || access.canViewAll || access.canReadLedger && access.readDepartmentIds.includes(financeDepartmentId)));

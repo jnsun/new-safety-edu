@@ -227,15 +227,15 @@ try {
   assert.equal(autoDb.collectionNotes, "初始备注");
 
   const explicitNull = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-explicit-null`, settlementMethod: "固定总价", contractAmount: "9", finalAmount: null });
-  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitNull.id } })).finalAmount, null, "explicit null final must remain null");
-  const workload = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-workload`, settlementMethod: "按工作量结算", contractAmount: "88" });
-  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: workload.id } })).finalAmount, null, "workload settlement must not auto-fill final amount");
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitNull.id } })).finalAmount?.toFixed(4), "9.0000", "non-workload explicit null create must carry final from contract amount");
+  const workload = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-workload`, settlementMethod: "按工作量结算", contractAmount: "88", finalAmount: null });
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: workload.id } })).finalAmount, null, "workload explicit null must remain null");
   const explicitFinal = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-explicit-final-patch`, settlementMethod: "固定总价", contractAmount: "100", finalAmount: "90" });
   await expectStatus(`/api/receivables/ledgers/${explicitFinal.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "合同金额调整", contractAmount: "120" }) });
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitFinal.id } })).finalAmount?.toFixed(4), "90.0000", "omitted final must preserve an existing explicit final amount");
   const nullFinalContractPatch = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-null-final-contract-patch`, settlementMethod: "固定总价", contractAmount: "100", finalAmount: null });
   await expectStatus(`/api/receivables/ledgers/${nullFinalContractPatch.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "合同金额调整并带入", contractAmount: "120" }) });
-  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: nullFinalContractPatch.id } })).finalAmount?.toFixed(4), "120.0000", "null current final must auto-fill from a patched effective contract amount");
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: nullFinalContractPatch.id } })).finalAmount?.toFixed(4), "100.0000", "omitted patch final must preserve the carried create-time final amount");
   await expectStatus(`/api/receivables/ledgers/${workload.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "改为非工作量结算", settlementMethod: "固定总价" }) });
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: workload.id } })).finalAmount?.toFixed(4), "88.0000", "workload to non-workload must auto-fill a null final from the effective contract amount");
   const switchToWorkload = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-switch-workload`, settlementMethod: "固定总价", contractAmount: "70" });
@@ -243,7 +243,7 @@ try {
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: switchToWorkload.id } })).finalAmount?.toFixed(4), "70.0000", "switching to workload with omitted final must preserve the current final");
   const explicitNullPatch = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-explicit-null-patch`, settlementMethod: "固定总价", contractAmount: "70" });
   await expectStatus(`/api/receivables/ledgers/${explicitNullPatch.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "显式清空决算", contractAmount: "80", finalAmount: null }) });
-  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitNullPatch.id } })).finalAmount, null, "explicit patch final null must remain null");
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitNullPatch.id } })).finalAmount?.toFixed(4), "80.0000", "non-workload explicit patch final null must carry from effective contract amount");
   const reporterCreated = await createLedger(tokens.reporterA!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-reporter`, projectName: "报账员项目", debtStatus: "正常催收" });
 
   await expectError("/api/receivables/ledgers", tokens.owner!, 400, "VALIDATION_ERROR", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: "   " }) });

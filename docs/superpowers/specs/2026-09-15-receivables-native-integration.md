@@ -156,4 +156,6 @@
 - 真实浏览器已验证七个 role URL 的角色边界；390×844 窄屏没有页面级横向溢出。浏览器 broker 不输出密码或 token，角色 URL 不携带 secret/JWT。
 - Windows 宿主上的附件文件 mode 语义无法形成可靠 POSIX 权限证据，状态为 `NOT_PROVABLE`，不能包装成附件权限 PASS。
 - 本次运行环境实际为 Node.js 24.19.0、PostgreSQL 17.11，与目标 Node.js 22/PostgreSQL 16 不同；目标运行时复验仍缺失。
+- 最终复审又修复四处授权/金额语义缺口：待确认 owner 的财务私有文件访问现同时要求 `canReadLedger`；停用财务归属保留既有台账的历史读写，仅创建/导入的新归属选择继续排除；非工作量结算显式 `finalAmount:null` 在创建和更新时均按合同金额带入；view-all 报账员查看非写入归属时详情及附件能力收敛为只读。上述修复由真实 HTTP 文件访问、查询、金额、附件和台账 smoke 的逐项 RED/GREEN 覆盖。
+- 本轮未重跑正式 50,000/500,000 capacity：生产 list row/count、dashboard totals、export batch 的 SQL builders 未改变，仅删除查询范围对停用部门的二次过滤。该轮是复审后的 targeted 验证，不构成一套新的无中断 FINAL。
 - 因 Windows 附件 mode `NOT_PROVABLE`、目标运行时漂移，以及有序 FINAL 曾在金额 smoke 首败后续跑，本规格总体保持 `PARTIAL`，不得标记完整 FINAL PASS、生产就绪、部署完成或切换获批。

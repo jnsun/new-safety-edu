@@ -293,13 +293,17 @@ try {
   const orphans = await orphanPrivateFiles(prisma, new Date(Date.now() + 60_000));
   assert.equal(orphans.some(({ id }) => uploaded.some(({ file }) => file.id === id)), false, "retention treated a linked receivables file as orphaned");
 
+  await prisma.receivableSetting.update({ where: { id: 1 }, data: { configurationConfirmedAt: null, configurationConfirmedBy: null } });
+  await expect(`/api/files/${uploaded[0]!.file.id}`, ownerToken, 403);
+  await prisma.receivableSetting.update({ where: { id: 1 }, data: { configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
+  await expect(`/api/files/${uploaded[0]!.file.id}`, ownerToken, 200);
   await expect(`/api/files/${uploaded[0]!.file.id}`, reporterToken, 200);
   await expect(`/api/files/${uploaded[3]!.file.id}`, readonlyToken, 200);
   await expect(`/api/files/${uploaded[4]!.file.id}`, viewAllToken, 200);
   await expect(`/api/files/${uploaded[0]!.file.id}`, crossReporterToken, 403);
   await expect(`/api/files/${uploaded[0]!.file.id}`, recoveryToken, 403);
-  for (let attempt = 0; attempt < 80 && await prisma.auditLog.count({ where: { action: "file.read", objectId: { in: uploaded.map(({ file }) => file.id) } } }) < 3; attempt += 1) await delay(25);
-  assert.equal(await prisma.auditLog.count({ where: { action: "file.read", objectId: { in: uploaded.map(({ file }) => file.id) } } }), 3, "only successful active reads write file.read audits");
+  for (let attempt = 0; attempt < 80 && await prisma.auditLog.count({ where: { action: "file.read", objectId: { in: uploaded.map(({ file }) => file.id) } } }) < 4; attempt += 1) await delay(25);
+  assert.equal(await prisma.auditLog.count({ where: { action: "file.read", objectId: { in: uploaded.map(({ file }) => file.id) } } }), 4, "only successful active reads write file.read audits");
   await writeFile(resolve(uploadRoot, uploaded[3]!.file.storageKey), Buffer.alloc(uploaded[3]!.file.size, 0x78));
   await expect(`/api/files/${uploaded[3]!.file.id}`, readonlyToken, 409);
   await delay(50);
@@ -318,6 +322,10 @@ try {
   await expect(`/api/files/${uploaded[0]!.file.id}`, reporterToken, 403); await expect(`/api/files/${uploaded[0]!.file.id}`, viewAllToken, 403); await expect(`/api/files/${uploaded[1]!.file.id}`, ownerToken, 200); await expect(`/api/files/${uploaded[2]!.file.id}`, adminToken, 200);
   await unchanged(ledger.id, () => expect(voidPath(uploaded[0]!), reporterToken, 409, voidBody("again", 2)));
   assert.equal(await prisma.auditLog.count({ where: { action: "receivables.attachment.void", objectId: { in: uploaded.map(({ id }) => id) } } }), 3);
+  await prisma.receivableDepartment.update({ where: { id: department.id }, data: { active: false } });
+  const inactiveHistoryUpload = (await expect<Attachment>(attachmentPath, reporterToken, 201, { method: "POST", body: form(ledgerRevision, fixtures[0]!) })).body!.data!;
+  uploaded.push(inactiveHistoryUpload); ids.files.push(inactiveHistoryUpload.file.id); ledgerRevision += 1;
+  await expect(`/api/files/${inactiveHistoryUpload.file.id}`, reporterToken, 200);
 } catch (error) {
   failure = error;
 } finally {

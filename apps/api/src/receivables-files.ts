@@ -152,14 +152,14 @@ const auditScope = (access: ReceivablesAccess, departmentId: string) => ({ actor
 export async function authorizeReceivableAttachmentUpload(principal: Principal, ledgerId: string) {
   const access = await resolveReceivablesAccess(principal);
   if (!access.canWriteLedger) throw ledgerNotFound();
-  const ledger = await prisma.receivableLedger.findFirst({ where: { id: ledgerId, status: "active", financeDepartment: { active: true }, ...writeScope(access) }, select: { id: true } });
+  const ledger = await prisma.receivableLedger.findFirst({ where: { id: ledgerId, status: "active", ...writeScope(access) }, select: { id: true } });
   if (!ledger) throw ledgerNotFound();
 }
 async function writableLedger(tx: Tx, access: ReceivablesAccess, ledgerId: string) {
   const candidate = await tx.receivableLedger.findFirst({ where: { id: ledgerId, ...writeScope(access) }, select: { financeDepartmentId: true } });
   if (!candidate) throw ledgerNotFound();
   const [department] = await tx.$queryRaw<Array<{ id: string; active: boolean }>>`SELECT id, active FROM receivable_departments WHERE id = ${candidate.financeDepartmentId}::uuid FOR UPDATE`;
-  if (!department?.active) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "财务归属部门不存在或已停用");
+  if (!department) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "财务归属部门不存在");
   if (access.canManageAll) await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id = ${ledgerId}::uuid FOR UPDATE`;
   else await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id = ${ledgerId}::uuid AND finance_department_id IN (${Prisma.join(access.writeDepartmentIds.map((id) => Prisma.sql`${id}::uuid`))}) FOR UPDATE`;
   const ledger = await tx.receivableLedger.findFirst({ where: { id: ledgerId, ...writeScope(access) }, select: { id: true, financeDepartmentId: true, status: true, revision: true, updatedBy: true } });

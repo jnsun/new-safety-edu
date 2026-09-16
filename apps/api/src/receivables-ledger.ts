@@ -101,7 +101,7 @@ function normalizeFields(input: LedgerFields, current?: LedgerRow): Prisma.Recei
   const shouldConsiderAutoFinal = current
     ? current.finalAmount === null && (input.contractAmount !== undefined || input.settlementMethod !== undefined)
     : input.contractAmount !== undefined;
-  if (input.finalAmount === undefined && shouldConsiderAutoFinal) {
+  if (input.finalAmount === null || input.finalAmount === undefined && shouldConsiderAutoFinal) {
     const settlementMethod = input.settlementMethod === undefined ? current?.settlementMethod ?? null : (data.settlementMethod as string | null);
     const contractAmount = input.contractAmount === undefined ? current?.contractAmount : data.contractAmount;
     if (settlementMethod !== workloadSettlement && contractAmount !== null && contractAmount !== undefined) data.finalAmount = contractAmount;
