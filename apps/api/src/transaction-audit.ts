@@ -14,12 +14,14 @@ export type CriticalAuditEvent = {
   reason?: string | null;
   result?: string;
   metadata?: Prisma.InputJsonValue;
+  allowPendingActor?: boolean;
 };
 
 export async function writeCriticalAudit(tx: AuditWriter, event: CriticalAuditEvent) {
   if (event.actorId) {
     const actor = await tx.account.findUnique({ where: { id: event.actorId }, select: { status: true, personId: true, person: { select: { status: true } } } });
-    if (!actor || actor.status !== "active" || (actor.personId && actor.person?.status !== "active")) {
+    const allowedPending = event.allowPendingActor && actor?.status === "pending" && !actor.personId;
+    if (!actor || (!allowedPending && (actor.status !== "active" || (actor.personId && actor.person?.status !== "active")))) {
       throw Object.assign(new Error("操作者账号或人员状态已变化，请重新登录"), { statusCode: 409, code: "ACTOR_STATE_CHANGED" });
     }
   }

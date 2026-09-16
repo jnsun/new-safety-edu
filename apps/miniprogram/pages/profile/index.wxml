@@ -1,1 +1,45 @@
-<view class="page"><view class="card"><text class="title">个人信息</text><block wx:if="{{person}}"><view class="photo-wrap"><image wx:if="{{photoPath}}" class="photo" src="{{photoPath}}" mode="aspectFill"/><view wx:else class="photo placeholder">暂无照片</view><button class="mini-button" bindtap="choosePhoto">修改照片</button></view><view class="row"><text>姓名</text><text>{{person.name}}</text></view><view class="row"><text>人员类型</text><text>{{person.typeText}}</text></view><view class="row"><text>手机号</text><text>{{person.phone}}</text></view><view class="row"><text>身份证</text><view><text>{{person.nationalId || person.nationalIdMasked || '待补录'}}</text><button wx:if="{{person.nationalIdMasked && !person.nationalId}}" class="mini-button" bindtap="revealNationalId">查看完整号码</button></view></view><view class="row"><text>所属组织</text><text>{{person.organizationText}}</text></view><button class="secondary" loading="{{exporting}}" bindtap="exportMyArchive">下载本人资料文件</button></block><text wx:else class="muted">人员档案尚未绑定或正在审核。</text></view><view wx:if="{{security}}" class="card"><text class="title">账号安全</text><view class="row"><text>登录方式</text><text>{{security.methodText}}</text></view><view class="row"><text>当前有效设备</text><text>{{security.sessions.length}}</text></view><view wx:if="{{security.roles.length}}" class="course" wx:for="{{security.roles}}" wx:key="id"><text>{{item.text}}</text></view><text wx:else class="muted">普通人员权限</text><input class="field" type="number" maxlength="11" value="{{newPhone}}" bindinput="setNewPhone" placeholder="输入新手机号"/><view class="row"><input class="field" type="number" maxlength="6" value="{{phoneCode}}" bindinput="setPhoneCode" placeholder="短信验证码"/><button class="mini-button" bindtap="sendPhoneCode">发送验证码</button></view><button class="secondary" loading="{{phoneChanging}}" bindtap="confirmPhone">验证并修改手机号</button><button class="secondary" bindtap="changeRequest">手机号或微信换绑申请</button><button class="secondary logout" bindtap="logoutAll">退出全部设备</button></view><view wx:if="{{person}}" class="card"><text class="title">我的证书</text><view wx:if="{{!certificates.length}}" class="muted">暂无人员证书记录</view><view wx:for="{{certificates}}" wx:key="id" class="course"><view><text>{{item.name}}</text><text class="muted small">{{item.issuingAuthority || '未填写发证机构'}} · {{item.certificateNo || '未填写编号'}}</text></view><text class="{{item.expired ? 'error' : 'success'}}">{{item.expiresText}}</text></view></view><view wx:if="{{person}}" class="card"><text class="title">申请调换部门</text><picker mode="selector" range="{{organizations}}" range-key="name" value="{{targetIndex}}" bindchange="chooseDepartment"><view class="field">{{targetIndex >= 0 ? organizations[targetIndex].name : '选择目标部门'}}</view></picker><textarea class="field" value="{{transferReason}}" bindinput="setTransferReason" placeholder="填写调换原因"/><button class="primary" bindtap="requestTransfer" loading="{{transferring}}">提交部门负责人审批</button></view><view class="card"><text class="title">我的</text><text class="muted">账号绑定、提醒和培训管理入口</text><button wx:if="{{canManage}}" class="primary" bindtap="manage">培训管理</button><button class="secondary" bindtap="subscribe">开启培训提醒</button><button class="secondary" bindtap="changeRequest">其他资料/绑定变更申请</button><button class="secondary logout" bindtap="logout">退出当前设备</button></view></view>
+<view class="page">
+  <view class="card">
+    <text class="title">个人信息</text>
+    <block wx:if="{{person}}">
+      <view class="photo-wrap"><image wx:if="{{photoPath}}" class="photo" src="{{photoPath}}" mode="aspectFill"/><view wx:else class="photo placeholder">暂无照片</view><button class="mini-button" bindtap="choosePhoto">修改照片</button></view>
+      <view class="row"><text>姓名</text><text>{{person.name}}</text></view>
+      <view class="row"><text>人员类型</text><text>{{person.typeText}}</text></view>
+      <view class="row"><text>手机号</text><text>{{person.phone}}</text></view>
+      <view class="row"><text>身份证</text><view><text>{{person.nationalId || person.nationalIdMasked || '待补录'}}</text><button wx:if="{{person.nationalIdMasked && !person.nationalId}}" class="mini-button" bindtap="revealNationalId">查看完整号码</button></view></view>
+      <view class="row"><text>所属组织</text><text>{{person.organizationText}}</text></view>
+      <button class="secondary" loading="{{exporting}}" bindtap="exportMyArchive">下载本人资料文件</button>
+    </block>
+    <text wx:else class="muted">人员档案尚未绑定或正在审核。</text>
+  </view>
+  <view wx:if="{{security}}" class="card">
+    <text class="title">账号安全</text>
+    <view class="row"><text>登录方式</text><text>{{security.methodText}}</text></view>
+    <view class="row"><text>当前有效设备</text><text>{{security.sessions.length}}</text></view>
+    <view wx:if="{{security.roles.length}}" class="course" wx:for="{{security.roles}}" wx:key="id"><text>{{item.text}}</text></view>
+    <text wx:else class="muted">普通人员权限</text>
+    <input class="field" type="number" maxlength="11" value="{{newPhone}}" bindinput="setNewPhone" placeholder="输入新手机号"/>
+    <view class="row"><input class="field" type="number" maxlength="6" value="{{phoneCode}}" bindinput="setPhoneCode" placeholder="短信验证码"/><button class="mini-button" bindtap="sendPhoneCode">发送验证码</button></view>
+    <button class="secondary" loading="{{phoneChanging}}" bindtap="confirmPhone">验证并修改手机号</button>
+    <text class="muted">更换微信：请退出当前账号，使用新微信重新进入小程序，并按提示完成手机号验证。</text>
+    <button class="secondary logout" bindtap="logoutAll">退出全部设备</button>
+  </view>
+  <view wx:if="{{person}}" class="card">
+    <text class="title">我的证书</text>
+    <view wx:if="{{!certificates.length}}" class="muted">暂无人员证书记录</view>
+    <view wx:for="{{certificates}}" wx:key="id" class="course"><view><text>{{item.name}}</text><text class="muted small">{{item.issuingAuthority || '未填写发证机构'}} · {{item.certificateNo || '未填写编号'}}</text></view><text class="{{item.expired ? 'error' : 'success'}}">{{item.expiresText}}</text></view>
+  </view>
+  <view wx:if="{{person}}" class="card">
+    <text class="title">申请调换部门</text>
+    <picker mode="selector" range="{{organizations}}" range-key="name" value="{{targetIndex}}" bindchange="chooseDepartment"><view class="field">{{targetIndex >= 0 ? organizations[targetIndex].name : '选择目标部门'}}</view></picker>
+    <textarea class="field" value="{{transferReason}}" bindinput="setTransferReason" placeholder="填写调换原因"/>
+    <button class="primary" bindtap="requestTransfer" loading="{{transferring}}">提交部门负责人审批</button>
+  </view>
+  <view class="card">
+    <text class="title">我的</text><text class="muted">账号绑定、提醒和培训管理入口</text>
+    <button wx:if="{{canManage}}" class="primary" bindtap="manage">培训管理</button>
+    <button class="secondary" bindtap="subscribe">开启培训提醒</button>
+    <button class="secondary" bindtap="changeRequest">其他资料/关系变更申请</button>
+    <button class="secondary logout" bindtap="logout">退出当前设备</button>
+  </view>
+</view>

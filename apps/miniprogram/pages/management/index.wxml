@@ -1,1 +1,48 @@
-<view class="page"><text class="title">培训管理</text><text class="muted">只显示你有权管理的项目和人员</text><text wx:if="{{error}}" class="error">{{error}}</text><view class="card"><text class="subtitle">未完成人员</text><input class="field" placeholder="解锁前填写原因" bindinput="reason"/><view wx:for="{{assignments}}" wx:key="id" class="list-item"><view class="row"><text>{{item.person.name}} · {{item.batch.name}}</text><text class="status">{{item.statusText}}</text></view><text class="muted">进度 {{item.progress.completed}}/{{item.progress.total}} · 考试 {{item.attemptCount}} 次</text><view class="row"><button size="mini" data-id="{{item.id}}" bindtap="remind">催办</button><button wx:if="{{item.status === 'locked'}}" size="mini" data-id="{{item.id}}" bindtap="unlock">解锁</button><button wx:if="{{item.status === 'confirmation_pending'}}" size="mini" type="primary" data-id="{{item.id}}" bindtap="confirm">到场/交底确认</button></view></view></view><view class="card"><text class="subtitle">待审核申请</text><textarea class="field" placeholder="审核意见" bindinput="note"/><view wx:for="{{requests}}" wx:key="id" wx:for-index="index" class="list-item"><text>{{item.applicant}} · {{item.typeText}}</text><text class="muted">{{item.summary.reason || item.summary.phone || '关键关系/资料申请'}}</text><picker wx:if="{{item.type === 'binding'}}" range="{{persons}}" range-key="name" data-index="{{index}}" bindchange="choosePerson"><view class="field">{{item.personName || '选择人员档案'}}</view></picker><view class="row"><button size="mini" type="primary" data-index="{{index}}" data-decision="approve" bindtap="review">通过</button><button size="mini" data-index="{{index}}" data-decision="reject" bindtap="review">驳回</button></view></view></view></view>
+<view class="page">
+  <text class="title">培训管理</text>
+  <text class="muted">只显示你有权管理的项目和人员</text>
+  <text wx:if="{{error}}" class="error">{{error}}</text>
+
+  <view class="card">
+    <text class="subtitle">未完成人员</text>
+    <input class="field" placeholder="解锁前填写原因" bindinput="reason"/>
+    <view wx:for="{{assignments}}" wx:key="id" class="list-item">
+      <view class="row"><text>{{item.person.name}} · {{item.batch.name}}</text><text class="status">{{item.statusText}}</text></view>
+      <text class="muted">进度 {{item.progress.completed}}/{{item.progress.total}} · 考试 {{item.attemptCount}} 次</text>
+      <view class="row">
+        <button size="mini" data-id="{{item.id}}" bindtap="remind">催办</button>
+        <button wx:if="{{item.status === 'locked'}}" size="mini" data-id="{{item.id}}" bindtap="unlock">解锁</button>
+        <button wx:if="{{item.status === 'confirmation_pending'}}" size="mini" type="primary" data-id="{{item.id}}" bindtap="confirm">到场/交底确认</button>
+      </view>
+    </view>
+  </view>
+
+  <view class="card">
+    <text class="subtitle">待审核申请</text>
+    <textarea class="field" placeholder="审核意见" value="{{reviewNote}}" bindinput="note"/>
+    <view wx:if="{{!requests.length}}" class="empty">当前没有待审核申请</view>
+    <view wx:for="{{requests}}" wx:key="id" wx:for-index="index" class="list-item">
+      <view class="row"><text>{{item.payload.name || item.applicant || '待匹配人员'}} · {{item.typeText}}</text><text wx:if="{{item.payload.phoneVerified}}" class="success">手机号已验证</text></view>
+      <text class="muted">{{item.payload.phone || item.summary.phone || '未提供手机号'}} · {{item.payload.organizationName || item.summary.targetOrganization || '未指定部门'}}</text>
+      <text wx:if="{{item.identityReview && item.payload.conflictCodes.length}}" class="warning">存在身份或归属冲突，请按提示处理</text>
+      <button wx:if="{{item.identityReview}}" size="mini" type="primary" data-index="{{index}}" bindtap="openIdentityReview">身份绑定审核</button>
+      <view wx:else class="row">
+        <button size="mini" type="primary" data-index="{{index}}" data-decision="approve" bindtap="review">通过</button>
+        <button size="mini" data-index="{{index}}" data-decision="reject" bindtap="review">驳回</button>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{activeReview}}" class="card review-panel">
+    <text class="subtitle">处理身份绑定申请</text>
+    <text class="muted">{{activeReview.payload.name}} · {{activeReview.payload.phone}} · {{activeReview.payload.organizationName}}</text>
+    <picker range="{{identityActions}}" range-key="label" value="{{actionIndex}}" bindchange="chooseIdentityAction">
+      <view class="field">{{actionIndex >= 0 ? identityActions[actionIndex].label : '请选择处理方式'}}</view>
+    </picker>
+    <picker wx:if="{{needsPerson}}" range="{{activeReview.candidates}}" range-key="name" value="{{candidateIndex}}" bindchange="chooseCandidate">
+      <view class="field">{{candidateIndex >= 0 ? activeReview.candidates[candidateIndex].name : '请选择人员档案'}}</view>
+    </picker>
+    <textarea class="field" placeholder="请输入审核意见或处理原因" value="{{reviewNote}}" bindinput="note"/>
+    <view class="row"><button size="mini" bindtap="closeIdentityReview">取消</button><button size="mini" type="primary" bindtap="submitIdentityReview">确认处理</button></view>
+  </view>
+</view>

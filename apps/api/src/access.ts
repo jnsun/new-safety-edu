@@ -15,6 +15,10 @@ export async function accessibleOrganizationIds(principal: Principal): Promise<s
   return [...new Set(organizationScopeIds(principal))];
 }
 
+export function orgAdminScopeIds(principal: Principal): string[] {
+  return principal.roles.filter((r) => r.role === "org_admin" && r.scopeType === "organization" && r.scopeId).map((r) => r.scopeId as string);
+}
+
 export async function canAccessOrganization(principal: Principal, organizationId: string) {
   return isCompanyAdmin(principal) || (await accessibleOrganizationIds(principal)).includes(organizationId);
 }

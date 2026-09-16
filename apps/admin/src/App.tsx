@@ -13,6 +13,7 @@ import {
   Button,
   Card,
   Collapse,
+  Descriptions,
   Form,
   Input,
   Layout,
@@ -254,6 +255,8 @@ function Login() {
         <Typography.Paragraph type="secondary">
           登录安全培训教育平台管理后台
         </Typography.Paragraph>
+        {wechat.data?.enabled && <Button block type="primary" icon={<WechatOutlined />} href="/api/auth/wechat-web/start">微信扫码登录</Button>}
+        {wechat.data?.enabled && <div style={{ textAlign: "center", margin: "18px 0", color: "#86868b" }}>或使用备用账号</div>}
         <Form layout="vertical" onFinish={submit}>
           <Form.Item
             label="用户名"
@@ -270,26 +273,6 @@ function Login() {
           </Button>
           <Button block type="link" onClick={() => setRecoveryOpen(true)}>忘记密码</Button>
         </Form>
-        {wechat.data?.enabled && (
-          <>
-            <div
-              style={{
-                textAlign: "center",
-                margin: "18px 0",
-                color: "#86868b",
-              }}
-            >
-              或
-            </div>
-            <Button
-              block
-              icon={<WechatOutlined />}
-              href="/api/auth/wechat-web/start"
-            >
-              微信扫码登录
-            </Button>
-          </>
-        )}
       </Card>
       <Modal title="通过已验证手机号找回密码" open={recoveryOpen} footer={null} onCancel={() => setRecoveryOpen(false)}>
         <Alert type="info" showIcon message="验证码五分钟有效。未配置正式短信服务时，本功能不会发送模拟验证码。" style={{ marginBottom: 16 }} />
@@ -303,6 +286,34 @@ function Login() {
       </Modal>
     </div>
   );
+}
+
+function WechatBind() {
+  const [phone, setPhone] = useState("");
+  const [sent, setSent] = useState(false);
+  const [purpose, setPurpose] = useState("wechat_bind");
+  const [submitted, setSubmitted] = useState(() => new URLSearchParams(window.location.search).has("pending"));
+  const options = useQuery({ queryKey: ["wechat-registration-options"], queryFn: () => api<{ departments: Array<{ id: string; name: string }> }>("/api/wechat/registration-options"), retry: false });
+  if (submitted) return <div className="login-shell"><Card className="login-card"><Alert type="success" showIcon message="身份绑定申请已提交" description="手机号已经验证。申请将由所选部门管理员审核，异常情况由公司管理员处理。" /><Button block style={{ marginTop: 16 }} href="/login">返回登录</Button></Card></div>;
+  return <div className="login-shell"><Card className="login-card" title="人员身份确认与微信绑定">
+    <Alert type="info" showIcon message="手机号只用于微信首次绑定或换绑验证，不作为独立登录方式。" style={{ marginBottom: 16 }} />
+    <Form layout="vertical" onFinish={async (values) => {
+      try {
+        const result = await api<{ status: string }>("/api/wechat/identity/confirm", json("POST", { ...values, purpose }));
+        if (result.status === "bound") window.location.assign("/");
+        else if (result.status === "bound_no_admin") { message.info("微信已绑定，但该人员没有后台管理权限，请使用小程序"); window.location.assign("/login"); }
+        else setSubmitted(true);
+      } catch (error) { message.error((error as Error).message); }
+    }}>
+      <Form.Item name="phone" label="本人手机号" rules={[{ required: true, pattern: /^1\d{10}$/ }]}><Input inputMode="numeric" maxLength={11} onChange={(event) => setPhone(event.target.value)} /></Form.Item>
+      <Button disabled={!/^1\d{10}$/.test(phone)} onClick={async () => { try { const result = await api<{ purpose: string }>("/api/wechat/identity/phone-code", json("POST", { phone })); setPurpose(result.purpose); setSent(true); message.success("验证码已发送，五分钟内有效"); } catch (error) { message.error((error as Error).message); } }}>发送验证码</Button>
+      <Form.Item name="code" label="6 位短信验证码" rules={[{ required: true, len: 6 }]} style={{ marginTop: 16 }}><Input inputMode="numeric" maxLength={6} disabled={!sent} /></Form.Item>
+      <Form.Item name="name" label="姓名" rules={[{ required: true, min: 2, max: 80 }]}><Input /></Form.Item>
+      <Form.Item name="organizationId" label="所属部门" rules={[{ required: true }]}><Select loading={options.isLoading} options={(options.data?.departments ?? []).map((organization) => ({ value: organization.id, label: organization.name }))} /></Form.Item>
+      <Form.Item name="reason" label="情况说明（选填）"><Input.TextArea maxLength={500} /></Form.Item>
+      <Button block type="primary" htmlType="submit" disabled={!sent}>验证并继续</Button>
+    </Form>
+  </Card></div>;
 }
 
 function AccountsPanel({
@@ -845,25 +856,25 @@ function AccountsPanel({
 }
 
 function BindingRequests({ persons }: { persons: Person[] }) {
-  const [selected, setSelected] = useState<Record<string, string>>({});
+  type RequestRow = { id: string; type: string; status: string; personId: string | null; projectId: string | null; createdAt: string; payload: Record<string, unknown> };
+  const [reviewing, setReviewing] = useState<RequestRow>();
+  const [candidates, setCandidates] = useState<Array<{ id: string; name: string; phone: string; account: { id: string; status: string } | null }>>([]);
+  const [reviewForm] = Form.useForm();
   const requests = useQuery({
     queryKey: ["binding-requests"],
     queryFn: () =>
       api<
-        Array<{
-          id: string;
-          type: string;
-          status: string;
-          personId: string | null;
-          projectId: string | null;
-          createdAt: string;
-          payload: Record<string, unknown>;
-        }>
+        Array<RequestRow>
       >("/api/binding-requests"),
   });
-  async function approve(row: { id: string; type: string }) {
-    if (row.type === "binding" && !selected[row.id])
-      return message.warning("请选择要绑定的人员档案");
+  async function approve(row: RequestRow) {
+    if (row.type === "binding") {
+      try {
+        setCandidates(await api(`/api/identity-binding-requests/${row.id}/candidates`));
+        setReviewing(row); reviewForm.resetFields();
+      } catch (error) { message.error((error as Error).message); }
+      return;
+    }
     const highRiskMerge = ["account_merge", "person_merge"].includes(row.type);
     const path =
       highRiskMerge
@@ -878,7 +889,7 @@ function BindingRequests({ persons }: { persons: Person[] }) {
         const sensitive = await api<{ token: string }>("/api/auth/reauthenticate", json("POST", { password }));
         await api(path, { ...json("POST", { note }), headers: { "x-sensitive-token": sensitive.token } });
       } else {
-        await api(path, json("POST", row.type === "binding" ? { personId: selected[row.id] } : {}));
+        await api(path, json("POST", {}));
       }
       message.success(highRiskMerge ? `${row.type === "person_merge" ? "人员档案" : "账号"}已合并` : "审核通过");
       void requests.refetch();
@@ -899,7 +910,7 @@ function BindingRequests({ persons }: { persons: Person[] }) {
       void requests.refetch();
     } catch (error) { message.error((error as Error).message); }
   }
-  return (
+  return (<>
     <Table
       rowKey="id"
       loading={requests.isLoading}
@@ -934,45 +945,22 @@ function BindingRequests({ persons }: { persons: Person[] }) {
         },
         {
           title: "手机号",
-          render: (_: unknown, row) => String(row.payload.phone ?? "—"),
+          render: (_: unknown, row) => <Space direction="vertical" size={0}><span>{String(row.payload.phone ?? "—")}</span>{row.type === "binding" && <Tag color={row.payload.phoneVerified ? "green" : "red"}>{row.payload.phoneVerified ? "已验证" : "未验证"}</Tag>}</Space>,
         },
         {
           title: "申请部门",
-          render: (_: unknown, row) =>
-            String(row.payload.organizationName ?? "—"),
+          render: (_: unknown, row) => <Space direction="vertical" size={0}><span>{String(row.payload.organizationName ?? "—")}</span>{row.payload.escalatedToCompany === true && <Tag color="orange">公司兜底</Tag>}{Boolean(row.payload.matchStatus) && <Typography.Text type="secondary">匹配：{String(row.payload.matchStatus)}</Typography.Text>}</Space>,
         },
         {
           title: "操作",
           render: (_: unknown, row) => (
             <Space>
-              {row.type === "binding" &&
-                (persons.length ? (
-                  <Select
-                    style={{ width: 180 }}
-                    placeholder="选择档案"
-                    options={persons.map((p) => ({
-                      value: p.id,
-                      label: p.name,
-                    }))}
-                    onChange={(value) =>
-                      setSelected((current) => ({
-                        ...current,
-                        [row.id]: value,
-                      }))
-                    }
-                  />
-                ) : (
-                  <Typography.Text type="secondary">
-                    暂无可匹配人员档案，请先导入或新建人员
-                  </Typography.Text>
-                ))}
               <Button
                 type="primary"
                 size="small"
-                disabled={row.type === "binding" && !persons.length}
                 onClick={() => void approve(row)}
               >
-                {["account_merge", "person_merge"].includes(row.type) ? "确认合并" : "审核通过"}
+                {["account_merge", "person_merge"].includes(row.type) ? "确认合并" : row.type === "binding" ? "审核" : "审核通过"}
               </Button>
               {["account_merge", "person_merge"].includes(row.type) && <Button danger size="small" onClick={() => void rejectMerge(row)}>拒绝</Button>}
             </Space>
@@ -980,7 +968,35 @@ function BindingRequests({ persons }: { persons: Person[] }) {
         },
       ]}
     />
-  );
+    <Modal title="审核身份绑定申请" open={!!reviewing} footer={null} onCancel={() => setReviewing(undefined)}>
+      {reviewing && <>
+        <Descriptions size="small" column={1} bordered items={[
+          { key: "name", label: "申请姓名", children: String(reviewing.payload.name ?? "—") },
+          { key: "phone", label: "手机号", children: <Space>{String(reviewing.payload.phone ?? "—")}<Tag color="green">已短信验证</Tag></Space> },
+          { key: "org", label: "申请部门", children: String(reviewing.payload.organizationName ?? "—") },
+          { key: "conflict", label: "冲突提示", children: Array.isArray(reviewing.payload.conflictCodes) && reviewing.payload.conflictCodes.length ? reviewing.payload.conflictCodes.join("、") : "无" }
+        ]} />
+        <Form form={reviewForm} layout="vertical" style={{ marginTop: 16 }} onFinish={async (values) => {
+          try {
+            await api(`/api/identity-binding-requests/${reviewing.id}/review`, json("POST", values));
+            message.success(values.action === "reject" ? "申请已驳回" : "身份绑定已处理"); setReviewing(undefined); void requests.refetch();
+          } catch (error) { message.error((error as Error).message); }
+        }}>
+          <Form.Item name="action" label="处理方式" rules={[{ required: true }]}><Select options={[
+            { value: "bind_existing", label: "确认并绑定本部门已有人员" },
+            { value: "update_phone_and_bind", label: "修正人员手机号后绑定" },
+            { value: "repair_membership_and_bind", label: "补建本部门归属后绑定" },
+            { value: "create_employee_and_bind", label: "新建本部门正式员工并绑定" },
+            { value: "escalate_company", label: "升级给公司管理员处理" },
+            { value: "reject", label: "驳回申请" }
+          ]} /></Form.Item>
+          <Form.Item noStyle shouldUpdate={(before, after) => before.action !== after.action}>{({ getFieldValue }) => !["create_employee_and_bind", "escalate_company", "reject"].includes(getFieldValue("action")) && <Form.Item name="personId" label="人员档案" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" placeholder={candidates.length ? "请选择人员" : "暂无可选人员档案"} options={candidates.map((person) => ({ value: person.id, label: `${person.name} · ${person.phone}` }))} /></Form.Item>}</Form.Item>
+          <Form.Item name="note" label="审核意见/处理原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>
+          <Button type="primary" htmlType="submit">确认处理</Button>
+        </Form>
+      </>}
+    </Modal>
+  </>);
 }
 
 function People({ principal }: { principal: Principal }) {
@@ -1257,7 +1273,7 @@ function People({ principal }: { principal: Principal }) {
           },
           {
             key: "binding",
-            label: "绑定与注册审核",
+            label: "身份绑定申请",
             children: <BindingRequests persons={query.data ?? []} />,
           },
           ...(canExportSensitive
@@ -2680,7 +2696,7 @@ function Shell({ principal }: { principal: Principal }) {
                   .join(" / ") || "无角色"}
               </Tag>
               <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
-              {wechatWeb.data?.enabled && <Button icon={<WechatOutlined />} href="/api/auth/wechat-web/bind/start">绑定网页登录微信</Button>}
+              {wechatWeb.data?.enabled && <Typography.Text type="secondary">更换微信请退出后使用新微信扫码，并通过已登记手机号验证。</Typography.Text>}
               <Button
                 onClick={async () => {
                   await api("/api/auth/logout", { method: "POST" });
@@ -2822,6 +2838,7 @@ export default function App() {
     retry: false,
   });
   if (location.pathname === "/login") return <Login />;
+  if (location.pathname === "/wechat-bind") return <AntApp><WechatBind /></AntApp>;
   if (principal.isLoading) return <div className="center">正在加载…</div>;
   if (principal.isError) return <Navigate to="/login" replace />;
   if (principal.data!.mustChangePassword) return <AntApp><RequiredPasswordChange /></AntApp>;

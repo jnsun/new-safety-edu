@@ -11,7 +11,7 @@ type CsrfRequest = {
 };
 
 const safeMethods = new Set(["GET", "HEAD", "OPTIONS"]);
-const publicWrites = new Set(["/api/auth/login", "/api/auth/phone/code", "/api/auth/phone/login", "/api/auth/password-recovery/code", "/api/auth/password-recovery/confirm", "/api/auth/recovery-request", "/api/wechat/login"]);
+const publicWrites = new Set(["/api/auth/login", "/api/auth/password-recovery/code", "/api/auth/password-recovery/confirm", "/api/auth/recovery-request", "/api/wechat/login"]);
 const rejected = () => Object.assign(new Error("请求安全校验失败，请刷新页面后重试"), { statusCode: 403, code: "CSRF_REJECTED" });
 
 export function assertCsrfRequest(request: CsrfRequest) {

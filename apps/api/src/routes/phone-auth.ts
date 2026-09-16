@@ -4,16 +4,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
-import { issueSession } from "../auth.js";
 import { normalizePhone } from "../crypto.js";
-import { auditCritical } from "../audit.js";
-import { activatePendingRoles, bindAccountToPerson } from "../identity.js";
 import { assertPasswordAllowed, securityHash, smsRateDecision } from "../auth-security.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 import { changeRequestKey } from "../request-policy.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-type VerificationPurpose = "login" | "change_phone" | "password_recovery";
+export type VerificationPurpose = "wechat_bind" | "wechat_rebind" | "change_phone" | "password_recovery";
 
 const phoneSchema = z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/));
 const digest = (value: string, env: Env) => createHmac("sha256", env.JWT_SECRET).update(value).digest("hex");
@@ -24,7 +21,7 @@ async function deliverCode(phone: string, code: string, purpose: VerificationPur
   if (!response.ok) throw Object.assign(new Error("短信发送暂时失败"), { statusCode: 502, code: "SMS_DELIVERY_FAILED" });
 }
 
-async function sendCode(phone: string, purpose: VerificationPurpose, source: string, env: Env) {
+export async function sendPhoneVerificationCode(phone: string, purpose: VerificationPurpose, source: string, env: Env) {
   const phoneHash = digest(phone, env); const sourceHash = securityHash(source, env.JWT_SECRET); const now = Date.now(); const scope = { OR: [{ phoneHash }, { sourceHash }] };
   const [lastMinute, lastFifteenMinutes, lastDay] = await Promise.all([
     prisma.phoneVerificationCode.count({ where: { ...scope, createdAt: { gt: new Date(now - 60_000) } } }),
@@ -40,7 +37,7 @@ async function sendCode(phone: string, purpose: VerificationPurpose, source: str
   });
 }
 
-async function verifiedCode(phone: string, code: string, purpose: VerificationPurpose, env: Env) {
+export async function verifiedPhoneCode(phone: string, code: string, purpose: VerificationPurpose, env: Env) {
   const phoneHash = digest(phone, env); const row = await prisma.phoneVerificationCode.findFirst({ where: { phoneHash, purpose, consumedAt: null, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" } });
   if (!row || row.attempts >= 5) throw Object.assign(new Error("验证码无效或已过期"), { statusCode: 401, code: "INVALID_SMS_CODE" });
   const expected = Buffer.from(row.codeHash, "hex"); const actual = Buffer.from(digest(`${phone}:${code}`, env), "hex");
@@ -49,7 +46,7 @@ async function verifiedCode(phone: string, code: string, purpose: VerificationPu
 }
 
 export async function registerPhoneAuthRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard }) {
-  app.get("/api/auth/capabilities", async () => ({ data: { phoneLogin: Boolean(deps.env.SMS_SEND_ENDPOINT && deps.env.SMS_SEND_TOKEN), wechatLogin: Boolean(deps.env.WECHAT_APP_ID && deps.env.WECHAT_APP_SECRET) } }));
+  app.get("/api/auth/capabilities", async () => ({ data: { smsVerification: Boolean(deps.env.SMS_SEND_ENDPOINT && deps.env.SMS_SEND_TOKEN), wechatLogin: Boolean(deps.env.WECHAT_APP_ID && deps.env.WECHAT_APP_SECRET) } }));
   app.post("/api/auth/recovery-request", async (request, reply) => {
     const input = z.object({ name: z.string().trim().min(2).max(80), oldPhone: phoneSchema, organizationId: z.string().uuid().optional(), reason: z.string().trim().min(2).max(500) }).parse(request.body); const phoneHash = digest(input.oldPhone, deps.env); const sourceHash = securityHash(request.ip, deps.env.JWT_SECRET);
     const person = await prisma.person.findFirst({ where: { name: input.name, phone: input.oldPhone, ...(input.organizationId ? { organizations: { some: { organizationId: input.organizationId, active: true } } } : {}) }, select: { id: true, account: { select: { id: true } } } });
@@ -58,43 +55,13 @@ export async function registerPhoneAuthRoutes(app: FastifyInstance, deps: { env:
     if (!existing) await prisma.changeRequest.create({ data: { accountId: person?.account?.id ?? null, personId: person?.id ?? null, type: "account_recovery", requestKey, payload: { name: input.name, oldPhoneLast4: input.oldPhone.slice(-4), oldPhoneHash: phoneHash, organizationId: input.organizationId ?? null, reason: input.reason } } }).catch(() => undefined);
     return reply.code(202).send({ data: { accepted: true } });
   });
-  app.post("/api/auth/phone/code", async (request) => {
-    const phone = phoneSchema.parse(z.object({ phone: z.string() }).parse(request.body).phone); await sendCode(phone, "login", request.ip, deps.env);
-    return { data: { sent: true, expiresIn: 300 } };
-  });
-
-  app.post("/api/auth/phone/login", async (request) => {
-    const input = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/) }).parse(request.body); const row = await verifiedCode(input.phone, input.code, "login", deps.env);
-    const people = await prisma.person.findMany({ where: { phone: input.phone, status: "active" }, select: { id: true }, take: 2 });
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.phoneVerificationCode.update({ where: { id: row.id }, data: { consumedAt: new Date() } });
-      const byPhone = await tx.account.findUnique({ where: { verifiedPhone: input.phone } });
-      const byPerson = people.length === 1 ? await tx.account.findUnique({ where: { personId: people[0]!.id } }) : null;
-      if (byPhone?.status !== undefined && byPhone.status !== "active") throw Object.assign(new Error("账号已停用"), { statusCode: 403, code: "ACCOUNT_DISABLED" });
-      if (byPerson?.status !== undefined && !["active", "pending"].includes(byPerson.status)) throw Object.assign(new Error("账号已停用"), { statusCode: 403, code: "ACCOUNT_DISABLED" });
-      if (people.length === 1 && byPhone && byPerson && byPhone.id !== byPerson.id) {
-        const binding = await bindAccountToPerson(tx, { currentAccountId: byPhone.id, personId: people[0]!.id, reason: "手机号登录识别到已有人员账号" });
-        return { accountId: binding.status === "bound" ? binding.accountId : byPhone.id, bindingStatus: binding.status === "bound" ? "bound" as const : "pending_review" as const, ...(binding.status === "pending_merge" ? { requestId: binding.requestId } : {}) };
-      }
-      let account = byPerson ?? byPhone;
-      if (!account) account = await tx.account.create({ data: { verifiedPhone: input.phone, ...(people.length === 1 ? { personId: people[0]!.id } : {}), status: people.length === 1 ? "active" : "pending" } });
-      else account = await tx.account.update({ where: { id: account.id }, data: { verifiedPhone: input.phone, status: people.length === 1 ? "active" : "pending", ...(people.length === 1 ? { personId: people[0]!.id } : {}) } });
-      if (people.length === 1) await activatePendingRoles(tx, { personId: people[0]!.id, accountId: account.id, actorId: account.id });
-      if (people.length === 1) await tx.changeRequest.updateMany({ where: { personId: people[0]!.id, accountId: account.id, type: "account_opening", status: "pending" }, data: { status: "approved", reviewedBy: account.id, reviewedAt: new Date(), reviewNote: "本人通过短信验证激活" } });
-      return { accountId: account.id, bindingStatus: people.length === 1 ? "bound" as const : "unbound" as const };
-    });
-    const requestId = "requestId" in result ? result.requestId : undefined;
-    await auditCritical(result.accountId, "auth.phone_login", "account", result.accountId, requestId ? { mergeRequestId: requestId } : undefined, "var/audit-fallback.ndjson");
-    return { data: { ...(await issueSession(result.accountId, deps.env, { clientKind: "miniprogram", loginMethod: "phone", userAgent: request.headers["user-agent"] })), bindingStatus: result.bindingStatus, ...(requestId ? { requestId } : {}) } };
-  });
-
   app.post("/api/me/phone/code", { preHandler: deps.authenticate }, async (request) => {
-    const phone = phoneSchema.parse(z.object({ phone: z.string() }).parse(request.body).phone); await sendCode(phone, "change_phone", request.ip, deps.env); return { data: { sent: true, expiresIn: 300 } };
+    const phone = phoneSchema.parse(z.object({ phone: z.string() }).parse(request.body).phone); await sendPhoneVerificationCode(phone, "change_phone", request.ip, deps.env); return { data: { sent: true, expiresIn: 300 } };
   });
 
   app.post("/api/me/phone/confirm", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!; if (!principal.personId) throw Object.assign(new Error("账号尚未绑定人员档案"), { statusCode: 409, code: "PERSON_REQUIRED" });
-    const input = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/) }).parse(request.body); const verification = await verifiedCode(input.phone, input.code, "change_phone", deps.env);
+    const input = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/) }).parse(request.body); const verification = await verifiedPhoneCode(input.phone, input.code, "change_phone", deps.env);
     await prisma.$transaction(async (tx) => {
       const conflict = await tx.account.findFirst({ where: { verifiedPhone: input.phone, id: { not: principal.accountId } }, select: { id: true } }); if (conflict) throw Object.assign(new Error("该手机号已被其他账号占用"), { statusCode: 409, code: "PHONE_ALREADY_BOUND" });
       await tx.phoneVerificationCode.update({ where: { id: verification.id }, data: { consumedAt: new Date() } });
@@ -107,11 +74,11 @@ export async function registerPhoneAuthRoutes(app: FastifyInstance, deps: { env:
   });
 
   app.post("/api/auth/password-recovery/code", async (request) => {
-    const phone = phoneSchema.parse(z.object({ phone: z.string() }).parse(request.body).phone); await sendCode(phone, "password_recovery", request.ip, deps.env); return { data: { sent: true, expiresIn: 300 } };
+    const phone = phoneSchema.parse(z.object({ phone: z.string() }).parse(request.body).phone); await sendPhoneVerificationCode(phone, "password_recovery", request.ip, deps.env); return { data: { sent: true, expiresIn: 300 } };
   });
 
   app.post("/api/auth/password-recovery/confirm", async (request, reply) => {
-    const input = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), newPassword: z.string().min(12).max(128) }).parse(request.body); const verification = await verifiedCode(input.phone, input.code, "password_recovery", deps.env);
+    const input = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), newPassword: z.string().min(12).max(128) }).parse(request.body); const verification = await verifiedPhoneCode(input.phone, input.code, "password_recovery", deps.env);
     const account = await prisma.account.findUnique({ where: { verifiedPhone: input.phone }, include: { person: { select: { name: true, phone: true } } } });
     if (!account || account.status !== "active") throw Object.assign(new Error("验证码无效或账号不可用"), { statusCode: 401, code: "RECOVERY_NOT_AVAILABLE" });
     assertPasswordAllowed(input.newPassword, { username: account.usernameNormalized, phone: account.person?.phone ?? account.verifiedPhone, name: account.person?.name ?? null }); const passwordHash = await argon2.hash(input.newPassword);

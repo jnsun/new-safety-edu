@@ -1,5 +1,5 @@
 const api = require('../../utils/api')
-const types = { profile_change: '姓名修改', binding_change: '微信换绑', department_transfer: '调换部门', identity_correction: '身份更正', contractor_unit_change: '外协单位变更', responsible_entity_change: '责任实体变更' }
+const types = { profile_change: '姓名修改', binding_change: '微信换绑（旧申请）', department_transfer: '调换部门', identity_correction: '身份更正', contractor_unit_change: '外协单位变更', responsible_entity_change: '责任实体变更' }
 const statuses = { pending: '待审核', approved: '已通过', rejected: '已驳回', withdrawn: '已撤回', cancelled: '已取消', failed: '处理失败' }
 const personTypes = [{ value: 'employee', label: '正式员工' }, { value: 'contractor', label: '外协人员' }, { value: 'temporary_individual', label: '临时个人' }]
 Page({

@@ -259,7 +259,21 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
   app.get("/api/me/notifications", authenticated, async (request) => { const principal = principalOf(request); if (!principal.personId) forbidden("账号尚未绑定人员档案"); return { data: await prisma.notification.findMany({ where: { personId: principal.personId }, orderBy: { createdAt: "desc" }, take: 100 }) }; });
   app.patch("/api/me/notifications/:id/read", authenticated, async (request) => { const principal = principalOf(request); const { id } = idParam.parse(request.params); if (!principal.personId) forbidden(); const result = await prisma.notification.updateMany({ where: { id, personId: principal.personId }, data: { status: "read" } }); if (!result.count) forbidden(); return { data: { status: "read" } }; });
 
-  app.get("/api/me/change-requests", authenticated, async (request) => { const principal = principalOf(request); const rows = await prisma.changeRequest.findMany({ where: { OR: [{ accountId: principal.accountId }, ...(principal.personId ? [{ personId: principal.personId }] : [])] }, select: { id: true, type: true, status: true, reviewNote: true, reviewedAt: true, createdAt: true }, orderBy: { createdAt: "desc" } }); return { data: rows.map((row) => ({ ...row, availableActions: row.status === "pending" ? ["withdraw"] : [] })) }; });
+  app.get("/api/me/change-requests", authenticated, async (request) => {
+    const principal = principalOf(request);
+    const rows = await prisma.changeRequest.findMany({
+      where: { OR: [{ accountId: principal.accountId }, ...(principal.personId ? [{ personId: principal.personId }] : [])] },
+      select: { id: true, type: true, status: true, payload: true, reviewNote: true, reviewedAt: true, createdAt: true },
+      orderBy: { createdAt: "desc" }
+    });
+    return { data: rows.map(({ payload, ...row }) => ({
+      ...row,
+      reviewStage: row.type === "binding" && row.status === "pending"
+        ? (payload as Record<string, unknown>).escalatedToCompany === true ? "company_review" : "organization_review"
+        : row.status,
+      availableActions: row.status === "pending" ? ["withdraw"] : []
+    })) };
+  });
   app.post("/api/me/change-requests/:id/withdraw", authenticated, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body);
     const row = await prisma.changeRequest.findFirst({ where: { id, OR: [{ accountId: principal.accountId }, ...(principal.personId ? [{ personId: principal.personId }] : [])] }, select: { id: true, type: true } });
@@ -274,6 +288,7 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request); if (!principal.personId) forbidden("账号尚未绑定人员档案");
     const input = z.object({ type: z.enum(["profile_change", "binding_change", "identity_correction", "contractor_unit_change", "responsible_entity_change"]), name: z.string().trim().min(2).max(80).optional(), phone: z.string().regex(/^1\d{10}$/).optional(), newPersonType: z.enum(["employee", "contractor", "temporary_individual"]).optional(), organizationId: z.string().uuid().optional(), contractorOrganizationId: z.string().uuid().optional(), attachmentIds: z.array(z.string().uuid()).max(10).default([]), reason: z.string().trim().min(2).max(500) }).parse(request.body);
     if (input.phone) throw Object.assign(new Error("修改手机号必须先完成短信验证"), { statusCode: 409, code: "SMS_VERIFICATION_REQUIRED" });
+    if (input.type === "binding_change") throw Object.assign(new Error("微信换绑必须由新微信登录并完成手机号短信验证"), { statusCode: 409, code: "WECHAT_REBIND_VERIFICATION_REQUIRED" });
     if (input.type === "profile_change" && !input.name) throw Object.assign(new Error("请填写需要修改的姓名"), { statusCode: 400, code: "CHANGE_REQUIRED" });
     const person = await prisma.person.findUniqueOrThrow({ where: { id: principal.personId }, select: { type: true, status: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organizationId: true } } } });
     if (["identity_correction", "contractor_unit_change", "responsible_entity_change"].includes(input.type)) {
@@ -292,7 +307,7 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
       const files = await prisma.privateFile.findMany({ where: { id: { in: input.attachmentIds } }, select: { id: true, uploadedBy: true, kind: true } });
       assertOwnedFiles(files, input.attachmentIds, principal.accountId, "attachment");
     }
-    const targetKey = input.type === "profile_change" ? input.name ?? "" : input.type === "binding_change" ? "wechat" : [input.newPersonType, input.organizationId, input.contractorOrganizationId].filter(Boolean).join(":");
+    const targetKey = input.type === "profile_change" ? input.name ?? "" : [input.newPersonType, input.organizationId, input.contractorOrganizationId].filter(Boolean).join(":");
     const requestKey = changeRequestKey(input.type, principal.personId, targetKey);
     const existing = await prisma.changeRequest.findFirst({ where: { type: input.type, status: "pending", requestKey } });
     if (existing) return { data: { id: existing.id, status: existing.status } };
@@ -300,7 +315,7 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
       const { attachmentIds, ...safePayload } = input;
       const created = await tx.changeRequest.create({ data: { accountId: principal.accountId, personId: principal.personId, type: input.type, requestKey, payload: safePayload, beforeSummary: { personType: person.type }, attachments: { create: attachmentIds.map((fileId) => ({ fileId })) } } });
       await writeCriticalAudit(tx, { actorId: principal.accountId, action: "change_request.create", objectType: "change_request", objectId: created.id, requestId: created.id, reason: input.reason, metadata: { type: input.type } });
-      const reviewerWhere: Prisma.RoleAssignmentWhereInput = input.type === "identity_correction" || input.type === "binding_change"
+      const reviewerWhere: Prisma.RoleAssignmentWhereInput = input.type === "identity_correction"
         ? { role: "company_admin", scopeType: "company", active: true }
         : input.type === "responsible_entity_change" && input.organizationId
           ? { role: "org_leader", scopeType: "organization", scopeId: input.organizationId, active: true }
@@ -324,7 +339,7 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
     return reply.code(201).send({ data: { id: row.id, status: row.status } });
   });
 
-  app.get("/api/management/requests", manager, async (request) => { const principal = principalOf(request); const rows = await visibleRequests(principal); const ids = [...new Set(rows.map(transferTarget).filter((id): id is string => !!id))]; const organizations = new Map((await prisma.organization.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(({ id, name }) => [id, name])); return { data: rows.map((row) => safeRequest(row, organizations, principal)) }; });
+  app.get("/api/management/requests", manager, async (request) => { const principal = principalOf(request); const rows = (await visibleRequests(principal)).filter((row) => row.type !== "binding"); const ids = [...new Set(rows.map(transferTarget).filter((id): id is string => !!id))]; const organizations = new Map((await prisma.organization.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(({ id, name }) => [id, name])); return { data: rows.map((row) => safeRequest(row, organizations, principal)) }; });
   app.get("/api/management/requests/:id", manager, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden();
     const ids = [transferTarget(row)].filter((value): value is string => !!value); const organizations = new Map((await prisma.organization.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(({ id, name }) => [id, name]));
@@ -343,6 +358,7 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
   app.post("/api/management/requests/:id/reject", manager, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const { note } = z.object({ note: z.string().trim().min(2).max(500) }).parse(request.body);
     const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden();
+    if (row.type === "binding") throw Object.assign(new Error("身份绑定申请请使用专用审核操作"), { statusCode: 409, code: "IDENTITY_REVIEW_REQUIRED" });
     if (["account_merge", "person_merge", "identity_correction", "account_recovery"].includes(row.type)) { if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以处理该申请"); await verifySensitiveToken(request, deps.env); }
     if (row.type === "department_transfer") { const target = transferTarget(row); if (!target || !await canLeadOrganization(principal, target)) forbidden("仅目标部门负责人可审批调换部门申请"); }
     await prisma.$transaction(async (tx) => {
@@ -352,6 +368,7 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
     return { data: { status: "rejected" } };
   });
   app.post("/api/management/requests/:id/approve", manager, async (request) => { const principal = principalOf(request); const { id } = idParam.parse(request.params); const { note } = z.object({ note: z.string().trim().max(500).default("") }).parse(request.body); const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden(); if (row.status !== "pending" || !["profile_change", "binding_change", "department_transfer", "account_merge", "person_merge", "project_exit", "cross_entity_project_admin", "person_reactivation", "identity_correction", "contractor_unit_change", "responsible_entity_change", "account_recovery"].includes(row.type)) throw Object.assign(new Error("该申请请使用对应的专用审核操作"), { statusCode: 409, code: "SPECIAL_APPROVAL_REQUIRED" }); const payload = row.payload as Record<string, unknown>;
+    if (row.type === "binding_change") throw Object.assign(new Error("旧微信换绑申请不能直接批准，请申请人使用新微信完成手机号验证"), { statusCode: 409, code: "WECHAT_REBIND_VERIFICATION_REQUIRED" });
     if (row.type === "account_merge") {
       if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以确认账号合并");
       await verifySensitiveToken(request, deps.env);
@@ -495,7 +512,6 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
       await prisma.$transaction(async (tx) => {
         await claimPendingRequest(tx, id, { status: "approved", reviewedBy: principal.accountId, reviewNote: note });
         if (row.type === "profile_change" && row.personId) { if (typeof payload.phone === "string") throw Object.assign(new Error("手机号尚未完成短信验证，不能审批变更"), { statusCode: 409, code: "SMS_VERIFICATION_REQUIRED" }); const update: { name?: string } = {}; if (typeof payload.name === "string") update.name = payload.name; if (Object.keys(update).length) await tx.person.update({ where: { id: row.personId }, data: update }); }
-        if (row.type === "binding_change" && row.accountId) { await tx.wechatBinding.updateMany({ where: { accountId: row.accountId, active: true }, data: { active: false } }); await tx.account.update({ where: { id: row.accountId }, data: { sessionVersion: { increment: 1 } } }); await tx.refreshSession.updateMany({ where: { accountId: row.accountId, revokedAt: null }, data: { revokedAt: new Date() } }); }
         await writeCriticalAudit(tx, { actorId: principal.accountId, action: "change_request.approve", objectType: "change_request", objectId: id, requestId: id, reason: note || null, metadata: { type: row.type } });
       });
     }
@@ -529,5 +545,6 @@ function safeRequest(row: Awaited<ReturnType<typeof visibleRequests>>[number], o
   const payload = row.payload as Record<string, unknown>; const phone = typeof payload.phone === "string" ? `${payload.phone.slice(0, 3)}****${payload.phone.slice(-4)}` : undefined;
   const organizationId = typeof payload.organizationId === "string" ? payload.organizationId : undefined;
   const isAdmin = !!principal && isCompanyAdmin(principal); const canReview = !!principal;
-  return { id: row.id, type: row.type, status: row.status, personId: row.personId, projectId: row.projectId, applicant: row.person?.name ?? (typeof payload.name === "string" ? payload.name : "待匹配账号"), summary: { ...(phone ? { phone } : {}), ...(typeof payload.name === "string" ? { name: payload.name } : {}), ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}), ...(typeof payload.type === "string" ? { personType: payload.type } : {}), ...(organizationId ? { targetOrganization: organizations.get(organizationId) ?? organizationId } : {}), matchCount: payload.matchCount }, reviewedBy: row.reviewedBy, reviewedAt: row.reviewedAt, reviewNote: row.reviewNote, createdAt: row.createdAt, availableActions: principal ? allowedRequestActions({ status: row.status, isApplicant: row.accountId === principal.accountId || (!!principal.personId && row.personId === principal.personId), isCreator: row.accountId === principal.accountId, canReview, isCompanyAdmin: isAdmin }) : [] };
+  const actions = principal ? allowedRequestActions({ status: row.status, isApplicant: row.accountId === principal.accountId || (!!principal.personId && row.personId === principal.personId), isCreator: row.accountId === principal.accountId, canReview, isCompanyAdmin: isAdmin }) : [];
+  return { id: row.id, type: row.type, status: row.status, personId: row.personId, projectId: row.projectId, applicant: row.person?.name ?? (typeof payload.name === "string" ? payload.name : "待匹配账号"), summary: { ...(phone ? { phone } : {}), ...(typeof payload.name === "string" ? { name: payload.name } : {}), ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}), ...(typeof payload.type === "string" ? { personType: payload.type } : {}), ...(organizationId ? { targetOrganization: organizations.get(organizationId) ?? organizationId } : {}), matchCount: payload.matchCount }, reviewedBy: row.reviewedBy, reviewedAt: row.reviewedAt, reviewNote: row.reviewNote, createdAt: row.createdAt, availableActions: row.type === "binding_change" ? actions.filter((action) => action !== "approve") : actions };
 }

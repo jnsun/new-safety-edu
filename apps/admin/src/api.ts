@@ -13,7 +13,7 @@ async function csrfToken() {
 
 export async function api<T>(path: string, init?: RequestInit, refreshed = false): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase(); const unsafe = !["GET", "HEAD", "OPTIONS"].includes(method); const token = unsafe && !new Headers(init?.headers).has("authorization") ? await csrfToken() : undefined;
-  const response = await fetch(path, { credentials: "include", ...init, headers: { ...(init?.body !== undefined && !(init.body instanceof FormData) ? { "content-type": "application/json" } : {}), ...(token ? { "x-csrf-token": token } : {}), ...init?.headers } });
+  const response = await fetch(path, { credentials: "include", ...init, headers: { ...(unsafe && !(init?.body instanceof FormData) ? { "content-type": "application/json" } : {}), ...(token ? { "x-csrf-token": token } : {}), ...init?.headers } });
   if (response.status === 401 && !refreshed && !["/api/auth/login", "/api/auth/refresh"].includes(path)) {
     const refreshToken = await csrfToken(); const refresh = await fetch("/api/auth/refresh", { method: "POST", credentials: "include", headers: { "content-type": "application/json", ...(refreshToken ? { "x-csrf-token": refreshToken } : {}) }, body: "{}" });
     if (refresh.ok) return api<T>(path, init, true);

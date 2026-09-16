@@ -329,7 +329,8 @@ model WechatBinding {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
-  @@unique([appId, openid])
+  @@index([appId, openid, active])
+  @@index([unionid, active])
   @@map("wechat_bindings")
 }
 
