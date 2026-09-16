@@ -26,6 +26,24 @@ export type ReceivablesQueryOperation =
   | { type: "ledger.detail"; id: string }
   | { type: "dashboard"; input: ReceivablesFiltersInput };
 
+export const receivablesColumnIds = [
+  "financeDepartmentName", "contractNo", "projectName", "customerName", "creditorUnit", "debtStatus", "finalAmount",
+  "invoicedAmount", "receivedAmount", "internalReceivable", "externalReceivable", "balance", "writeoffAmount",
+  "collectionOwner", "openingChargeDate", "anomaly", "updatedAt",
+] as const;
+export type ReceivablesColumnId = typeof receivablesColumnIds[number];
+export type ReceivablesColumnPreference = {
+  order: ReceivablesColumnId[];
+  visible: ReceivablesColumnId[];
+  frozen: ReceivablesColumnId[];
+};
+export const defaultReceivablesColumnPreference: ReceivablesColumnPreference = {
+  order: [...receivablesColumnIds],
+  visible: [...receivablesColumnIds],
+  frozen: ["financeDepartmentName", "contractNo"],
+};
+const receivablesColumnPreferenceKey = "receivables.columns.v1";
+
 export type NormalizedReceivablesFilters = {
   financeDepartmentId: string | null;
   status: "active" | "voided" | "all";
@@ -366,6 +384,29 @@ export async function queryReceivables(principal: Principal, operation: Receivab
     if (operation.type === "dashboard") return dashboard(tx, scope);
     return ledgerDetail(tx, access, scope, operation.id);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+export async function getReceivablesColumnPreference(principal: Principal): Promise<ReceivablesColumnPreference> {
+  return prisma.$transaction(async (tx) => {
+    requireReceivables(await resolveReceivablesAccess(principal, tx), "enter");
+    const row = await tx.userPreference.findUnique({
+      where: { accountId_key: { accountId: principal.accountId, key: receivablesColumnPreferenceKey } },
+      select: { value: true },
+    });
+    return row ? row.value as ReceivablesColumnPreference : defaultReceivablesColumnPreference;
+  });
+}
+
+export async function saveReceivablesColumnPreference(principal: Principal, value: ReceivablesColumnPreference): Promise<ReceivablesColumnPreference> {
+  return prisma.$transaction(async (tx) => {
+    requireReceivables(await resolveReceivablesAccess(principal, tx), "enter");
+    await tx.userPreference.upsert({
+      where: { accountId_key: { accountId: principal.accountId, key: receivablesColumnPreferenceKey } },
+      create: { accountId: principal.accountId, key: receivablesColumnPreferenceKey, value },
+      update: { value },
+    });
+    return value;
+  });
 }
 
 export async function createReceivablesExportSnapshotInTransaction(tx: QueryTx, principal: Principal, input: ReceivablesFiltersInput) {

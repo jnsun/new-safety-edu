@@ -193,6 +193,8 @@ try {
   ids.financeDepartments.push(departmentA.id);
   const departmentB = await prisma.receivableDepartment.create({ data: { name: `${marker}-finance-b` } });
   ids.financeDepartments.push(departmentB.id);
+  const inactiveDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-finance-inactive`, active: false } });
+  ids.financeDepartments.push(inactiveDepartment.id);
 
   const companyAdmin = await createIdentity({ label: "company-admin", role: "company_admin", scopeType: "company" });
   const owner = await createIdentity({ label: "owner", role: "org_leader", scopeType: "organization", scopeId: financeOrganization.id });
@@ -201,6 +203,7 @@ try {
   const reporterA = await createIdentity({ label: "reporter-a" });
   const reporterB = await createIdentity({ label: "reporter-b" });
   const viewer = await createIdentity({ label: "viewer" });
+  const inactiveDepartmentViewer = await createIdentity({ label: "inactive-department-viewer" });
   const ordinary = await createIdentity({ label: "ordinary" });
   const pending = await createIdentity({ label: "pending", accountStatus: "pending" });
   const disabled = await createIdentity({ label: "disabled", accountStatus: "disabled" });
@@ -210,11 +213,12 @@ try {
   const reporterAGrant = await grant({ accountId: reporterA.id, grantedBy: companyAdmin.id, role: "reporter", canCreate: true, departments: [{ id: departmentA.id, canRead: true, canWrite: true }] });
   await grant({ accountId: reporterB.id, grantedBy: companyAdmin.id, role: "reporter", departments: [{ id: departmentB.id, canRead: true, canWrite: false }] });
   await grant({ accountId: viewer.id, grantedBy: companyAdmin.id, role: "readonly", canExport: true, departments: [{ id: departmentA.id, canRead: true, canWrite: false }] });
+  await grant({ accountId: inactiveDepartmentViewer.id, grantedBy: companyAdmin.id, role: "readonly", departments: [{ id: inactiveDepartment.id, canRead: true, canWrite: false }] });
   await grant({ accountId: pending.id, grantedBy: companyAdmin.id, role: "admin" });
   await grant({ accountId: disabled.id, grantedBy: companyAdmin.id, role: "admin" });
   await grant({ accountId: inactivePerson.id, grantedBy: companyAdmin.id, role: "admin" });
 
-  const tokens = Object.fromEntries(await Promise.all(Object.entries({ companyAdmin, owner, replacementOwner, financeAdmin, reporterA, reporterB, viewer, ordinary, pending, disabled, inactivePerson })
+  const tokens = Object.fromEntries(await Promise.all(Object.entries({ companyAdmin, owner, replacementOwner, financeAdmin, reporterA, reporterB, viewer, inactiveDepartmentViewer, ordinary, pending, disabled, inactivePerson })
     .map(async ([key, account]) => [key, await token(account.id)]))) as Record<string, string>;
 
   await startServer();
@@ -271,6 +275,12 @@ try {
   assert.equal(readyViewer.body.data?.canWriteLedger, false);
   assert.equal(readyViewer.body.data?.canExport, true);
   assert.deepEqual(readyViewer.body.data?.readDepartmentIds, [departmentA.id]);
+  const inactiveScoped = await access(tokens.inactiveDepartmentViewer!);
+  assert.equal(inactiveScoped.body.data?.canEnter, false);
+  assert.equal(inactiveScoped.body.data?.canReadLedger, false);
+  assert.deepEqual(inactiveScoped.body.data?.readDepartmentIds, []);
+  assert.deepEqual(inactiveScoped.body.data?.writeDepartmentIds, []);
+  assert.equal((await request("/api/receivables/_smoke/protected", tokens.inactiveDepartmentViewer!)).status, 403);
   assert.equal((await access(tokens.companyAdmin!)).body.data?.canReadLedger, false);
 
   await prisma.receivableAccessGrant.update({ where: { id: reporterAGrant.id }, data: { active: false, revokedAt: new Date(), revokedBy: companyAdmin.id, revokeReason: "smoke revocation" } });

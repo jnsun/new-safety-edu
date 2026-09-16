@@ -36,6 +36,7 @@ type Row = { id: string; financeDepartmentId: string; contractNo: string; status
 type Facet = { value: string | null; count: number };
 type ListResponse = { rows: Row[]; page: number; pageSize: number; total: number; facets: { departments: Array<Facet & { name: string }>; debtStatuses: Facet[]; creditorUnits: Facet[]; statuses: Facet[]; anomalies: Facet[] }; totals: Amounts };
 type DashboardResponse = { amounts: Amounts; statuses: Facet[]; anomalies: Facet[] };
+type ColumnPreference = { order: string[]; visible: string[]; frozen: string[] };
 type DetailResponse = {
   ledger: Row & { writeoffAmount: string };
   invoices: Array<{ id: string; status: "active" | "voided"; amount: string }>;
@@ -112,8 +113,11 @@ async function bearer(accountId: string) {
   return new SignJWT({ ver: account.sessionVersion, sid: session.id }).setProtectedHeader({ alg: "HS256" }).setSubject(accountId).setIssuedAt().setExpirationTime("15m").sign(new TextEncoder().encode(jwtSecret));
 }
 
-async function request<T>(path: string, token: string) {
-  const response = await fetch(`${baseUrl}${path}`, { headers: { authorization: `Bearer ${token}` } });
+async function request<T>(path: string, token: string, init: RequestInit = {}) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...init,
+    headers: { authorization: `Bearer ${token}`, ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers },
+  });
   return { response, body: await response.json() as JsonResponse<T> };
 }
 
@@ -153,6 +157,7 @@ async function stopServer() {
 }
 
 async function cleanup() {
+  await prisma.userPreference.deleteMany({ where: { accountId: { in: ids.accounts } } });
   await prisma.receivableAttachment.deleteMany({ where: { id: { in: ids.attachments } } });
   await prisma.privateFile.deleteMany({ where: { id: { in: ids.files } } });
   await prisma.receivableInvoice.deleteMany({ where: { id: { in: ids.invoices } } });
@@ -212,6 +217,30 @@ try {
 
   const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterB, readonlyScoped, readonlyAll, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
   await startServer();
+
+  const preferencePath = "/api/receivables/preferences/columns";
+  const columnOrder = [
+    "financeDepartmentName", "contractNo", "projectName", "customerName", "creditorUnit", "debtStatus", "finalAmount",
+    "invoicedAmount", "receivedAmount", "internalReceivable", "externalReceivable", "balance", "writeoffAmount",
+    "collectionOwner", "openingChargeDate", "anomaly", "updatedAt",
+  ];
+  const ownerPreference: ColumnPreference = { order: columnOrder, visible: columnOrder.slice(0, -1), frozen: ["financeDepartmentName", "contractNo"] };
+  await expectStatus(preferencePath, tokens.companyAdmin!, 403);
+  assert.equal((await request(preferencePath, tokens.companyAdmin!, { method: "PUT", body: JSON.stringify(ownerPreference) })).response.status, 403);
+  assert.equal((await request(preferencePath, tokens.owner!, { method: "PUT", body: JSON.stringify(ownerPreference) })).response.status, 200);
+  assert.deepEqual((await expectStatus<ColumnPreference>(preferencePath, tokens.owner!, 200)).data, ownerPreference);
+  assert.notDeepEqual((await expectStatus<ColumnPreference>(preferencePath, tokens.reporterA!, 200)).data, ownerPreference, "preferences must be isolated by account");
+  const reporterPreference: ColumnPreference = { ...ownerPreference, visible: columnOrder.slice(0, -2), frozen: ["contractNo"] };
+  assert.equal((await request(preferencePath, tokens.reporterA!, { method: "PUT", body: JSON.stringify(reporterPreference) })).response.status, 200);
+  assert.deepEqual((await expectStatus<ColumnPreference>(preferencePath, tokens.reporterA!, 200)).data, reporterPreference);
+  assert.deepEqual((await expectStatus<ColumnPreference>(preferencePath, tokens.owner!, 200)).data, ownerPreference, "one account must not overwrite another account's preference");
+  for (const invalid of [
+    { ...ownerPreference, order: [...columnOrder, "notAColumn"] },
+    { ...ownerPreference, frozen: ["updatedAt"], visible: columnOrder.slice(0, -1) },
+    { ...ownerPreference, extra: true },
+  ]) {
+    assert.equal((await request(preferencePath, tokens.owner!, { method: "PUT", body: JSON.stringify(invalid) })).response.status, 400);
+  }
 
   const listA = (await expectStatus<ListResponse>("/api/receivables/ledgers?page=1&pageSize=50", tokens.reporterA!, 200)).data!;
   assert.equal(listA.total, 5, "default list must include only active unsettled ledgers in active scoped departments");
@@ -337,6 +366,7 @@ try {
   assert.equal(await prisma.receivableLedgerRevision.count({ where: { id: { in: ids.revisions } } }), 0);
   assert.equal(await prisma.receivableLedger.count({ where: { id: { in: ids.ledgers } } }), 0);
   assert.equal(await prisma.receivableSetting.count({ where: { financeOrganizationId: { in: ids.organizations } } }), 0);
+  assert.equal(await prisma.userPreference.count({ where: { accountId: { in: ids.accounts } } }), 0);
   assert.equal(await prisma.receivableAccessGrant.count({ where: { id: { in: ids.grants } } }), 0);
   assert.equal(await prisma.receivableDepartment.count({ where: { id: { in: ids.departments } } }), 0);
   assert.equal(await prisma.refreshSession.count({ where: { id: { in: ids.sessions } } }), 0);

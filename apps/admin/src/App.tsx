@@ -41,6 +41,7 @@ import {
   CalendarOutlined,
   WechatOutlined,
   SearchOutlined,
+  AccountBookOutlined,
 } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
@@ -52,6 +53,8 @@ import {
   MonthlyReportsPage,
   QualificationsPage,
 } from "./SafetyManagementPages";
+import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
+import { receivablesPortalMode, type ReceivablesAccess } from "./receivables-types";
 
 type Principal = {
   accountId: string;
@@ -189,7 +192,7 @@ const trainingMenuItems: NonNullable<MenuProps["items"]> = [
   ["/reports", "报表与设置", <SettingOutlined />],
 ].map(([key, label, icon]) => ({ key: key as string, label, icon }));
 
-const moduleMenuItems = (pathname: string): NonNullable<MenuProps["items"]> =>
+const moduleMenuItems = (pathname: string, receivablesAccess?: ReceivablesAccess): NonNullable<MenuProps["items"]> =>
   pathname === "/"
     ? [{ key: "/", label: "首页", icon: <DashboardOutlined /> }]
     : pathname.startsWith("/monthly-reports")
@@ -210,7 +213,15 @@ const moduleMenuItems = (pathname: string): NonNullable<MenuProps["items"]> =>
               icon: <SafetyCertificateOutlined />,
             },
           ]
-        : trainingMenuItems;
+        : pathname.startsWith("/receivables")
+          ? [
+              { key: "/", label: "返回平台首页", icon: <DashboardOutlined /> },
+              ...(receivablesAccess?.canEnter && receivablesAccess.canReadLedger ? [
+                { key: "/receivables", label: "应收账款看板", icon: <DashboardOutlined /> },
+                { key: "/receivables/ledger", label: "应收账款台账", icon: <AccountBookOutlined /> },
+              ] : []),
+            ]
+          : trainingMenuItems;
 
 function Login() {
   const navigate = useNavigate();
@@ -2579,17 +2590,19 @@ const platformModules = [
     icon: <ScheduleOutlined />,
     tone: "teal",
   },
-  {
-    title: "事故事件管理",
-    description: "事故、未遂事件和调查记录",
-    path: null,
-    icon: <SettingOutlined />,
-    tone: "slate",
-  },
 ] as const;
 
 function PlatformPortal() {
   const navigate = useNavigate();
+  const access = useReceivablesAccess();
+  const portalMode = access.data ? receivablesPortalMode(access.data) : "hidden";
+  const modules = portalMode === "hidden" ? platformModules : [...platformModules, {
+    title: "应收账款管理",
+    description: "合同应收、开票回款与催收台账",
+    path: portalMode === "enabled" ? "/receivables" : null,
+    icon: <AccountBookOutlined />,
+    tone: "slate",
+  } as const];
   return (
     <>
       <div className="portal-heading">
@@ -2602,11 +2615,12 @@ function PlatformPortal() {
         </Typography.Paragraph>
       </div>
       <div className="module-grid">
-        {platformModules.map((item) => (
+        {modules.map((item) => (
           <button
             type="button"
             className={`module-card module-${item.tone}${item.path ? "" : " module-planned"}`}
             key={item.title}
+            disabled={item.title === "应收账款管理" && portalMode === "recover"}
             onClick={() =>
               item.path
                 ? navigate(item.path)
@@ -2617,7 +2631,7 @@ function PlatformPortal() {
             <span className="module-title">{item.title}</span>
             <span className="module-description">{item.description}</span>
             <span className="module-enter">
-              {item.path ? "进入模块 ›" : "待规划"}
+              {item.path ? "进入模块 ›" : item.title === "应收账款管理" ? "待配置" : "待规划"}
             </span>
           </button>
         ))}
@@ -2630,15 +2644,17 @@ function Shell({ principal }: { principal: Principal }) {
   const navigate = useNavigate();
   const location = useLocation();
   const wechatWeb = useQuery({ queryKey: ["wechat-web-config"], queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config") });
+  const inReceivables = location.pathname.startsWith("/receivables");
+  const receivablesAccess = useReceivablesAccess(inReceivables);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(
     () =>
-      location.pathname === "/" ? "/" : `/${location.pathname.split("/")[1]}`,
-    [location.pathname],
+      location.pathname === "/" ? "/" : inReceivables ? location.pathname === "/receivables/ledger" ? "/receivables/ledger" : "/receivables" : `/${location.pathname.split("/")[1]}`,
+    [inReceivables, location.pathname],
   );
   const sidebarItems = useMemo(
-    () => moduleMenuItems(location.pathname),
-    [location.pathname],
+    () => moduleMenuItems(location.pathname, receivablesAccess.data),
+    [location.pathname, receivablesAccess.data],
   );
   const workspaceTitle =
     location.pathname === "/"
@@ -2647,7 +2663,9 @@ function Shell({ principal }: { principal: Principal }) {
         ? "野外项目报送"
         : location.pathname.startsWith("/qualifications")
           ? "资质证照管理"
-          : "培训教育";
+          : inReceivables
+            ? "应收账款管理"
+            : "培训教育";
   return (
     <>
       <Layout className="app-shell">
@@ -2674,11 +2692,11 @@ function Shell({ principal }: { principal: Principal }) {
           <Layout.Header className="topbar">
             <span className="topbar-title">{workspaceTitle}</span>
             <Space>
-              <Tag>
+              {!inReceivables && <Tag>
                 {principal.roles
                   .map((r) => labels[r.role] ?? r.role)
                   .join(" / ") || "无角色"}
-              </Tag>
+              </Tag>}
               <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
               {wechatWeb.data?.enabled && <Button icon={<WechatOutlined />} href="/api/auth/wechat-web/bind/start">绑定网页登录微信</Button>}
               <Button
@@ -2719,6 +2737,7 @@ function Shell({ principal }: { principal: Principal }) {
                   />
                 }
               />
+              <Route path="/receivables/*" element={<ReceivablesPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Layout.Content>
