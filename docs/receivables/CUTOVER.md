@@ -1,18 +1,19 @@
 # 应收账款原生集成切换操作手册
 
-本手册是一条有序、单次切换路径。它不授权生产变更；只有变更负责人确认正式 FINAL、浏览器验收、备份恢复演练和变更窗口均已通过后方可执行。全程不得双写新旧系统，也不得把密码、token、个人数据、主机秘密或生产 ID 记录到本文或操作日志。
+本手册是一条有序、单次切换路径。2026-09-16 的书面批准允许已验收候选进入本手册，但不表示部署或流量切换已经完成；备份恢复演练、变更窗口、Windows uploads ACL 和每一步停止条件仍须现场确认。全程不得双写新旧系统，也不得把密码、token、个人数据、主机秘密或生产 ID 记录到本文或操作日志。
 
 ## 当前准入状态（2026-09-16）
 
-状态：`PARTIAL / CUTOVER NOT AUTHORIZED`
+状态：`FINAL PASS / APPROVED FOR LOCAL MERGE / CUTOVER RUNBOOK AUTHORIZED`
 
-- 有序 FINAL 前 11 个门依次通过；`smoke:receivables-money` 因测试 wrapper 删除 `receivable_settings` baseline 行而首次失败并停止。恢复精确 baseline `1|||` 后只从该失败点继续，随后 money、attachments、import、export、正式规模 capacity 和 E2E 通过。不得描述为整套无中断一次通过。
-- 正式规模 capacity 完成 50,000 台账、500,000 明细，生产真实 SQL 四个目标索引命中，导出 50,000 行且 `cleanup=zero-residual`。E2E 完成七会话、5 条台账、5 行导出、22 类关键审计且零残留。
-- 真实浏览器角色边界与 390×844 无页面级横向溢出通过；Windows 附件 mode 为 `NOT_PROVABLE`。
-- 验收宿主为 Node.js 24.19.0、PostgreSQL 17.11，尚未在目标 Node.js 22.x、PostgreSQL 16.x 复验。
-- 最终复审的 targeted RED/GREEN 已关闭四项缺口：待确认 owner 私有文件 fail closed、停用归属保留历史读写但禁止新归属、非工作量结算显式空决算按合同金额带入、view-all 跨归属详情能力只读。生产 list/count/dashboard/export SQL builders 未改变，因此本轮未重跑正式 50,000/500,000 capacity；这也不构成新的完整有序 FINAL。
-- FixRound2 又验证：表单 PATCH 重复提交原停用归属可继续更正历史，迁入停用归属仍拒绝；导入可更新同一停用归属的既有合同，但不可新建或改迁；非工作量结算若合同金额和决算金额同时显式为空则创建/更新 fail closed，仅工作量结算例外。本轮 ledger/import checks、真实 HTTP smokes、typecheck/build 与隔离 E2E 通过，仍不改变 `PARTIAL` 或切换禁令。
-- 因上述首败续跑、Windows 附件 mode 和目标运行时漂移，当前证据不满足本手册第 1、2 步准入条件；不得执行生产切换、重定向、部署或回退演练。
+- 验收提交 `ae237bc579e5d327e52d6d4c366614d2c2cfbb37` 在 Node.js 22.23.2、PostgreSQL 16.15 和三个重新创建的空隔离数据库上完成第二次完整连续 FINAL，输出 `TARGET_FINAL_RESULT=PASS`；没有失败后续跑、跳过或缩小规模。
+- 三库迁移成功；主库种子连续两次保持 30 个财务归属部门和 82 个字典项，E2E 专库也执行相同生产种子。
+- 正式容量完成 50,000 台账、500,000 明细、250 页，生产 SQL 四个目标索引命中，导出 50,000 行且 `cleanup=zero-residual`。完整 E2E 完成七会话、5 条台账、5 行导出、22 条审计且零残留。
+- schema、全仓 typecheck/build、小程序生产检查、receivables 检查及全部功能 smoke 均在同一连续运行中通过；主库 baseline 为 `1|||`，E2E marker 为 `0|0|0`。
+- 真实浏览器七角色边界与 390×844 无页面级横向溢出已有同一候选的新鲜验收证据；最终整分支复审为 `APPROVED FOR BRANCH HANDOFF`，无 Critical/Important。
+- 第一次目标运行在最后 E2E 门失败，根因是专库漏执行生产字典种子；失败证据保留。用户明确批准第二次完整 FINAL 后，三个数据库被重新创建为空库，修正运行簿才得到上述完整 PASS。
+- Windows 附件 smoke 仍报告 `NOT_PROVABLE_ON_WINDOWS`，因为 NTFS 不提供 POSIX `0600` 语义。应用层私有文件授权、哈希、读取审计和跨部门拒绝已通过；实际开放流量前必须验证 uploads NTFS ACL 仅授予服务账号、Administrators 和 SYSTEM，否则停止切换。
+- 本批准允许本地合并并进入第 3 步备份、第 4 步不可变部署及后续受控切换；它不表示生产部署、旧入口重定向或流量切换已经完成。
 
 ## 操作原则
 

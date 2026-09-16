@@ -2,7 +2,7 @@
 
 日期：2026-09-15
 
-状态：`PARTIAL`（有序 FINAL 首次在金额 smoke 停止，修复测试基线后仅从失败点续跑；浏览器角色边界与窄屏布局通过，但 Windows 附件模式和目标运行时仍待证明）
+状态：`FINAL PASS / APPROVED FOR MERGE`（2026-09-16 在 Node.js 22.23.2、PostgreSQL 16.15、三个全新隔离数据库上完成第二次完整连续 FINAL；生产切换仍须逐项执行切换手册）
 
 ## 1. 目标
 
@@ -160,4 +160,15 @@
 - 本轮未重跑正式 50,000/500,000 capacity：生产 list row/count、dashboard totals、export batch 的 SQL builders 未改变，仅删除查询范围对停用部门的二次过滤。该轮是复审后的 targeted 验证，不构成一套新的无中断 FINAL。
 - FixRound2 继续关闭停用归属的历史分支：普通 PATCH 携带未变化的停用 `financeDepartmentId` 时，负责人和财务管理员仍可更正其他历史字段；仅将台账迁入停用归属继续返回冲突。导入按合同号命中且目标台账本就属于同一停用归属时允许历史字段更新，新建或改迁至停用归属仍为阻断错误。
 - 非工作量结算同时显式提交空合同金额和空决算金额时，创建与更新均以 `RECEIVABLES_FINAL_AMOUNT_REQUIRED` fail closed；仅工作量结算允许两者为空，非空合同金额自动带入决算金额的既有规则保持。导入的新建或金额变更行执行相同约束。FixRound2 的 ledger/import checks、真实 HTTP smokes、全仓 typecheck/build 与隔离 E2E 通过，但仍只是 targeted 复审证据。
-- 因 Windows 附件 mode `NOT_PROVABLE`、目标运行时漂移，以及有序 FINAL 曾在金额 smoke 首败后续跑，本规格总体保持 `PARTIAL`，不得标记完整 FINAL PASS、生产就绪、部署完成或切换获批。
+- 截至 FixRound2，因 Windows 附件 mode `NOT_PROVABLE`、目标运行时漂移，以及有序 FINAL 曾在金额 smoke 首败后续跑，当时状态保持 `PARTIAL`，不得将该阶段标记为完整 FINAL PASS、生产就绪、部署完成或切换获批；后续状态由第 12 节的新鲜目标运行时证据取代。
+
+## 12. 目标运行时第二次完整 FINAL（2026-09-16）
+
+- 验收提交为 `ae237bc579e5d327e52d6d4c366614d2c2cfbb37`；运行时为 Node.js `22.23.2`、嵌套 `pnpm exec node = 22.23.2`、PostgreSQL 客户端与服务端 `16.15`。
+- 三个专用数据库从公共表数为零开始。主库及 E2E 库均执行生产种子；主库种子连续执行两次，均得到 30 个财务归属部门和 82 个字典项，证明幂等。
+- 第二次正式运行从迁移开始，依次通过 schema、typecheck、build、小程序生产检查、receivables core/access/import 检查、access/admin/query/ledger/money/attachments/import/export smoke、正式容量和完整 E2E；过程中没有失败、续跑或跳过，最终输出 `TARGET_FINAL_RESULT=PASS`。
+- 正式容量为 50,000 台账、500,000 明细、250 页；四个要求索引全部被生产查询执行计划选中；XLSX 为 50,000 数据行、50,001 工作表行，SHA-256 为 `b15855b6899dcd9c27ecfb099a50f18c588959c68affed534d0332c6519e654d`，清理为零残留。
+- 完整 E2E 为 `sessions=7`、`ledgers=5`、`exportRows=5`、`audits=22`、`cleanup=zero-residual`；主库 baseline 为 `1|||`，E2E marker 为 `0|0|0`。
+- 第一次目标运行因 E2E 专库漏执行生产种子，在最后门失败；该失败及更早的两个 wrapper/runtime 预检失败均保留在证据中，没有被改写为 PASS。补齐 E2E 种子后，经用户明确批准，才从三个重新创建的空库执行上述第二次完整 FINAL。
+- Windows 不提供可靠 POSIX `0600` mode 语义，因此附件 smoke 仍记录 `NOT_PROVABLE_ON_WINDOWS`；这不否定应用层私有文件授权、哈希、下载审计和跨部门拒绝已通过，但实际 Windows 部署必须在开放流量前由运维确认 uploads NTFS ACL 仅授予服务账号、Administrators 和 SYSTEM。ACL 不符合时必须停止切换。
+- 基于完整 FINAL、既有七角色浏览器验收和最终整分支复审，本候选获批本地合并，并获准进入切换手册的备份、部署和受控开放步骤；本状态不表示生产部署或流量切换已经完成。
