@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
 import { calculateReceivableAmounts } from "./receivables-core.js";
@@ -42,6 +43,16 @@ export const defaultReceivablesColumnPreference: ReceivablesColumnPreference = {
   visible: [...receivablesColumnIds],
   frozen: ["financeDepartmentName", "contractNo"],
 };
+const receivablesColumnIdSchema = z.enum(receivablesColumnIds);
+const uniqueReceivablesColumnIds = z.array(receivablesColumnIdSchema).max(receivablesColumnIds.length).refine((items) => new Set(items).size === items.length, "列 ID 不得重复");
+export const receivablesColumnPreferenceSchema = z.object({
+  order: uniqueReceivablesColumnIds.refine((items) => items.length === receivablesColumnIds.length, "列顺序必须包含全部列"),
+  visible: uniqueReceivablesColumnIds.min(1),
+  frozen: uniqueReceivablesColumnIds,
+}).strict().superRefine((value, context) => {
+  if (value.visible.some((id) => !value.order.includes(id))) context.addIssue({ code: "custom", message: "可见列必须包含在列顺序中", path: ["visible"] });
+  if (value.frozen.some((id) => !value.visible.includes(id))) context.addIssue({ code: "custom", message: "冻结列必须为可见列", path: ["frozen"] });
+});
 const receivablesColumnPreferenceKey = "receivables.columns.v1";
 
 export type NormalizedReceivablesFilters = {
@@ -393,7 +404,8 @@ export async function getReceivablesColumnPreference(principal: Principal): Prom
       where: { accountId_key: { accountId: principal.accountId, key: receivablesColumnPreferenceKey } },
       select: { value: true },
     });
-    return row ? row.value as ReceivablesColumnPreference : defaultReceivablesColumnPreference;
+    const parsed = receivablesColumnPreferenceSchema.safeParse(row?.value);
+    return parsed.success ? parsed.data : defaultReceivablesColumnPreference;
   });
 }
 

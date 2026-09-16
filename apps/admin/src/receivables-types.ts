@@ -124,6 +124,34 @@ export const defaultReceivablesColumnPreference: ReceivablesColumnPreference = {
   frozen: ["financeDepartmentName", "contractNo"],
 };
 
+const receivablesColumnIdSet = new Set<string>(receivablesColumnIds);
+const uniqueColumnIds = (value: unknown): value is ReceivablesColumnId[] => Array.isArray(value)
+  && value.length <= receivablesColumnIds.length
+  && value.every((item) => typeof item === "string" && receivablesColumnIdSet.has(item))
+  && new Set(value).size === value.length;
+
+export function normalizeReceivablesColumnPreference(value: unknown): ReceivablesColumnPreference {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaultReceivablesColumnPreference, order: [...receivablesColumnIds], visible: [...receivablesColumnIds], frozen: [...defaultReceivablesColumnPreference.frozen] };
+  const record = value as Record<string, unknown>;
+  const order = record.order;
+  const visible = record.visible;
+  const frozen = record.frozen;
+  const exactKeys = Object.keys(record).sort().join(",") === "frozen,order,visible";
+  if (!exactKeys || !uniqueColumnIds(order) || order.length !== receivablesColumnIds.length || !uniqueColumnIds(visible) || visible.length === 0 || !uniqueColumnIds(frozen)) {
+    return { ...defaultReceivablesColumnPreference, order: [...receivablesColumnIds], visible: [...receivablesColumnIds], frozen: [...defaultReceivablesColumnPreference.frozen] };
+  }
+  if (visible.some((id) => !order.includes(id)) || frozen.some((id) => !visible.includes(id))) {
+    return { ...defaultReceivablesColumnPreference, order: [...receivablesColumnIds], visible: [...receivablesColumnIds], frozen: [...defaultReceivablesColumnPreference.frozen] };
+  }
+  return { order: [...order], visible: [...visible], frozen: [...frozen] };
+}
+
+export const receivablesQueryKey = (accountId: string, ...parts: readonly unknown[]) => ["receivables", accountId, ...parts] as const;
+
+export function usableReceivablesAccess<T>(query: { data: T | undefined; isFetching: boolean; isError: boolean }): T | undefined {
+  return query.isFetching || query.isError ? undefined : query.data;
+}
+
 export function receivablesPortalMode(access: Pick<ReceivablesAccess, "state" | "canEnter" | "canRecover">): "enabled" | "recover" | "hidden" {
   if (access.canEnter) return "enabled";
   return access.state !== "ready" && access.canRecover ? "recover" : "hidden";
@@ -141,4 +169,10 @@ export function formatReceivablesMoney(value: string | null): string {
   if (!match) return value;
   const [, sign, integer, fraction = ""] = match;
   return `¥${sign}${integer!.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${fraction ? `.${fraction}` : ""}`;
+}
+
+export function formatReceivablesDate(value: string | null): string {
+  if (!value) return "—";
+  const match = /^(\d{4}-\d{2}-\d{2})(?:T|$)/.exec(value);
+  return match?.[1] ?? "—";
 }

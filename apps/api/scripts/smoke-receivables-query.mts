@@ -224,9 +224,16 @@ try {
     "invoicedAmount", "receivedAmount", "internalReceivable", "externalReceivable", "balance", "writeoffAmount",
     "collectionOwner", "openingChargeDate", "anomaly", "updatedAt",
   ];
+  const defaultPreference: ColumnPreference = { order: columnOrder, visible: columnOrder, frozen: ["financeDepartmentName", "contractNo"] };
   const ownerPreference: ColumnPreference = { order: columnOrder, visible: columnOrder.slice(0, -1), frozen: ["financeDepartmentName", "contractNo"] };
   await expectStatus(preferencePath, tokens.companyAdmin!, 403);
   assert.equal((await request(preferencePath, tokens.companyAdmin!, { method: "PUT", body: JSON.stringify(ownerPreference) })).response.status, 403);
+  await prisma.userPreference.upsert({
+    where: { accountId_key: { accountId: owner.id, key: "receivables.columns.v1" } },
+    create: { accountId: owner.id, key: "receivables.columns.v1", value: { order: ["not-a-column"], visible: "all", frozen: [], extra: true } },
+    update: { value: { order: ["not-a-column"], visible: "all", frozen: [], extra: true } },
+  });
+  assert.deepEqual((await expectStatus<ColumnPreference>(preferencePath, tokens.owner!, 200)).data, defaultPreference, "malformed stored preference must fail closed to the canonical default");
   assert.equal((await request(preferencePath, tokens.owner!, { method: "PUT", body: JSON.stringify(ownerPreference) })).response.status, 200);
   assert.deepEqual((await expectStatus<ColumnPreference>(preferencePath, tokens.owner!, 200)).data, ownerPreference);
   assert.notDeepEqual((await expectStatus<ColumnPreference>(preferencePath, tokens.reporterA!, 200)).data, ownerPreference, "preferences must be isolated by account");

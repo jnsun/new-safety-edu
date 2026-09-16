@@ -6,7 +6,9 @@ import { api } from "./api";
 import { ReceivablesLedger } from "./ReceivablesLedger";
 import {
   formatReceivablesMoney,
+  receivablesQueryKey,
   resolveReceivablesRoute,
+  usableReceivablesAccess,
   type ReceivablesAccess,
   type ReceivablesDashboardResponse,
   type ReceivablesFilters,
@@ -18,9 +20,9 @@ const anomalyLabels = {
   writeoff_adjustment_required: "核销待调减",
 } as const;
 
-export function useReceivablesAccess(enabled = true) {
+export function useReceivablesAccess(accountId: string, enabled = true) {
   return useQuery({
-    queryKey: ["receivables", "access"],
+    queryKey: receivablesQueryKey(accountId, "access"),
     queryFn: () => api<ReceivablesAccess>("/api/receivables/access"),
     enabled,
     retry: false,
@@ -34,7 +36,7 @@ function queryString(filters: Record<string, string | undefined>) {
   return query.toString();
 }
 
-function ReceivablesDashboard() {
+function ReceivablesDashboard({ accountId }: { accountId: string }) {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<{
     status: NonNullable<ReceivablesFilters["status"]>;
@@ -46,7 +48,7 @@ function ReceivablesDashboard() {
     return `/api/receivables/dashboard${search ? `?${search}` : ""}`;
   }, [filters]);
   const dashboard = useQuery({
-    queryKey: ["receivables", "dashboard", filters],
+    queryKey: receivablesQueryKey(accountId, "dashboard", filters),
     queryFn: () => api<ReceivablesDashboardResponse>(requestPath),
     retry: false,
   });
@@ -161,13 +163,14 @@ function AccessState({ access }: { access: ReceivablesAccess }) {
   return <Result status="403" title="无法进入应收账款管理" subTitle="财务权限未授予或已被撤销，请联系应收账款负责人。" />;
 }
 
-export function ReceivablesPage() {
+export function ReceivablesPage({ accountId }: { accountId: string }) {
   const location = useLocation();
   const route = resolveReceivablesRoute(location.pathname);
-  const access = useReceivablesAccess(route !== "redirect");
+  const access = useReceivablesAccess(accountId, route !== "redirect");
+  const currentAccess = usableReceivablesAccess(access);
   if (route === "redirect") return <Navigate to="/receivables" replace />;
-  if (access.isLoading) return <div className="receivables-state"><Spin tip="正在核验应收账款权限…" /></div>;
-  if (access.isError || !access.data) return <Result status="error" title="权限核验失败" subTitle="未显示任何财务数据。请重新登录或稍后重试。" extra={<Button onClick={() => void access.refetch()}>重新核验</Button>} />;
-  if (!access.data.canEnter || !access.data.canReadLedger) return <AccessState access={access.data} />;
-  return route === "ledger" ? <ReceivablesLedger /> : <ReceivablesDashboard />;
+  if (access.isFetching) return <div className="receivables-state"><Spin tip="正在核验应收账款权限…" /></div>;
+  if (access.isError || !currentAccess) return <Result status="error" title="权限核验失败" subTitle="未显示任何财务数据。请重新登录或稍后重试。" extra={<Button onClick={() => void access.refetch()}>重新核验</Button>} />;
+  if (!currentAccess.canEnter || !currentAccess.canReadLedger) return <AccessState access={currentAccess} />;
+  return route === "ledger" ? <ReceivablesLedger accountId={accountId} /> : <ReceivablesDashboard accountId={accountId} />;
 }

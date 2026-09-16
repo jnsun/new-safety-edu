@@ -54,7 +54,7 @@ import {
   QualificationsPage,
 } from "./SafetyManagementPages";
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
-import { receivablesPortalMode, type ReceivablesAccess } from "./receivables-types";
+import { receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 
 type Principal = {
   accountId: string;
@@ -238,6 +238,7 @@ function Login() {
     setBusy(true);
     try {
       await api("/api/auth/login", json("POST", values));
+      qc.removeQueries({ queryKey: ["receivables"] });
       qc.setQueryData(["me"], await api<Principal>("/api/auth/me"));
       navigate("/");
     } catch (error) {
@@ -2592,10 +2593,11 @@ const platformModules = [
   },
 ] as const;
 
-function PlatformPortal() {
+function PlatformPortal({ accountId }: { accountId: string }) {
   const navigate = useNavigate();
-  const access = useReceivablesAccess();
-  const portalMode = access.data ? receivablesPortalMode(access.data) : "hidden";
+  const access = useReceivablesAccess(accountId);
+  const currentAccess = usableReceivablesAccess(access);
+  const portalMode = currentAccess ? receivablesPortalMode(currentAccess) : "hidden";
   const modules = portalMode === "hidden" ? platformModules : [...platformModules, {
     title: "应收账款管理",
     description: "合同应收、开票回款与催收台账",
@@ -2642,10 +2644,12 @@ function PlatformPortal() {
 
 function Shell({ principal }: { principal: Principal }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const location = useLocation();
   const wechatWeb = useQuery({ queryKey: ["wechat-web-config"], queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config") });
   const inReceivables = location.pathname.startsWith("/receivables");
-  const receivablesAccess = useReceivablesAccess(inReceivables);
+  const receivablesAccess = useReceivablesAccess(principal.accountId, inReceivables);
+  const currentReceivablesAccess = usableReceivablesAccess(receivablesAccess);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(
     () =>
@@ -2653,8 +2657,8 @@ function Shell({ principal }: { principal: Principal }) {
     [inReceivables, location.pathname],
   );
   const sidebarItems = useMemo(
-    () => moduleMenuItems(location.pathname, receivablesAccess.data),
-    [location.pathname, receivablesAccess.data],
+    () => moduleMenuItems(location.pathname, currentReceivablesAccess),
+    [location.pathname, currentReceivablesAccess],
   );
   const workspaceTitle =
     location.pathname === "/"
@@ -2701,6 +2705,7 @@ function Shell({ principal }: { principal: Principal }) {
               {wechatWeb.data?.enabled && <Button icon={<WechatOutlined />} href="/api/auth/wechat-web/bind/start">绑定网页登录微信</Button>}
               <Button
                 onClick={async () => {
+                  queryClient.removeQueries({ queryKey: ["receivables"] });
                   await api("/api/auth/logout", { method: "POST" });
                   navigate("/login");
                 }}
@@ -2711,7 +2716,7 @@ function Shell({ principal }: { principal: Principal }) {
           </Layout.Header>
           <Layout.Content className="content">
             <Routes>
-              <Route path="/" element={<PlatformPortal />} />
+              <Route path="/" element={<PlatformPortal accountId={principal.accountId} />} />
               <Route path="/training-dashboard" element={<DashboardPage />} />
               <Route
                 path="/people"
@@ -2737,7 +2742,7 @@ function Shell({ principal }: { principal: Principal }) {
                   />
                 }
               />
-              <Route path="/receivables/*" element={<ReceivablesPage />} />
+              <Route path="/receivables/*" element={<ReceivablesPage accountId={principal.accountId} />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Layout.Content>

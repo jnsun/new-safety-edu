@@ -6,7 +6,7 @@ import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import { administerReceivables } from "../receivables-admin.js";
 import { requireReceivables, resolveReceivablesAccess } from "../receivables-access.js";
-import { getReceivablesColumnPreference, queryReceivables, receivablesColumnIds, saveReceivablesColumnPreference } from "../receivables-query.js";
+import { getReceivablesColumnPreference, queryReceivables, receivablesColumnPreferenceSchema, saveReceivablesColumnPreference } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
 import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
@@ -63,16 +63,6 @@ const receivablesListInput = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
 }).strict();
 const receivablesDashboardInput = z.object(receivablesFilters).strict();
-const receivablesColumnId = z.enum(receivablesColumnIds);
-const uniqueColumnIds = (maximum: number) => z.array(receivablesColumnId).max(maximum).refine((items) => new Set(items).size === items.length, "列 ID 不得重复");
-const receivablesColumnPreferenceInput = z.object({
-  order: uniqueColumnIds(receivablesColumnIds.length).refine((items) => items.length === receivablesColumnIds.length, "列顺序必须包含全部列"),
-  visible: uniqueColumnIds(receivablesColumnIds.length).min(1),
-  frozen: uniqueColumnIds(receivablesColumnIds.length),
-}).strict().superRefine((value, context) => {
-  if (value.visible.some((id) => !value.order.includes(id))) context.addIssue({ code: "custom", message: "可见列必须包含在列顺序中", path: ["visible"] });
-  if (value.frozen.some((id) => !value.visible.includes(id))) context.addIssue({ code: "custom", message: "冻结列必须为可见列", path: ["frozen"] });
-});
 const receivablesExportCreateInput = z.object({ idempotencyKey: z.string().uuid(), filters: z.object(receivablesFilters).strict().default({}) }).strict();
 const receivablesExportListInput = z.object({ page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).strict();
 const receivablesExportTokenInput = z.object({ token: z.string().min(32).max(200) }).strict();
@@ -182,7 +172,7 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     data: await getReceivablesColumnPreference(request.principal as Principal),
   }));
   app.put("/api/receivables/preferences/columns", { preHandler: deps.authenticate }, async (request) => ({
-    data: await saveReceivablesColumnPreference(request.principal as Principal, receivablesColumnPreferenceInput.parse(request.body)),
+    data: await saveReceivablesColumnPreference(request.principal as Principal, receivablesColumnPreferenceSchema.parse(request.body)),
   }));
   app.get("/api/receivables/exports", { preHandler: deps.authenticate }, async (request) => ({
     data: await listReceivablesExports(request.principal as Principal, receivablesExportListInput.parse(request.query), exportEnvironment),

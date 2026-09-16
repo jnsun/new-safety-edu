@@ -6,7 +6,10 @@ import type { TableColumnType, TableColumnsType, TableProps } from "antd";
 import { api, json } from "./api";
 import {
   defaultReceivablesColumnPreference,
+  formatReceivablesDate,
   formatReceivablesMoney,
+  normalizeReceivablesColumnPreference,
+  receivablesQueryKey,
   type ReceivablesColumnId,
   type ReceivablesColumnPreference,
   type ReceivablesLedgerDetail,
@@ -25,7 +28,6 @@ const anomalyLabels = { final_amount_missing: "决算未定", over_received: "�
 const sortable = new Set<ReceivablesSort>(["updatedAt", "contractNo", "projectName", "customerName", "debtStatus", "finalAmount", "invoicedAmount", "receivedAmount", "balance", "openingChargeDate"]);
 
 const plain = (value: string | null) => value || "—";
-const dateTime = (value: string | null) => value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—";
 
 type ListState = {
   page: number;
@@ -85,7 +87,7 @@ function ColumnSettings({ value, onChange, onSave, saving }: { value: Receivable
   );
 }
 
-export function ReceivablesLedger() {
+export function ReceivablesLedger({ accountId }: { accountId: string }) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<ListState>({ page: 1, pageSize: 50, status: "active", settlement: "unsettled", financeDepartmentId: undefined, debtStatus: undefined, creditorUnit: undefined, anomaly: undefined, search: undefined, sort: "updatedAt", order: "desc" });
   const [search, setSearch] = useState("");
@@ -94,25 +96,25 @@ export function ReceivablesLedger() {
   const [preference, setPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference);
   const [draftPreference, setDraftPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference);
   const requestPath = useMemo(() => listPath(state), [state]);
-  const ledgers = useQuery({ queryKey: ["receivables", "ledgers", state], queryFn: () => api<ReceivablesLedgerListResponse>(requestPath), retry: false });
-  const preferenceQuery = useQuery({ queryKey: ["receivables", "preferences", "columns"], queryFn: () => api<ReceivablesColumnPreference>("/api/receivables/preferences/columns"), retry: false });
+  const ledgers = useQuery({ queryKey: receivablesQueryKey(accountId, "ledgers", state), queryFn: () => api<ReceivablesLedgerListResponse>(requestPath), retry: false });
+  const preferenceQuery = useQuery({ queryKey: receivablesQueryKey(accountId, "preferences", "columns"), queryFn: async () => normalizeReceivablesColumnPreference(await api<unknown>("/api/receivables/preferences/columns")), retry: false });
   useEffect(() => {
     if (!preferenceQuery.data) return;
     setPreference(preferenceQuery.data);
     setDraftPreference(preferenceQuery.data);
   }, [preferenceQuery.data]);
   const savePreference = useMutation({
-    mutationFn: () => api<ReceivablesColumnPreference>("/api/receivables/preferences/columns", json("PUT", draftPreference)),
+    mutationFn: async () => normalizeReceivablesColumnPreference(await api<unknown>("/api/receivables/preferences/columns", json("PUT", draftPreference))),
     onSuccess: (saved) => {
       setPreference(saved);
-      queryClient.setQueryData(["receivables", "preferences", "columns"], saved);
+      queryClient.setQueryData(receivablesQueryKey(accountId, "preferences", "columns"), saved);
       setColumnModalOpen(false);
       message.success("列设置已保存");
     },
     onError: (error) => message.error(`列设置保存失败：${(error as Error).message}`),
   });
   const detail = useQuery({
-    queryKey: ["receivables", "ledger", selectedId],
+    queryKey: receivablesQueryKey(accountId, "ledger", selectedId),
     queryFn: () => api<ReceivablesLedgerDetail>(`/api/receivables/ledgers/${selectedId}`),
     enabled: !!selectedId,
     retry: false,
@@ -132,9 +134,9 @@ export function ReceivablesLedger() {
     finalAmount: moneyColumn("finalAmount"), invoicedAmount: moneyColumn("invoicedAmount"), receivedAmount: moneyColumn("receivedAmount"),
     internalReceivable: moneyColumn("internalReceivable"), externalReceivable: moneyColumn("externalReceivable"), balance: moneyColumn("balance"), writeoffAmount: moneyColumn("writeoffAmount"),
     collectionOwner: { title: columnLabels.collectionOwner, key: "collectionOwner", dataIndex: "collectionOwner", width: 142, render: plain },
-    openingChargeDate: { title: columnLabels.openingChargeDate, key: "openingChargeDate", dataIndex: "openingChargeDate", width: 150, sorter: true, ...sortProperty("openingChargeDate"), render: plain },
+    openingChargeDate: { title: columnLabels.openingChargeDate, key: "openingChargeDate", dataIndex: "openingChargeDate", width: 150, sorter: true, ...sortProperty("openingChargeDate"), render: formatReceivablesDate },
     anomaly: { title: columnLabels.anomaly, key: "anomaly", dataIndex: "anomaly", width: 150, render: (value: ReceivablesLedgerRow["anomaly"]) => value ? <Tag color="warning">{anomalyLabels[value]}</Tag> : "—" },
-    updatedAt: { title: columnLabels.updatedAt, key: "updatedAt", dataIndex: "updatedAt", width: 184, sorter: true, ...sortProperty("updatedAt"), render: dateTime },
+    updatedAt: { title: columnLabels.updatedAt, key: "updatedAt", dataIndex: "updatedAt", width: 136, sorter: true, ...sortProperty("updatedAt"), render: formatReceivablesDate },
   };
   const columns = useMemo(() => {
     const ordered = [...preference.order.filter((id) => preference.frozen.includes(id)), ...preference.order.filter((id) => !preference.frozen.includes(id))];
@@ -204,8 +206,8 @@ export function ReceivablesLedger() {
               { key: "owner", label: "清收责任人", children: plain(detail.data.ledger.collectionOwner) },
               { key: "notes", label: "催收备注", children: plain(detail.data.ledger.collectionNotes), span: 2 },
             ]} />
-            <Card size="small" title="开票明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无开票明细" }} dataSource={detail.data.invoices} columns={[{ title: "日期", dataIndex: "invoiceDate" }, { title: "发票号", dataIndex: "invoiceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
-            <Card size="small" title="回款明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无回款明细" }} dataSource={detail.data.receipts} columns={[{ title: "日期", dataIndex: "receiptDate" }, { title: "凭证号", dataIndex: "referenceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
+            <Card size="small" title="开票明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无开票明细" }} dataSource={detail.data.invoices} columns={[{ title: "日期", dataIndex: "invoiceDate", render: formatReceivablesDate }, { title: "发票号", dataIndex: "invoiceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
+            <Card size="small" title="回款明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无回款明细" }} dataSource={detail.data.receipts} columns={[{ title: "日期", dataIndex: "receiptDate", render: formatReceivablesDate }, { title: "凭证号", dataIndex: "referenceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
             <Card size="small" title="附件"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无附件" }} dataSource={detail.data.attachments} columns={[{ title: "文件名", dataIndex: ["file", "originalName"] }, { title: "分类", dataIndex: "category" }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
           </Space>
         )}
