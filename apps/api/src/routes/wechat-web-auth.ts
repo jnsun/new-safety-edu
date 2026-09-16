@@ -7,6 +7,9 @@ import { issueSession } from "../auth.js";
 import { audit } from "../audit.js";
 import { setCsrfCookie } from "../csrf.js";
 import { resolveWechatAccount } from "../wechat-identity.js";
+import { resolveReceivablesAccess } from "../receivables-access.js";
+import { decideWebLoginDestination } from "../web-login-access.js";
+import { buildWechatWebAuthorizeUrl, publicWechatWidgetConfig } from "../wechat-web-login.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -17,14 +20,18 @@ function configured(env: Env) {
 export async function registerWechatWebAuthRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard; requireManager: Guard }) {
   app.get("/api/auth/wechat-web/config", async () => ({ data: { enabled: configured(deps.env) } }));
 
+  app.get("/api/auth/wechat-web/widget-config", async (_request, reply) => {
+    if (!configured(deps.env)) throw Object.assign(new Error("网页微信扫码登录尚未配置"), { statusCode: 503, code: "WECHAT_WEB_NOT_CONFIGURED" });
+    const state = randomBytes(24).toString("base64url");
+    reply.setCookie("wechat_oauth_state", state, { httpOnly: true, secure: deps.env.NODE_ENV === "production", sameSite: "lax", path: "/api/auth/wechat-web", maxAge: 600 });
+    return { data: publicWechatWidgetConfig(deps.env, state) };
+  });
+
   app.get("/api/auth/wechat-web/start", async (_request, reply) => {
     if (!configured(deps.env)) throw Object.assign(new Error("网页微信扫码登录尚未配置"), { statusCode: 503, code: "WECHAT_WEB_NOT_CONFIGURED" });
     const state = randomBytes(24).toString("base64url");
     reply.setCookie("wechat_oauth_state", state, { httpOnly: true, secure: deps.env.NODE_ENV === "production", sameSite: "lax", path: "/api/auth/wechat-web", maxAge: 600 });
-    const url = new URL("https://open.weixin.qq.com/connect/qrconnect");
-    url.searchParams.set("appid", deps.env.WECHAT_WEB_APP_ID!); url.searchParams.set("redirect_uri", deps.env.WECHAT_WEB_REDIRECT_URI!);
-    url.searchParams.set("response_type", "code"); url.searchParams.set("scope", "snsapi_login"); url.searchParams.set("state", state);
-    return reply.redirect(`${url.toString()}#wechat_redirect`);
+    return reply.redirect(buildWechatWebAuthorizeUrl(deps.env, state));
   });
 
   app.get("/api/auth/wechat-web/callback", async (request, reply) => {
@@ -39,9 +46,13 @@ export async function registerWechatWebAuthRoutes(app: FastifyInstance, deps: { 
     if (!response.ok || !body.openid) return reply.redirect("/login?wechat=exchange_failed");
     const resolved = await prisma.$transaction((tx) => resolveWechatAccount(tx, { appId: deps.env.WECHAT_WEB_APP_ID!, openid: body.openid!, ...(body.unionid ? { unionid: body.unionid } : {}) }), { isolationLevel: "Serializable" });
     if (!["active", "pending"].includes(resolved.account.status)) return reply.redirect("/login?wechat=account_unavailable");
+    let destination: "/" | "/receivables" = "/";
     if (resolved.account.personId) {
       const manager = await prisma.roleAssignment.findFirst({ where: { personId: resolved.account.personId, active: true, role: { in: ["company_admin", "org_leader", "org_admin", "project_admin"] } }, select: { id: true } });
-      if (!manager) return reply.redirect("/login?wechat=no_admin_role");
+      const receivables = await resolveReceivablesAccess({ accountId: resolved.account.id });
+      const access = decideWebLoginDestination({ hasManagerRole: !!manager, canEnterReceivables: receivables.canEnter });
+      if (!access.allowed) return reply.redirect(`/login?wechat=${access.reason}`);
+      destination = access.path;
     }
     const session = await issueSession(resolved.account.id, deps.env, { clientKind: "web", loginMethod: "wechat", userAgent: request.headers["user-agent"] });
     reply.setCookie("safety_session", session.accessToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/", maxAge: 900 });
@@ -52,6 +63,6 @@ export async function registerWechatWebAuthRoutes(app: FastifyInstance, deps: { 
       return reply.redirect(pending ? "/wechat-bind?pending=1" : "/wechat-bind");
     }
     audit(resolved.account.id, "auth.wechat_web_login", "account", resolved.account.id);
-    return reply.redirect("/");
+    return reply.redirect(destination);
   });
 }
