@@ -379,7 +379,7 @@ async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: Query
     attachments: attachments.map((attachment) => ({
       ...attachment,
       capabilities: {
-        canDownload: attachment.status === "active",
+        canDownload: attachment.status === "active" || access.canManageAll,
         canVoid: ledger.status === "active" && attachment.status === "active" && (access.canManageAll || access.role === "reporter" && attachment.uploadedBy === accountId),
       },
     })),

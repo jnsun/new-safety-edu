@@ -345,6 +345,16 @@ export function normalizeReceivablesGrantScopes(role: ReceivablesGrant["role"], 
   }));
 }
 
+export function normalizeReceivablesGrantDraft(role: ReceivablesGrant["role"], draft: { canCreate: boolean; canExport: boolean; canViewAll: boolean; departments: Array<{ departmentId: string; canRead: boolean; canWrite: boolean }> }) {
+  if (role === "admin") return { canCreate: false, canExport: false, canViewAll: false, departments: [] };
+  return {
+    canCreate: role === "reporter" && draft.canCreate,
+    canExport: draft.canExport,
+    canViewAll: draft.canViewAll,
+    departments: normalizeReceivablesGrantScopes(role, draft.departments),
+  };
+}
+
 type ImportPreviewGuard = { errors: readonly unknown[]; rows: readonly { rowNumber: number; ledgerId: string | null }[] };
 type ImportDecisions = Record<number, "skip" | "update">;
 const unresolvedDuplicate = (preview: ImportPreviewGuard, decisions: ImportDecisions) => preview.rows.some((row) => row.ledgerId && !decisions[row.rowNumber]);
@@ -390,10 +400,14 @@ export function normalizeReceivablesPositiveMoneyInput(value: unknown): string |
   return normalized && !/^0(?:\.0+)?$/.test(normalized) ? normalized : null;
 }
 
-export function receivablesErrorKind(error: unknown): "conflict" | "revoked" | "other" {
+const receivablesRevisionConflictCodes = new Set(["REVISION_CONFLICT", "RECEIVABLES_REVISION_CONFLICT"]);
+const receivablesStaleCodes = new Set(["IMPORT_PREVIEW_STALE", "IMPORT_TARGET_CHANGED", "IMPORT_FILE_CHANGED", "IMPORT_ROLLBACK_CONFLICT", "RECEIVABLES_MIGRATION_STATE_CHANGED"]);
+
+export function receivablesErrorKind(error: unknown): "revision_conflict" | "stale" | "revoked" | "other" {
   const status = typeof error === "object" && error !== null && "status" in error ? (error as { status?: unknown }).status : undefined;
   const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
-  if (status === 409 || code === "REVISION_CONFLICT" || code === "RECEIVABLES_MIGRATION_STATE_CHANGED") return "conflict";
+  if (typeof code === "string" && receivablesRevisionConflictCodes.has(code)) return "revision_conflict";
+  if (typeof code === "string" && receivablesStaleCodes.has(code)) return "stale";
   if (status === 403 || code === "RECEIVABLES_FORBIDDEN") return "revoked";
   return "other";
 }

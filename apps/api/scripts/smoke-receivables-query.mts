@@ -373,6 +373,12 @@ try {
   assert.deepEqual({ role: detail.capabilities.role, canViewAll: detail.capabilities.canViewAll, canManageMoney: detail.capabilities.canManageMoney }, { role: "reporter", canViewAll: false, canManageMoney: false });
   assert.deepEqual(detail.capabilities.readDepartmentIds, [departmentA.id]);
   assert.deepEqual(detail.capabilities.writeDepartmentIds, [departmentA.id]);
+  const ownerDetail = (await expectStatus<DetailResponse>(`/api/receivables/ledgers/${pending.id}`, tokens.owner!, 200)).data!;
+  assert.equal(ownerDetail.attachments.find((attachment) => attachment.status === "voided")?.capabilities.canDownload, true, "owner audit access must allow downloading voided attachments");
+  assert.equal(ownerDetail.attachments.find((attachment) => attachment.status === "voided")?.capabilities.canVoid, false);
+  const adminDetail = (await expectStatus<DetailResponse>(`/api/receivables/ledgers/${pending.id}`, tokens.admin!, 200)).data!;
+  assert.equal(adminDetail.attachments.find((attachment) => attachment.status === "voided")?.capabilities.canDownload, true, "finance admin audit access must allow downloading voided attachments");
+  assert.equal(adminDetail.attachments.find((attachment) => attachment.status === "voided")?.capabilities.canVoid, false);
   const hidden = await request(`/api/receivables/ledgers/${pending.id}`, tokens.reporterB!);
   const absent = await request(`/api/receivables/ledgers/${randomUUID()}`, tokens.reporterB!);
   assert.equal(hidden.response.status, 404);

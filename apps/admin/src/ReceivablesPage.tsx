@@ -176,15 +176,17 @@ function AccessState({ access }: { access: ReceivablesAccess }) {
 export function ReceivablesPage({ accountId }: { accountId: string }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const route = resolveReceivablesRoute(location.pathname);
   const access = useReceivablesAccess(accountId, route !== "redirect");
   const [setupReviewed, setSetupReviewed] = useState(false);
-  const confirmSetup = useMutation({ mutationFn: () => api<ReceivablesAccess>("/api/receivables/setup/confirm", { method: "POST", body: "{}" }), onSuccess: async () => { message.success("初始配置已确认"); await access.refetch(); }, onError: (error) => message.error(error.message) });
   const currentAccess = usableReceivablesAccess(access);
+  const currentScopeFingerprint = currentAccess ? receivablesScopeFingerprint(currentAccess) : undefined;
+  const confirmSetup = useMutation({ mutationFn: () => api<ReceivablesAccess>("/api/receivables/setup/confirm", { method: "POST", body: "{}" }), onSuccess: async () => { message.success("初始配置已确认"); await access.refetch(); }, onError: async (error) => { message.error(error.message); if (receivablesErrorKind(error) === "revoked") { setSetupReviewed(false); if (currentScopeFingerprint) queryClient.removeQueries({ queryKey: receivablesScopeQueryPrefix(accountId, currentScopeFingerprint) }); await access.refetch(); } } });
   if (route === "redirect") return <Navigate to="/receivables" replace />;
   if (access.isFetching) return <div className="receivables-state"><Spin tip="正在核验应收账款权限…" /></div>;
   if (access.isError || !currentAccess) return <Result status="error" title="权限核验失败" subTitle="未显示任何财务数据。请重新登录或稍后重试。" extra={<Button onClick={() => void access.refetch()}>重新核验</Button>} />;
-  const scopeFingerprint = receivablesScopeFingerprint(currentAccess);
+  const scopeFingerprint = currentScopeFingerprint!;
   if (!currentAccess.canEnter) {
     if (currentAccess.state !== "pending_confirmation" || !currentAccess.canManageConfiguration || !currentAccess.canConfirmSetup) return <AccessState access={currentAccess} />;
     if (route !== "departments" && route !== "dictionaries") return <Navigate to="/receivables/departments" replace />;

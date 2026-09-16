@@ -55,7 +55,7 @@ import {
   QualificationsPage,
 } from "./SafetyManagementPages";
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
-import { receivablesNavigation, receivablesPortalMode, receivablesQueryKey, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
+import { receivablesErrorKind, receivablesNavigation, receivablesPortalMode, receivablesQueryKey, receivablesScopeFingerprint, receivablesScopeQueryPrefix, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 
 type Principal = {
   accountId: string;
@@ -1940,7 +1940,13 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
       message.success("财务资产部绑定已更新，请由部门负责人继续完成应收账款配置");
       await qc.invalidateQueries({ queryKey: receivablesQueryKey(principal.accountId, "access") });
     },
-    onError: (error) => message.error(error.message),
+    onError: async (error) => {
+      message.error(error.message);
+      if (receivablesErrorKind(error) === "revoked") {
+        if (currentReceivablesAccess) qc.removeQueries({ queryKey: receivablesScopeQueryPrefix(principal.accountId, receivablesScopeFingerprint(currentReceivablesAccess)) });
+        await receivablesAccess.refetch();
+      }
+    },
   });
   const companyAdmin = principal.roles.some(
     (role) => role.role === "company_admin",

@@ -31,7 +31,7 @@ function ReceivablesImports({ accountId, scopeFingerprint, access }: { accountId
   const history = useQuery({ queryKey: historyKey, queryFn: () => api<ReceivablesImportBatch[]>("/api/receivables/imports"), enabled: access.canImport, retry: false });
   const currentHistory = usableReceivablesData(history);
   const resetPreview = () => { setPreview(undefined); setDecisions({}); setConfirmStage(false); setConfirmed(false); setApplyConflict(undefined); setApplyReconfirm(false); setFileList([]); };
-  const revoked = (error: Error) => { message.error(error.message); if (receivablesErrorKind(error) === "revoked") { resetPreview(); qc.removeQueries({ queryKey: receivablesScopeQueryPrefix(accountId, scopeFingerprint) }); void qc.invalidateQueries({ queryKey: receivablesQueryKey(accountId, "access") }); } };
+  const revoked = (error: Error) => { message.error(error.message); if (receivablesErrorKind(error) === "revoked") { resetPreview(); setRollback(undefined); setRollbackConflict(undefined); qc.removeQueries({ queryKey: receivablesScopeQueryPrefix(accountId, scopeFingerprint) }); void qc.invalidateQueries({ queryKey: receivablesQueryKey(accountId, "access") }); } };
   useEffect(() => { if (history.error && receivablesErrorKind(history.error) === "revoked") revoked(history.error); }, [history.error]);
   const upload = useMutation({ mutationFn: async () => { const file = fileList[0]?.originFileObj; if (!file) throw new Error("请选择 XLSX 文件"); const data = new FormData(); data.append("file", file); return api<ReceivablesImportPreview>("/api/receivables/imports/preview", { method: "POST", body: data }); }, onSuccess: (result) => { setPreview(result); setDecisions({}); setConfirmStage(false); setConfirmed(false); message.success("文件校验完成"); void history.refetch(); }, onError: revoked });
   const duplicates = preview?.rows.filter((row) => !!row.ledgerId && !(row.errors?.length)) ?? [];
@@ -42,14 +42,14 @@ function ReceivablesImports({ accountId, scopeFingerprint, access }: { accountId
     skip: duplicates.filter((row) => decisions[row.rowNumber] === "skip").length,
   } : { create: 0, update: 0, skip: 0 }, [decisions, duplicates, preview]);
   const apply = useMutation({ mutationFn: () => api(`/api/receivables/imports/${preview!.batchId}/apply`, json("POST", { revision: preview!.revision, decisions: Object.entries(decisions).map(([rowNumber, decision]) => ({ rowNumber: Number(rowNumber), decision })) })), onSuccess: async () => { message.success("导入已应用"); resetPreview(); await qc.invalidateQueries({ queryKey: receivablesScopeQueryPrefix(accountId, scopeFingerprint) }); }, onError: async (error: Error) => {
-    if (receivablesErrorKind(error) === "conflict" && preview) {
+    if (["revision_conflict", "stale"].includes(receivablesErrorKind(error)) && preview) {
       const draft = { decisions: { ...decisions }, revision: preview.revision }; const refreshed = await history.refetch(); const latest = refreshed.data?.find((batch) => batch.id === preview.batchId);
       if (latest) { setApplyConflict(preserveReceivablesConflictDraft(draft, latest)); setPreview((current) => current ? { ...current, revision: latest.revision } : current); setApplyReconfirm(false); setConfirmed(false); setConfirmStage(false); }
     }
     revoked(error);
   } });
   const rollbackMutation = useMutation({ mutationFn: (values: { reason: string; confirm: boolean; reconfirm?: boolean }) => api(`/api/receivables/imports/${rollback!.id}/rollback`, json("POST", { revision: rollback!.revision, reason: values.reason })), onSuccess: async () => { message.success("批次已回滚"); setRollback(undefined); setRollbackConflict(undefined); await qc.invalidateQueries({ queryKey: receivablesScopeQueryPrefix(accountId, scopeFingerprint) }); }, onError: async (error: Error) => {
-    if (receivablesErrorKind(error) === "conflict" && rollback) { const reason = String(rollbackForm.getFieldValue("reason") ?? ""); const refreshed = await history.refetch(); const latest = refreshed.data?.find((batch) => batch.id === rollback.id); if (latest) { setRollback(latest); setRollbackConflict(preserveReceivablesConflictDraft({ reason, revision: rollback.revision }, latest)); rollbackForm.setFieldsValue({ reason, confirm: false, reconfirm: false }); } }
+    if (["revision_conflict", "stale"].includes(receivablesErrorKind(error)) && rollback) { const reason = String(rollbackForm.getFieldValue("reason") ?? ""); const refreshed = await history.refetch(); const latest = refreshed.data?.find((batch) => batch.id === rollback.id); if (latest) { setRollback(latest); setRollbackConflict(preserveReceivablesConflictDraft({ reason, revision: rollback.revision }, latest)); rollbackForm.setFieldsValue({ reason, confirm: false, reconfirm: false }); } }
     revoked(error);
   } });
   if (!access.canImport) return <Alert type="error" showIcon message="当前账号没有导入权限" />;
