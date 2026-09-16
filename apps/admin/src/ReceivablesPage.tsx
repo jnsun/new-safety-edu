@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Col, Form, message, Result, Row, Select, Space, Spin, Table, Tabs, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Form, message, Result, Select, Space, Spin, Tabs, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { api } from "./api";
@@ -8,6 +8,8 @@ import { ReceivablesAdmin } from "./ReceivablesAdmin";
 import { ReceivablesTransfers } from "./ReceivablesTransfers";
 import {
   formatReceivablesMoney,
+  receivablesDashboardActionModel,
+  receivablesDashboardMode,
   receivablesQueryKey,
   receivablesErrorKind,
   receivablesScopeQueryPrefix,
@@ -43,7 +45,7 @@ function queryString(filters: Record<string, string | undefined>) {
   return query.toString();
 }
 
-function ReceivablesDashboard({ accountId, scopeFingerprint }: { accountId: string; scopeFingerprint: string }) {
+function ReceivablesDashboard({ accountId, scopeFingerprint, access }: { accountId: string; scopeFingerprint: string; access: ReceivablesAccess }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState<{
@@ -62,27 +64,39 @@ function ReceivablesDashboard({ accountId, scopeFingerprint }: { accountId: stri
   });
   const currentDashboard = usableReceivablesData(dashboard);
   useEffect(() => { if (dashboard.error && receivablesErrorKind(dashboard.error) === "revoked") { queryClient.removeQueries({ queryKey: receivablesScopeQueryPrefix(accountId, scopeFingerprint) }); void queryClient.invalidateQueries({ queryKey: receivablesQueryKey(accountId, "access") }); } }, [dashboard.error, accountId, scopeFingerprint, queryClient]);
-  const amountCards = currentDashboard ? [
-    ["台账数量", String(currentDashboard.amounts.activeLedgerCount)],
-    ["决算金额", formatReceivablesMoney(currentDashboard.amounts.finalAmount)],
-    ["开票金额", formatReceivablesMoney(currentDashboard.amounts.invoicedAmount)],
+  const mode = receivablesDashboardMode(access);
+  const actionModel = receivablesDashboardActionModel(mode.kind);
+  const ledgerPath = (extra: Record<string, string | undefined> = {}) => {
+    const search = queryString({ status: filters.status, settlement: filters.settlement, anomaly: filters.anomaly, ...extra });
+    return `/receivables/ledger${search ? `?${search}` : ""}`;
+  };
+  const anomalyItems = currentDashboard ? [
+    { key: "final_amount_missing", label: "决算金额待补充", detail: mode.kind === "overview" ? "查看金额口径尚未完整的记录" : "金额口径尚未完整，应收余额暂不能计算", count: currentDashboard.amounts.finalAmountMissingCount, target: ledgerPath({ anomaly: "final_amount_missing" }) },
+    { key: "over_received", label: "到账金额超过应收", detail: mode.kind === "overview" ? "查看到账金额超过应收的记录" : "请核对回款、决算金额或历史录入", count: currentDashboard.amounts.overReceivedCount, target: ledgerPath({ anomaly: "over_received" }) },
+    { key: "writeoff_adjustment_required", label: "核销金额待调减", detail: mode.kind === "overview" ? "查看需要调整核销金额的记录" : "后续回款已改变原核销条件", count: currentDashboard.amounts.writeoffAdjustmentRequiredCount, target: ledgerPath({ anomaly: "writeoff_adjustment_required" }) },
+  ] : [];
+  const collectionItems = [
+    { key: "progress", label: "更新催收进展", detail: "填写最新催收时间、对方反馈和下一步计划", target: ledgerPath(), count: undefined },
+    { key: "unsettled", label: "查看未结账款", detail: "按债权状态和单位定位需要跟进的项目", target: ledgerPath({ settlement: "unsettled" }), count: undefined },
+    { key: "attachment", label: "补充催收附件", detail: "进入台账详情上传沟通和催收材料", target: ledgerPath(), count: undefined },
+  ];
+  const actionItems = actionModel.kind === "collection" ? collectionItems : anomalyItems;
+  const summaryItems = currentDashboard ? [
     ["到账金额", formatReceivablesMoney(currentDashboard.amounts.receivedAmount)],
-    ["账内应收", formatReceivablesMoney(currentDashboard.amounts.internalReceivable)],
-    ["账外应收", formatReceivablesMoney(currentDashboard.amounts.externalReceivable)],
-    ["应收余额", formatReceivablesMoney(currentDashboard.amounts.balance)],
-    ["核销金额", formatReceivablesMoney(currentDashboard.amounts.writeoffAmount)],
+    ["开票金额", formatReceivablesMoney(currentDashboard.amounts.invoicedAmount)],
+    ["有效台账", `${currentDashboard.amounts.activeLedgerCount} 条`],
   ] as const : [];
 
   return (
     <div className="receivables-page">
       <div className="page-title receivables-page-title">
         <div>
-          <Typography.Title level={3}>应收账款看板</Typography.Title>
-          <Typography.Text type="secondary">以下数字均来自当前权限范围内的服务端聚合。</Typography.Text>
+          <Typography.Title level={3}>{mode.title}</Typography.Title>
+          <Typography.Text type="secondary">{mode.description}</Typography.Text>
         </div>
-        <Button type="primary" onClick={() => navigate("/receivables/ledger")}>查看台账</Button>
+        <Button type="primary" onClick={() => navigate(mode.actionPath)}>{mode.actionLabel}</Button>
       </div>
-      <Card className="filters" aria-label="看板筛选">
+      <Card className="filters receivables-filter-bar" aria-label="看板筛选">
         <Form layout="inline">
           <Form.Item label="记录状态">
             <Select
@@ -119,42 +133,41 @@ function ReceivablesDashboard({ accountId, scopeFingerprint }: { accountId: stri
       {dashboard.isError && <Alert type="error" showIcon message="看板加载失败" description="未显示任何财务数据，请检查网络或权限后重试。" action={<Button onClick={() => void dashboard.refetch()}>重试</Button>} />}
       {currentDashboard && (
         <>
-          <Row gutter={[16, 16]}>
-            {amountCards.map(([label, value]) => (
-              <Col xs={24} sm={12} xl={6} key={label}>
-                <Card className="receivables-metric">
-                  <Typography.Text type="secondary">{label}</Typography.Text>
-                  <div className="receivables-metric-value">{value}</div>
-                </Card>
-              </Col>
-            ))}
-          </Row>
-          <Row gutter={[16, 16]} className="receivables-groupings">
-            <Col xs={24} lg={12}>
-              <Card title="记录状态分布">
-                <Table
-                  rowKey={(row) => row.value ?? "未设置"}
-                  size="small"
-                  pagination={false}
-                  locale={{ emptyText: "当前筛选下没有状态分组" }}
-                  dataSource={currentDashboard.statuses}
-                  columns={[{ title: "状态", dataIndex: "value", render: (value: string | null) => value === "active" ? "有效" : value === "voided" ? "已作废" : "未设置" }, { title: "数量", dataIndex: "count", align: "right" }]}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} lg={12}>
-              <Card title="待核对事项">
-                <Table
-                  rowKey={(row) => row.value ?? "none"}
-                  size="small"
-                  pagination={false}
-                  locale={{ emptyText: "当前筛选下没有待核对事项" }}
-                  dataSource={currentDashboard.anomalies}
-                  columns={[{ title: "事项", dataIndex: "value", render: (value: keyof typeof anomalyLabels | null) => value ? anomalyLabels[value] : "无异常" }, { title: "数量", dataIndex: "count", align: "right" }]}
-                />
-              </Card>
-            </Col>
-          </Row>
+          <section className="receivables-command-grid" aria-label="应收账款重点概览">
+            <Card className="receivables-balance-card">
+              <Typography.Text className="receivables-card-kicker">当前筛选范围</Typography.Text>
+              <div className="receivables-balance-label">应收余额</div>
+              <div className="receivables-balance-value">{formatReceivablesMoney(currentDashboard.amounts.balance)}</div>
+              <div className="receivables-summary-grid">
+                {summaryItems.map(([label, value]) => <div key={label}><Typography.Text type="secondary">{label}</Typography.Text><strong>{value}</strong></div>)}
+              </div>
+              <Button className="receivables-balance-action" onClick={() => navigate(ledgerPath())}>查看当前范围台账</Button>
+            </Card>
+            <Card className="receivables-action-card" title={<><span>{actionModel.title}</span><Typography.Text type="secondary">{actionModel.kind === "anomalies" ? `${anomalyItems.reduce((sum, item) => sum + item.count, 0)} 项` : "按权限范围"}</Typography.Text></>}>
+              <div className="receivables-action-list">
+                {actionItems.map((item) => (
+                  <button type="button" className="receivables-action-row" key={item.key} onClick={() => navigate(item.target)}>
+                    <span><strong>{item.label}</strong><small>{item.detail}</small></span>
+                    {item.count !== undefined ? <b className={item.count ? "is-active" : ""}>{item.count}</b> : <b className="receivables-action-enter">进入</b>}
+                  </button>
+                ))}
+              </div>
+            </Card>
+          </section>
+          <section className="receivables-breakdown-grid" aria-label="应收账款分类分布">
+            <Card title="债权状态" extra={<Button type="link" onClick={() => navigate(ledgerPath())}>查看台账</Button>}>
+              <div className="receivables-facet-list">
+                {currentDashboard.debtStatuses.length === 0 && <Typography.Text type="secondary">当前范围暂无债权状态</Typography.Text>}
+                {currentDashboard.debtStatuses.map((item) => item.value ? <button type="button" key={item.value} onClick={() => navigate(ledgerPath({ debtStatus: item.value! }))}><span>{item.value}</span><b>{item.count}</b></button> : <div className="receivables-facet-row" key="未设置"><span>未设置</span><b>{item.count}</b></div>)}
+              </div>
+            </Card>
+            <Card title="单位分布" extra={<Typography.Text type="secondary">按记录数</Typography.Text>}>
+              <div className="receivables-facet-list">
+                {currentDashboard.creditorUnits.length === 0 && <Typography.Text type="secondary">当前范围暂无单位数据</Typography.Text>}
+                {currentDashboard.creditorUnits.map((item) => item.value ? <button type="button" key={item.value} onClick={() => navigate(ledgerPath({ creditorUnit: item.value! }))}><span>{item.value}</span><b>{item.count}</b></button> : <div className="receivables-facet-row" key="未设置"><span>未设置</span><b>{item.count}</b></div>)}
+              </div>
+            </Card>
+          </section>
         </>
       )}
     </div>
@@ -212,5 +225,5 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
     return <div className="receivables-page"><Typography.Title level={3}>数据处理</Typography.Title><Tabs activeKey={requested} items={items} onChange={(tab) => navigate(`/receivables/data?tab=${tab}`)} /></div>;
   }
   if (route === "grants" || route === "departments" || route === "dictionaries") return <ReceivablesAdmin accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} />;
-  return <ReceivablesDashboard accountId={accountId} scopeFingerprint={scopeFingerprint} />;
+  return <ReceivablesDashboard accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} />;
 }

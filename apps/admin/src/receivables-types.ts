@@ -50,6 +50,8 @@ export type ReceivablesDashboardResponse = {
   amounts: ReceivablesAmounts;
   statuses: ReceivablesFacet[];
   anomalies: ReceivablesFacet[];
+  debtStatuses: ReceivablesFacet[];
+  creditorUnits: ReceivablesFacet[];
 };
 
 export type ReceivablesLedgerRow = {
@@ -356,6 +358,37 @@ export const receivablesNavigation = (access: ReceivablesAccess) => [
     { path: "/receivables/dictionaries", label: "业务字典" },
   ] : []),
 ];
+
+export function receivablesDashboardMode(access: Pick<ReceivablesAccess, "canManageMoney" | "canMaintainCollection">) {
+  if (access.canManageMoney) return { kind: "finance" as const, title: "财务异常处置台", description: "先核对金额异常，再处理开票、回款和台账数据。", actionLabel: "处理财务数据", actionPath: "/receivables/data" };
+  if (access.canMaintainCollection) return { kind: "collection" as const, title: "催收工作台", description: "查看权限范围内的未结账款，持续更新催收进展和下一步计划。", actionLabel: "更新催收进展", actionPath: "/receivables/ledger" };
+  return { kind: "overview" as const, title: "应收账款总览", description: "查看权限范围内的应收余额、回款情况和待核对事项。", actionLabel: "查看全部台账", actionPath: "/receivables/ledger" };
+}
+
+export function receivablesDashboardActionModel(kind: ReturnType<typeof receivablesDashboardMode>["kind"]) {
+  if (kind === "collection") return { title: "催收工作", kind: "collection" as const };
+  return { title: kind === "finance" ? "需要处理" : "风险关注", kind: "anomalies" as const };
+}
+
+export function receivablesLedgerInitialFilters(search: string): {
+  status: NonNullable<ReceivablesFilters["status"]>;
+  settlement: NonNullable<ReceivablesFilters["settlement"]>;
+  anomaly: ReceivablesFilters["anomaly"] | undefined;
+  debtStatus: string | undefined;
+  creditorUnit: string | undefined;
+} {
+  const query = new URLSearchParams(search);
+  const status = query.get("status");
+  const settlement = query.get("settlement");
+  const anomaly = query.get("anomaly");
+  return {
+    status: status === "active" || status === "voided" || status === "all" ? status : "active" as const,
+    settlement: settlement === "unsettled" || settlement === "settled" || settlement === "all" ? settlement : "unsettled" as const,
+    anomaly: anomaly === "over_received" || anomaly === "writeoff_adjustment_required" || anomaly === "final_amount_missing" ? anomaly : undefined,
+    debtStatus: query.get("debtStatus") || undefined,
+    creditorUnit: query.get("creditorUnit") || undefined,
+  };
+}
 
 export function preserveReceivablesConflictDraft<TDraft, TLatest>(draft: TDraft, latest: TLatest) {
   return { draft, latest, retryRequired: true as const };

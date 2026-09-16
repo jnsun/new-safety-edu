@@ -405,7 +405,13 @@ export function buildReceivablesListStatements(scope: ReceivablesQueryScope, inp
 
 export function buildReceivablesDashboardStatements(scope: ReceivablesQueryScope) {
   const cte = filteredCte(scope);
-  return { totals: amountsStatement(cte), statuses: statusFacetStatement(cte), anomalies: anomalyFacetStatement(cte, true) };
+  return {
+    totals: amountsStatement(cte),
+    statuses: statusFacetStatement(cte),
+    anomalies: anomalyFacetStatement(cte, true),
+    debtStatuses: facetStatement(cte, Prisma.sql`f.debt_status`),
+    creditorUnits: facetStatement(cte, Prisma.sql`f.creditor_unit`),
+  };
 }
 
 async function listLedgers(tx: QueryTx, scope: QueryScope, input: ReceivablesListInput) {
@@ -429,12 +435,14 @@ async function listLedgers(tx: QueryTx, scope: QueryScope, input: ReceivablesLis
 
 async function dashboard(tx: QueryTx, scope: QueryScope) {
   const statements = buildReceivablesDashboardStatements(scope);
-  const [dashboardAmounts, statuses, anomalies] = await Promise.all([
+  const [dashboardAmounts, statuses, anomalies, debtStatuses, creditorUnits] = await Promise.all([
     amounts(tx, statements.totals),
     tx.$queryRaw<RawFacet[]>(statements.statuses),
     tx.$queryRaw<RawFacet[]>(statements.anomalies),
+    tx.$queryRaw<RawFacet[]>(statements.debtStatuses),
+    tx.$queryRaw<RawFacet[]>(statements.creditorUnits),
   ]);
-  return { amounts: dashboardAmounts, statuses, anomalies };
+  return { amounts: dashboardAmounts, statuses, anomalies, debtStatuses, creditorUnits };
 }
 
 async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: QueryScope, id: string, accountId: string) {

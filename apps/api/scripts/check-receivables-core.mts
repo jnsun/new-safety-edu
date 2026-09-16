@@ -10,8 +10,16 @@ import {
   reporterCollectionFields,
   reporterPatchFields,
 } from "../src/receivables-core.js";
-import { defaultReceivablesColumnPreference, normalizeReceivablesColumnPreference, receivablesNavigation, resolveReceivablesRoute } from "../../admin/src/receivables-types.js";
-import { normalizeStoredReceivablesColumnPreference } from "../src/receivables-query.js";
+import {
+  defaultReceivablesColumnPreference,
+  normalizeReceivablesColumnPreference,
+  receivablesDashboardMode,
+  receivablesDashboardActionModel,
+  receivablesLedgerInitialFilters,
+  receivablesNavigation,
+  resolveReceivablesRoute,
+} from "../../admin/src/receivables-types.js";
+import { buildReceivablesDashboardStatements, normalizeStoredReceivablesColumnPreference } from "../src/receivables-query.js";
 
 assert.equal(normalizeContractNo("  HT-001  "), "HT-001");
 assert.deepEqual(
@@ -80,5 +88,28 @@ assert.equal(normalizeReceivablesColumnPreference({ order: defaultReceivablesCol
 assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, widths: { ...defaultReceivablesColumnPreference.widths, projectName: 99999 } }).widths.projectName, 600);
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).order[0], "contractNo");
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).widths.projectName, 240);
+assert.equal(receivablesDashboardMode({ canManageMoney: true, canMaintainCollection: true } as never).kind, "finance");
+assert.equal(receivablesDashboardMode({ canManageMoney: false, canMaintainCollection: true } as never).kind, "collection");
+assert.equal(receivablesDashboardMode({ canManageMoney: false, canMaintainCollection: false } as never).kind, "overview");
+assert.deepEqual(receivablesDashboardActionModel("finance"), { title: "需要处理", kind: "anomalies" });
+assert.deepEqual(receivablesDashboardActionModel("collection"), { title: "催收工作", kind: "collection" });
+assert.deepEqual(receivablesDashboardActionModel("overview"), { title: "风险关注", kind: "anomalies" });
+assert.deepEqual(receivablesLedgerInitialFilters("?status=voided&settlement=all&anomaly=over_received&debtStatus=诉讼&creditorUnit=一院"), {
+  status: "voided",
+  settlement: "all",
+  anomaly: "over_received",
+  debtStatus: "诉讼",
+  creditorUnit: "一院",
+});
+assert.deepEqual(receivablesLedgerInitialFilters("?status=bad&settlement=bad&anomaly=bad"), {
+  status: "active",
+  settlement: "unsettled",
+  anomaly: undefined,
+  debtStatus: undefined,
+  creditorUnit: undefined,
+});
+const dashboardStatements = buildReceivablesDashboardStatements({ filters: {}, readDepartmentIds: null } as never);
+assert.ok("debtStatuses" in dashboardStatements);
+assert.ok("creditorUnits" in dashboardStatements);
 
 console.log("RECEIVABLES_CORE_OK");

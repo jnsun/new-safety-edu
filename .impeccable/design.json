@@ -1,0 +1,188 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-16T19:30:33.6490874+08:00",
+  "title": "Design System: 安全生产管理系统管理端",
+  "extensions": {
+    "colorMeta": {
+      "primary-blue": {
+        "role": "primary",
+        "displayName": "清晰操作蓝",
+        "canonical": "#0071e3",
+        "tonalRamp": ["#00172f", "#00315f", "#004b91", "#0065c9", "#2786e9", "#70adf1", "#b5d5f8", "#eff7ff"]
+      },
+      "primary-blue-hover": {
+        "role": "primary",
+        "displayName": "操作蓝悬停",
+        "canonical": "#0077ed",
+        "tonalRamp": ["#001830", "#003364", "#004f98", "#006dd3", "#2d8cf1", "#76b3f6", "#bad9fb", "#f0f8ff"]
+      },
+      "authority-navy": {
+        "role": "primary",
+        "displayName": "权威海军蓝",
+        "canonical": "#123452",
+        "tonalRamp": ["#081724", "#102c45", "#194768", "#2a6387", "#4c82a5", "#7da5c0", "#b6cbd9", "#eef4f8"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "墨色正文",
+        "canonical": "#1d1d1f",
+        "tonalRamp": ["#171719", "#303033", "#4b4b4e", "#68686c", "#88888d", "#acacb0", "#d2d2d5", "#f2f2f3"]
+      },
+      "text-secondary": {
+        "role": "neutral",
+        "displayName": "次级石墨",
+        "canonical": "#6e6e73",
+        "tonalRamp": ["#1d1d20", "#38383c", "#545459", "#717176", "#8f8f94", "#aeafb3", "#d0d0d3", "#f2f2f3"]
+      },
+      "page-canvas": {
+        "role": "neutral",
+        "displayName": "冷灰画布",
+        "canonical": "#f5f5f7",
+        "tonalRamp": ["#242426", "#404043", "#5d5d61", "#7c7c80", "#9d9da1", "#bebec2", "#dedee1", "#f5f5f7"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "白色表面",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#262626", "#424242", "#5f5f5f", "#7f7f7f", "#9f9f9f", "#bfbfbf", "#dfdfdf", "#ffffff"]
+      },
+      "soft-action": {
+        "role": "neutral",
+        "displayName": "轻行动底色",
+        "canonical": "#f6f7f9",
+        "tonalRamp": ["#232426", "#404145", "#5d5f64", "#7b7e84", "#9b9ea4", "#bcc0c6", "#dde0e5", "#f6f7f9"]
+      },
+      "soft-action-hover": {
+        "role": "neutral",
+        "displayName": "轻行动悬停",
+        "canonical": "#f1f6fb",
+        "tonalRamp": ["#20252a", "#3b444d", "#566573", "#748796", "#94a9b8", "#b7cbd8", "#d9e6ee", "#f1f6fb"]
+      },
+      "anomaly-ink": {
+        "role": "secondary",
+        "displayName": "克制异常橙",
+        "canonical": "#9d2c00",
+        "tonalRamp": ["#2b0c00", "#561800", "#812400", "#ad3304", "#cf5a2c", "#e68b6d", "#f3c0ad", "#fff1e9"]
+      },
+      "anomaly-surface": {
+        "role": "secondary",
+        "displayName": "异常浅橙底",
+        "canonical": "#fff0e8",
+        "tonalRamp": ["#2d1910", "#533326", "#7b5040", "#a6715f", "#cc9582", "#e8baa9", "#f7d8ca", "#fff0e8"]
+      },
+      "field-border": {
+        "role": "neutral",
+        "displayName": "字段边界灰",
+        "canonical": "#d2d2d7",
+        "tonalRamp": ["#242426", "#414144", "#5f5f63", "#7d7d82", "#9c9ca1", "#bbbbc0", "#d2d2d7", "#f2f2f4"]
+      }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "页面标题", "purpose": "工作台和功能页的最高文本层级。" },
+      "money": { "displayName": "权威金额", "purpose": "每个首屏唯一的核心金额事实。" },
+      "body": { "displayName": "正文", "purpose": "说明、表单和台账数据。" },
+      "label": { "displayName": "范围标签", "purpose": "深色权威面板上的短范围提示。" }
+    },
+    "shadows": [
+      { "name": "card-ambient", "value": "0 1px 2px rgba(0, 0, 0, .02), 0 12px 38px rgba(0, 0, 0, .045)", "purpose": "普通信息卡片的低强度环境层次。" },
+      { "name": "authority-panel", "value": "0 18px 40px rgba(18, 52, 82, .16)", "purpose": "深海军蓝核心事实面板的专属深度。" },
+      { "name": "table-container", "value": "0 8px 30px rgba(0, 0, 0, .035)", "purpose": "密集台账容器的轻微边界。" },
+      { "name": "focus-visible", "value": "0 0 0 3px rgba(0, 113, 227, .28)", "purpose": "自定义按钮和分类入口的键盘焦点提示。" }
+    ],
+    "motion": [
+      { "name": "action-state", "value": "180ms ease", "purpose": "任务行边框与背景的悬停状态切换；不用于装饰动画。" }
+    ],
+    "breakpoints": [
+      { "name": "workbench-single-column", "value": "900px" },
+      { "name": "compact-mobile", "value": "768px" },
+      { "name": "quality-check-mobile", "value": "390px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "当前角色最主要且已获授权的页面动作。",
+      "html": "<button class=\"ds-btn-primary\">处理财务数据</button>",
+      "css": ".ds-btn-primary { border: 0; border-radius: 6px; padding: 4px 15px; min-height: 32px; background: #0071e3; color: #fff; font: 500 14px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: background .18s ease; } .ds-btn-primary:hover { background: #0077ed; } .ds-btn-primary:focus-visible { outline: 3px solid rgba(0, 113, 227, .35); outline-offset: 2px; } .ds-btn-primary:active { background: #0066cc; }"
+    },
+    {
+      "name": "Authority Panel",
+      "kind": "card",
+      "refersTo": "authority-panel",
+      "description": "首屏唯一的权威金额面板，先给范围，再给主金额与辅助事实。",
+      "html": "<section class=\"ds-authority-panel\"><span class=\"ds-authority-kicker\">当前筛选范围</span><div class=\"ds-authority-label\">应收余额</div><strong class=\"ds-authority-value\">¥ 12,680,000.00</strong><div class=\"ds-authority-summary\"><span>到账金额<b>¥ 4,320,000.00</b></span><span>开票金额<b>¥ 8,900,000.00</b></span><span>有效台账<b>128 条</b></span></div><button class=\"ds-authority-action\">查看当前范围台账</button></section>",
+      "css": ".ds-authority-panel { overflow: hidden; min-height: 320px; padding: 30px; display: flex; flex-direction: column; border-radius: 20px; background: #123452; color: #fff; box-shadow: 0 18px 40px rgba(18, 52, 82, .16); font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-authority-kicker { color: rgba(255,255,255,.7); font-size: 12px; font-weight: 650; letter-spacing: .08em; } .ds-authority-label { margin-top: 24px; color: rgba(255,255,255,.8); font-size: 15px; } .ds-authority-value { margin-top: 2px; font-size: clamp(36px, 4vw, 58px); line-height: 1.12; letter-spacing: -.05em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; } .ds-authority-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-top: auto; padding-top: 30px; } .ds-authority-summary span { padding-top: 12px; border-top: 1px solid rgba(255,255,255,.18); color: rgba(255,255,255,.62); font-size: 12px; } .ds-authority-summary b { display: block; margin-top: 4px; color: #fff; font-size: 16px; font-variant-numeric: tabular-nums; } .ds-authority-action { align-self: flex-start; margin-top: 22px; min-height: 32px; padding: 4px 15px; border: 1px solid #fff; border-radius: 6px; background: #fff; color: #123452; font-weight: 600; cursor: pointer; } .ds-authority-action:hover { background: #f5f5f7; } .ds-authority-action:focus-visible { outline: 3px solid rgba(255,255,255,.65); outline-offset: 2px; } .ds-authority-action:active { background: #e8e8ed; }"
+    },
+    {
+      "name": "Action Row",
+      "kind": "button",
+      "refersTo": "action-row",
+      "description": "带标题、解释和右侧计数的整行任务入口。",
+      "html": "<button class=\"ds-action-row\"><span><strong>到账金额超过应收</strong><small>请核对回款、决算金额或历史录入</small></span><b class=\"ds-action-count ds-is-active\">3</b></button>",
+      "css": ".ds-action-row { width: 100%; min-height: 68px; padding: 11px 12px; display: flex; justify-content: space-between; align-items: center; gap: 16px; border: 1px solid transparent; border-radius: 12px; background: #f6f7f9; color: #1d1d1f; text-align: left; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; transition: border-color .18s ease, background .18s ease; } .ds-action-row:hover { border-color: rgba(0,102,204,.22); background: #f1f6fb; } .ds-action-row:focus-visible { outline: 3px solid rgba(0,113,227,.28); outline-offset: 2px; } .ds-action-row:active { background: #e8f2ff; } .ds-action-row span { min-width: 0; } .ds-action-row strong, .ds-action-row small { display: block; } .ds-action-row small { margin-top: 3px; color: #6e6e73; line-height: 1.35; } .ds-action-count { min-width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: #fff; color: #6e6e73; font-variant-numeric: tabular-nums; } .ds-action-count.ds-is-active { background: #fff0e8; color: #9d2c00; }"
+    },
+    {
+      "name": "Anomaly Count",
+      "kind": "chip",
+      "refersTo": "anomaly-count",
+      "description": "只有非零异常才使用橙色的紧凑计数块。",
+      "html": "<span class=\"ds-anomaly-count\">3</span>",
+      "css": ".ds-anomaly-count { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: #fff0e8; color: #9d2c00; font: 700 14px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Filter Select",
+      "kind": "input",
+      "description": "紧凑筛选条中的白底选择字段，窄屏占满可用宽度。",
+      "html": "<label class=\"ds-filter\"><span>结清状态</span><select><option>未结</option><option>已结清</option><option>全部</option></select></label>",
+      "css": ".ds-filter { display: inline-grid; gap: 8px; color: #424245; font: 500 14px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif; } .ds-filter select { width: 172px; min-height: 32px; padding: 4px 28px 4px 11px; border: 1px solid #d2d2d7; border-radius: 6px; background: #fff; color: #1d1d1f; font: inherit; } .ds-filter select:hover { border-color: #86868b; } .ds-filter select:focus-visible { outline: 3px solid rgba(0,113,227,.28); outline-offset: 2px; }"
+    },
+    {
+      "name": "Facet Row",
+      "kind": "button",
+      "description": "把债权状态或单位分类直接带入台账筛选的低噪声入口。",
+      "html": "<button class=\"ds-facet-row\"><span>履约中</span><b>42</b></button>",
+      "css": ".ds-facet-row { width: 100%; min-height: 42px; padding: 8px 4px; display: flex; justify-content: space-between; align-items: center; gap: 16px; border: 0; border-bottom: 1px solid rgba(0,0,0,.06); background: transparent; color: #1d1d1f; text-align: left; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; } .ds-facet-row:hover span { color: #0066cc; } .ds-facet-row:focus-visible { outline: 3px solid rgba(0,113,227,.28); outline-offset: 2px; } .ds-facet-row:active { background: #f6f7f9; } .ds-facet-row b { color: #3a3a3c; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Selected Navigation Item",
+      "kind": "nav",
+      "description": "主系统紧凑侧栏中的当前模块状态。",
+      "html": "<nav class=\"ds-nav\"><button class=\"ds-nav-item ds-is-selected\">应收账款管理</button></nav>",
+      "css": ".ds-nav { width: 220px; padding: 8px 12px; background: rgba(255,255,255,.86); } .ds-nav-item { width: 100%; height: 46px; margin: 4px 0; padding: 0 16px; border: 0; border-radius: 12px; background: transparent; color: #424245; text-align: left; font: 500 14px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', sans-serif; cursor: pointer; } .ds-nav-item:hover { background: #f1f6fb; } .ds-nav-item:focus-visible { outline: 3px solid rgba(0,113,227,.28); outline-offset: 2px; } .ds-nav-item.ds-is-selected { background: rgba(0,113,227,.1); color: #0066cc; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "权威账本工作台",
+    "overview": "这个系统像一张经过整理的权威账本：浅色管理壳保持安静，真正需要判断的金额和动作才获得对比度。它延续主系统的 Ant Design 语言、系统字体和蓝色操作语义，不另建财务子品牌。\n\n应收账款是这个世界的耐久扩展。首屏从权威金额进入异常处置或催收行动，再回到同一台账完成工作；角色文案和动作跟随服务端能力，视觉层级不暗示用户拥有未授权能力。",
+    "keyCharacteristics": [
+      "浅灰画布、白色容器和紧凑的管理密度。",
+      "深海军蓝金额面板只承载最权威的财务事实。",
+      "蓝色只表示主操作或可进入路径，橙色只表示非零异常数量。",
+      "数字使用紧凑字距和等宽数字特性，便于快速核对。",
+      "桌面双栏、窄屏单栏，任务顺序在响应式变化中保持不变。"
+    ],
+    "rules": [
+      { "name": "The Three-Signal Rule", "body": "深蓝表示权威金额，蓝色表示动作，橙色表示异常；不要让三种信号互换职责。", "section": "colors" },
+      { "name": "The Orange-Count Rule", "body": "橙色只标记非零异常数量，不用作大面积背景、普通提醒或品牌强调。", "section": "colors" },
+      { "name": "The Numeric Authority Rule", "body": "所有金额与计数使用等宽数字；只有一个金额可以占据页面最高字号层级。", "section": "typography" },
+      { "name": "The Same-Order Rule", "body": "响应式只改变列数，不改变“金额事实 → 异常或催收行动 → 分类缩小范围”的任务顺序。", "section": "layout" },
+      { "name": "The Flat-Filter Rule", "body": "筛选器依靠边框与间距成立，不使用卡片阴影争夺首屏注意力。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 让应收余额成为首屏唯一的最高对比度金额事实。",
+      "Do 使用服务端能力决定角色标题、说明和动作，并让每个分类入口产生真实筛选。",
+      "Do 在 900px 以下转为单栏，并验证 390px 宽度没有遮挡或页面级横向溢出。",
+      "Do 为自定义可点击行使用原生按钮和可见的 :focus-visible 状态。",
+      "Do 延续主系统的 Ant Design 控件、系统字体、浅色壳和蓝色操作语义。"
+    ],
+    "donts": [
+      "Don't 建立第二套财务品牌、图标语言或陌生交互。",
+      "Don't 用装饰性渐变、玻璃拟态、无意义动画或同权重统计卡稀释任务层级。",
+      "Don't 用橙色装饰一般信息，或在异常为零时制造风险感。",
+      "Don't 从前端身份、筛选器或部门选择推断权限。",
+      "Don't 在工作台加入未经产品确认的逾期阈值、趋势、回款目标或提醒指标。"
+    ]
+  }
+}

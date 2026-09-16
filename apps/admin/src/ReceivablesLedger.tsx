@@ -8,7 +8,7 @@ import { api, apiResponse, json } from "./api";
 import {
   defaultReceivablesColumnPreference, formatReceivablesDate, formatReceivablesMoney, normalizeReceivablesColumnPreference,
   normalizeReceivablesMoneyInput, normalizeReceivablesPositiveMoneyInput, preserveReceivablesConflictDraft, receivablesDownloadFilename, receivablesErrorKind, receivablesQueryKey,
-  receivablesScopeQueryPrefix, receivablesScopedQueryKey, usableReceivablesData, type ReceivablesAccess, type ReceivablesColumnId,
+  receivablesLedgerInitialFilters, receivablesScopeQueryPrefix, receivablesScopedQueryKey, usableReceivablesData, type ReceivablesAccess, type ReceivablesColumnId,
   type ReceivablesColumnPreference, type ReceivablesLedgerDetail, type ReceivablesLedgerListResponse, type ReceivablesReferenceCategory, type ReceivablesReferenceData,
   type ReceivablesLedgerRow, type ReceivablesSort,
 } from "./receivables-types";
@@ -54,7 +54,7 @@ const operationTitles: Record<DetailOperation["type"], string> = { create: "æ–°å
 
 export function ReceivablesLedger({ accountId, scopeFingerprint, access }: { accountId: string; scopeFingerprint: string; access: ReceivablesAccess }) {
   const queryClient = useQueryClient(); const location = useLocation(); const [form] = Form.useForm();
-  const [state, setState] = useState<ListState>({ page: 1, pageSize: 50, status: "active", settlement: "unsettled", financeDepartmentId: undefined, debtStatus: undefined, creditorUnit: undefined, anomaly: undefined, search: undefined, sort: "updatedAt", order: "desc" });
+  const [state, setState] = useState<ListState>(() => ({ page: 1, pageSize: 50, financeDepartmentId: undefined, search: undefined, sort: "updatedAt", order: "desc", ...receivablesLedgerInitialFilters(location.search) }));
   const [search, setSearch] = useState(""); const [selectedId, setSelectedId] = useState<string | null>(null); const [columnModalOpen, setColumnModalOpen] = useState(false); const [operation, setOperation] = useState<DetailOperation>();
   const [actionError, setActionError] = useState<string>(); const [retryConfirmed, setRetryConfirmed] = useState(false); const [conflict, setConflict] = useState<{ draft: Record<string, unknown>; latest: ReceivablesLedgerDetail | undefined; retryRequired: true }>(); const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
   const [preference, setPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference); const [draftPreference, setDraftPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference);
