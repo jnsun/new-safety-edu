@@ -102,10 +102,20 @@ export type ReceivablesLedgerDetail = {
   ledger: ReceivablesLedgerRow;
   invoices: Array<{ id: string; invoiceDate: string; invoiceNo: string | null; amount: string; note: string | null; source: "manual" | "opening_import"; status: "active" | "voided"; revision: number; voidReason: string | null }>;
   receipts: Array<{ id: string; receiptDate: string; referenceNo: string | null; amount: string; note: string | null; source: "manual" | "opening_import"; status: "active" | "voided"; revision: number; voidReason: string | null }>;
-  attachments: Array<{ id: string; category: string; status: "active" | "voided"; revision: number; uploadedBy: string; voidReason: string | null; file: { id: string; originalName: string; mimeType: string; size: number; sha256: string } }>;
+  attachments: Array<{ id: string; category: string; status: "active" | "voided"; revision: number; uploadedBy: string; voidReason: string | null; capabilities: { canDownload: boolean; canVoid: boolean }; file: { id: string; originalName: string; mimeType: string; size: number; sha256: string } }>;
   revisions: Array<{ id: string; revision: number; reason: string; createdAt: string }>;
   capabilities: ReceivablesAccess;
 };
+
+export const receivablesReferenceCategories = [
+  "project_status", "final_method", "debt_status", "client_attr", "unit", "work_nature", "sector", "comm_method", "feedback", "progress_note", "next_plan", "attach_category",
+] as const;
+export type ReceivablesReferenceCategory = typeof receivablesReferenceCategories[number];
+export type ReceivablesReferenceData = {
+  departments: Array<{ id: string; name: string; canRead: boolean; canWrite: boolean }>;
+  dictionaries: Record<ReceivablesReferenceCategory, Array<{ id: string; value: string }>>;
+};
+export type ReceivablesGrantCandidate = { accountId: string; name: string; username: string | null; hasActiveGrant: boolean };
 
 export type ReceivablesGrant = {
   id: string;
@@ -290,8 +300,9 @@ export function usableReceivablesAccess<T>(query: { data: T | undefined; isFetch
   return usableReceivablesData(query);
 }
 
-export function receivablesPortalMode(access: Pick<ReceivablesAccess, "state" | "canEnter" | "canRecover">): "enabled" | "recover" | "hidden" {
+export function receivablesPortalMode(access: Pick<ReceivablesAccess, "state" | "canEnter" | "canRecover"> & { canConfirmSetup?: boolean }): "enabled" | "recover" | "confirm" | "hidden" {
   if (access.canEnter) return "enabled";
+  if (access.state === "pending_confirmation" && access.canConfirmSetup) return "confirm";
   return access.state !== "ready" && access.canRecover ? "recover" : "hidden";
 }
 
@@ -326,6 +337,14 @@ export function preserveReceivablesConflictDraft<TDraft, TLatest>(draft: TDraft,
   return { draft, latest, retryRequired: true as const };
 }
 
+export function normalizeReceivablesGrantScopes(role: ReceivablesGrant["role"], scopes: Array<{ departmentId: string; canRead: boolean; canWrite: boolean }>) {
+  return scopes.map((scope) => ({
+    departmentId: scope.departmentId,
+    canRead: scope.canRead || scope.canWrite,
+    canWrite: role === "readonly" ? false : scope.canWrite,
+  }));
+}
+
 type ImportPreviewGuard = { errors: readonly unknown[]; rows: readonly { rowNumber: number; ledgerId: string | null }[] };
 type ImportDecisions = Record<number, "skip" | "update">;
 const unresolvedDuplicate = (preview: ImportPreviewGuard, decisions: ImportDecisions) => preview.rows.some((row) => row.ledgerId && !decisions[row.rowNumber]);
@@ -338,6 +357,10 @@ export function receivablesImportStage(preview: ImportPreviewGuard | undefined, 
 }
 
 export const canApplyReceivablesImport = (preview: ImportPreviewGuard, decisions: ImportDecisions, confirmed: boolean) => receivablesImportStage(preview, decisions, confirmed) === "confirm_apply";
+
+export function updateReceivablesImportDecision(state: { decisions: ImportDecisions; confirmStage: boolean; confirmed: boolean }, rowNumber: number, decision: "skip" | "update") {
+  return { decisions: { ...state.decisions, [rowNumber]: decision }, confirmStage: false, confirmed: false };
+}
 
 export const receivablesExportDownloadRequest = (jobId: string, token: string) => ({
   path: `/api/receivables/exports/${encodeURIComponent(jobId)}/download`,
@@ -354,16 +377,24 @@ export const receivablesMutationInvalidationKeys = (accountId: string, scopeFing
   receivablesScopedQueryKey(accountId, scopeFingerprint, "exports"),
 ];
 
+export const receivablesScopeQueryPrefix = (accountId: string, scopeFingerprint: string) => receivablesScopedQueryKey(accountId, scopeFingerprint);
+
 export function normalizeReceivablesMoneyInput(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
   return /^(?:0|[1-9]\d{0,13})(?:\.\d{1,4})?$/.test(normalized) ? normalized : null;
 }
 
+export function normalizeReceivablesPositiveMoneyInput(value: unknown): string | null {
+  const normalized = normalizeReceivablesMoneyInput(value);
+  return normalized && !/^0(?:\.0+)?$/.test(normalized) ? normalized : null;
+}
+
 export function receivablesErrorKind(error: unknown): "conflict" | "revoked" | "other" {
-  const message = error instanceof Error ? error.message : String(error);
-  if (["版本已变化", "已被其他操作更新", "迁移状态已变化", "预览已失效", "台账已变化", "目标版本已变化"].some((part) => message.includes(part))) return "conflict";
-  if (["无应收账款操作权限", "无权读取该财务归属部门", "权限已收缩", "当前权限不足"].some((part) => message.includes(part))) return "revoked";
+  const status = typeof error === "object" && error !== null && "status" in error ? (error as { status?: unknown }).status : undefined;
+  const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
+  if (status === 409 || code === "REVISION_CONFLICT" || code === "RECEIVABLES_MIGRATION_STATE_CHANGED") return "conflict";
+  if (status === 403 || code === "RECEIVABLES_FORBIDDEN") return "revoked";
   return "other";
 }
 

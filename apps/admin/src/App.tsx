@@ -217,7 +217,7 @@ const moduleMenuItems = (pathname: string, receivablesAccess?: ReceivablesAccess
         : pathname.startsWith("/receivables")
           ? [
               { key: "/", label: "返回平台首页", icon: <DashboardOutlined /> },
-              ...(receivablesAccess?.canEnter ? receivablesNavigation(receivablesAccess).map((item) => ({
+              ...(receivablesAccess ? receivablesNavigation(receivablesAccess).map((item) => ({
                 key: item.path,
                 label: item.label,
                 icon: item.path === "/receivables" ? <DashboardOutlined /> : item.path === "/receivables/ledger" ? <AccountBookOutlined /> : item.path.includes("imports") ? <UploadOutlined /> : <SettingOutlined />,
@@ -2623,7 +2623,7 @@ function PlatformPortal({ accountId }: { accountId: string }) {
   const modules = portalMode === "hidden" ? platformModules : [...platformModules, {
     title: "应收账款管理",
     description: "合同应收、开票回款与催收台账",
-    path: portalMode === "enabled" ? "/receivables" : null,
+    path: portalMode === "enabled" ? "/receivables" : portalMode === "confirm" ? "/receivables/departments" : null,
     icon: <AccountBookOutlined />,
     tone: "slate",
   } as const];
@@ -2655,7 +2655,7 @@ function PlatformPortal({ accountId }: { accountId: string }) {
             <span className="module-title">{item.title}</span>
             <span className="module-description">{item.description}</span>
             <span className="module-enter">
-              {item.path ? "进入模块 ›" : item.title === "应收账款管理" ? "待配置" : "待规划"}
+              {item.title === "应收账款管理" && portalMode === "confirm" ? "待确认 ›" : item.path ? "进入模块 ›" : item.title === "应收账款管理" ? "待配置" : "待规划"}
             </span>
           </button>
         ))}
