@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { Key } from "react";
 import {
   Navigate,
   Route,
@@ -57,6 +58,7 @@ import {
 } from "./SafetyManagementPages";
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
 import { receivablesErrorKind, receivablesNavigation, receivablesPortalMode, receivablesQueryKey, receivablesScopeFingerprint, receivablesScopeQueryPrefix, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
+import { personMatchesSearch } from "./person-search";
 
 type Principal = {
   accountId: string;
@@ -1031,7 +1033,14 @@ function People({ principal }: { principal: Principal }) {
     queryFn: () => api<Project[]>("/api/projects"),
   });
   const qc = useQueryClient();
+  const companyAdmin = principal.roles.some(
+    (role) => role.role === "company_admin",
+  );
   const [open, setOpen] = useState(false);
+  const [personSearch, setPersonSearch] = useState("");
+  const [selectedUnassignedIds, setSelectedUnassignedIds] = useState<string[]>([]);
+  const [bulkOrganizationOpen, setBulkOrganizationOpen] = useState(false);
+  const [bulkOrganizationForm] = Form.useForm();
   const [photoId, setPhotoId] = useState<string>();
   const [form] = Form.useForm();
   const [detailPerson, setDetailPerson] = useState<Person>();
@@ -1092,6 +1101,22 @@ function People({ principal }: { principal: Principal }) {
       void qc.invalidateQueries({ queryKey: ["persons"] });
     },
     onError: (e) => message.error(e.message),
+  });
+  const assignOrganization = useMutation({
+    mutationFn: (value: { organizationId: string; reason: string }) =>
+      api<{ assignedCount: number }>(
+        "/api/persons/batch-primary-organization",
+        json("POST", { ...value, personIds: selectedUnassignedIds }),
+      ),
+    onSuccess: ({ assignedCount }) => {
+      message.success(`已为 ${assignedCount} 人设置部门`);
+      setSelectedUnassignedIds([]);
+      setBulkOrganizationOpen(false);
+      bulkOrganizationForm.resetFields();
+      void qc.invalidateQueries({ queryKey: ["persons"] });
+      void qc.invalidateQueries({ queryKey: ["organizations"] });
+    },
+    onError: (error) => message.error(error.message),
   });
   const uploadEditPhoto = async ({
     file,
@@ -1198,24 +1223,22 @@ function People({ principal }: { principal: Principal }) {
       ),
     },
   ];
+  const filteredPeople = (query.data ?? []).filter((person) =>
+    personMatchesSearch(person, personSearch),
+  );
   const groupedPeople = (organizations.data ?? [])
     .filter((organization) => organization.type !== "company")
     .map((organization) => ({
       organization,
-      people: (query.data ?? []).filter(
+      people: filteredPeople.filter(
         (person) =>
-          (
-            person.organizations.find((item) => item.primary) ??
-            person.organizations[0]
-          )?.organization.id === organization.id,
+          person.organizations.find((item) => item.primary)?.organization.id ===
+          organization.id,
       ),
     }))
     .filter(({ people }) => people.length);
-  const unassigned = (query.data ?? []).filter(
-    (person) => !person.organizations.length,
-  );
-  const companyAdmin = principal.roles.some(
-    (role) => role.role === "company_admin",
+  const unassigned = filteredPeople.filter(
+    (person) => !person.organizations.some((item) => item.primary),
   );
   const canExportSensitive = principal.roles.some((role) =>
     ["company_admin", "org_leader", "org_admin", "project_admin"].includes(role.role),
@@ -1239,38 +1262,77 @@ function People({ principal }: { principal: Principal }) {
             key: "persons",
             label: "人员档案",
             children: (
-              <Collapse
-                items={[
-                  ...groupedPeople.map(({ organization, people }) => ({
-                    key: organization.id,
-                    label: `${organization.name}（${people.length} 人）`,
-                    children: (
-                      <Table
-                        rowKey="id"
-                        pagination={false}
-                        dataSource={people}
-                        columns={personColumns}
-                      />
-                    ),
-                  })),
-                  ...(unassigned.length
-                    ? [
-                        {
-                          key: "unassigned",
-                          label: `待分配部门（${unassigned.length} 人）`,
-                          children: (
-                            <Table
-                              rowKey="id"
-                              pagination={false}
-                              dataSource={unassigned}
-                              columns={personColumns}
-                            />
-                          ),
-                        },
-                      ]
-                    : []),
-                ]}
-              />
+              <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+                <Space wrap>
+                  <Input
+                    allowClear
+                    prefix={<SearchOutlined />}
+                    placeholder="搜索姓名、手机号、部门、类型或状态"
+                    value={personSearch}
+                    onChange={(event) => setPersonSearch(event.target.value)}
+                    style={{ width: 360, maxWidth: "100%" }}
+                  />
+                  <Typography.Text type="secondary">
+                    找到 {filteredPeople.length} 人
+                  </Typography.Text>
+                  {companyAdmin && unassigned.length > 0 && (
+                    <Button onClick={() => setSelectedUnassignedIds(unassigned.map(({ id }) => id))}>
+                      全选搜索到的待分配人员
+                    </Button>
+                  )}
+                  {companyAdmin && selectedUnassignedIds.length > 0 && (
+                    <>
+                      <Button onClick={() => setSelectedUnassignedIds([])}>清空选择</Button>
+                      <Button type="primary" onClick={() => setBulkOrganizationOpen(true)}>
+                        批量设置部门（{selectedUnassignedIds.length}）
+                      </Button>
+                    </>
+                  )}
+                </Space>
+                {filteredPeople.length ? (
+                  <Collapse
+                    items={[
+                      ...groupedPeople.map(({ organization, people }) => ({
+                        key: organization.id,
+                        label: `${organization.name}（${people.length} 人）`,
+                        children: (
+                          <Table
+                            rowKey="id"
+                            pagination={false}
+                            dataSource={people}
+                            columns={personColumns}
+                          />
+                        ),
+                      })),
+                      ...(unassigned.length
+                        ? [
+                            {
+                              key: "unassigned",
+                              label: `待分配部门（${unassigned.length} 人）`,
+                              children: (
+                                <Table
+                                  rowKey="id"
+                                  pagination={false}
+                                  dataSource={unassigned}
+                                  columns={personColumns}
+                                  {...(companyAdmin ? {
+                                    rowSelection: {
+                                      selectedRowKeys: selectedUnassignedIds,
+                                      preserveSelectedRowKeys: true,
+                                      onChange: (keys: Key[]) => setSelectedUnassignedIds(keys.map(String)),
+                                    },
+                                  } : {})}
+                                />
+                              ),
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
+                ) : (
+                  <Alert showIcon type="info" message="没有匹配的人员档案" />
+                )}
+              </Space>
             ),
           },
           {
@@ -1299,6 +1361,42 @@ function People({ principal }: { principal: Principal }) {
             : []),
         ]}
       />
+      <Modal
+        title="批量设置部门"
+        open={bulkOrganizationOpen}
+        onCancel={() => {
+          setBulkOrganizationOpen(false);
+          bulkOrganizationForm.resetFields();
+        }}
+        onOk={() => bulkOrganizationForm.submit()}
+        confirmLoading={assignOrganization.isPending}
+        okText={`确认设置 ${selectedUnassignedIds.length} 人`}
+      >
+        <Alert
+          showIcon
+          type="warning"
+          message="仅为当前没有主部门的在用人员设置归属，不会改变账号、角色或培训记录。"
+          style={{ marginBottom: 16 }}
+        />
+        <Form
+          form={bulkOrganizationForm}
+          layout="vertical"
+          onFinish={(value) => assignOrganization.mutate(value as { organizationId: string; reason: string })}
+        >
+          <Form.Item name="organizationId" label="目标部门" rules={[{ required: true, message: "请选择目标部门" }]}>
+            <Select
+              showSearch
+              optionFilterProp="label"
+              options={(organizations.data ?? [])
+                .filter((organization) => ["department", "business_entity"].includes(organization.type))
+                .map((organization) => ({ value: organization.id, label: organization.name }))}
+            />
+          </Form.Item>
+          <Form.Item name="reason" label="设置原因" initialValue="生产人员档案初始化" rules={[{ required: true, min: 2, max: 500 }]}>
+            <Input.TextArea rows={3} />
+          </Form.Item>
+        </Form>
+      </Modal>
       <Modal
         title="新建人员"
         open={open}

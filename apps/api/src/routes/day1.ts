@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import argon2 from "argon2";
 import { z } from "zod";
 import {
@@ -24,6 +24,7 @@ import { setCsrfCookie } from "../csrf.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 import { assertMembershipTransition } from "../project-membership.js";
 import { changeRequestKey } from "../request-policy.js";
+import { prepareBulkPrimaryOrganizationAssignment } from "../person-bulk-organization-policy.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -346,6 +347,61 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const person = await createPerson(input, principal, deps.env);
     audit(principal.accountId, "person.create", "person", person.id);
     return reply.code(201).send({ data: maskPerson(person) });
+  });
+
+  app.post("/api/persons/batch-primary-organization", manager, async (request) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以批量设置人员主部门");
+    const input = z.object({
+      personIds: z.array(z.string().uuid()).min(1).max(500),
+      organizationId: z.string().uuid(),
+      reason: z.string().trim().min(2).max(500),
+    }).parse(request.body);
+    const assignedCount = await prisma.$transaction(async (tx) => {
+      const [organization, persons] = await Promise.all([
+        tx.organization.findUniqueOrThrow({ where: { id: input.organizationId }, select: { type: true } }),
+        tx.person.findMany({
+          where: { id: { in: input.personIds } },
+          select: {
+            id: true,
+            status: true,
+            organizations: { where: { active: true, primary: true }, select: { organizationId: true }, take: 1 },
+          },
+        }),
+      ]);
+      const personIds = prepareBulkPrimaryOrganizationAssignment({
+        personIds: input.personIds,
+        targetOrganizationType: organization.type,
+        persons: persons.map((person) => ({
+          id: person.id,
+          status: person.status,
+          primaryOrganizationId: person.organizations[0]?.organizationId ?? null,
+        })),
+      });
+      await tx.organizationMembership.createMany({
+        data: personIds.map((personId) => ({ personId, organizationId: input.organizationId, primary: true })),
+      });
+      await tx.auditLog.createMany({
+        data: personIds.map((personId) => ({
+          actorId: principal.accountId,
+          action: "organization.membership_assign",
+          objectType: "person",
+          objectId: personId,
+          result: "success",
+          metadata: { toOrganizationId: input.organizationId, reason: input.reason },
+        })),
+      });
+      await writeCriticalAudit(tx, {
+        actorId: principal.accountId,
+        action: "person.batch_primary_organization",
+        objectType: "organization",
+        objectId: input.organizationId,
+        reason: input.reason,
+        metadata: { assignedCount: personIds.length },
+      });
+      return personIds.length;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 });
+    return { data: { assignedCount } };
   });
 
   app.get("/api/persons/:id/sensitive", manager, async (request) => {
