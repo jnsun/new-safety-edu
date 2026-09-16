@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
-import { Alert, Button, Card, Col, Form, Result, Row, Select, Space, Spin, Table, Typography } from "antd";
-import { useQuery } from "@tanstack/react-query";
+import { Alert, Button, Card, Col, Form, message, Modal, Result, Row, Select, Space, Spin, Table, Typography } from "antd";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { api } from "./api";
 import { ReceivablesLedger } from "./ReceivablesLedger";
+import { ReceivablesAdmin } from "./ReceivablesAdmin";
+import { ReceivablesTransfers } from "./ReceivablesTransfers";
 import {
   formatReceivablesMoney,
   receivablesQueryKey,
@@ -155,14 +157,14 @@ function ReceivablesDashboard({ accountId, scopeFingerprint }: { accountId: stri
   );
 }
 
-function AccessState({ access }: { access: ReceivablesAccess }) {
+function AccessState({ access, onConfirm, confirming }: { access: ReceivablesAccess; onConfirm: () => void; confirming: boolean }) {
   if (access.state !== "ready") {
     const descriptions = {
       unconfigured: "尚未绑定财务资产部，请由公司管理员在组织管理中完成绑定。",
       pending_owner: "财务资产部当前缺少有效负责人，请在组织管理中完成任命。",
       pending_confirmation: "初始财务归属部门和业务字典尚未由负责人确认。",
     } as const;
-    return <Result status="warning" title="应收账款管理待配置" subTitle={descriptions[access.state]} />;
+    return <Result status="warning" title="应收账款管理待配置" subTitle={descriptions[access.state]} extra={access.canConfirmSetup ? <Button type="primary" loading={confirming} onClick={() => Modal.confirm({ title: "确认启用应收账款管理？", content: "请先核对初始财务归属部门和业务字典的启用、停用状态。确认后财务数据页才会开放。", okText: "已核对，确认启用", cancelText: "暂不启用", onOk: onConfirm })}>核对并确认初始配置</Button> : undefined} />;
   }
   return <Result status="403" title="无法进入应收账款管理" subTitle="财务权限未授予或已被撤销，请联系应收账款负责人。" />;
 }
@@ -171,11 +173,21 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
   const location = useLocation();
   const route = resolveReceivablesRoute(location.pathname);
   const access = useReceivablesAccess(accountId, route !== "redirect");
+  const confirmSetup = useMutation({ mutationFn: () => api<ReceivablesAccess>("/api/receivables/setup/confirm", { method: "POST", body: "{}" }), onSuccess: async () => { message.success("初始配置已确认"); await access.refetch(); }, onError: (error) => message.error(error.message) });
   const currentAccess = usableReceivablesAccess(access);
   if (route === "redirect") return <Navigate to="/receivables" replace />;
   if (access.isFetching) return <div className="receivables-state"><Spin tip="正在核验应收账款权限…" /></div>;
   if (access.isError || !currentAccess) return <Result status="error" title="权限核验失败" subTitle="未显示任何财务数据。请重新登录或稍后重试。" extra={<Button onClick={() => void access.refetch()}>重新核验</Button>} />;
-  if (!currentAccess.canEnter || !currentAccess.canReadLedger) return <AccessState access={currentAccess} />;
+  if (!currentAccess.canEnter) return <AccessState access={currentAccess} confirming={confirmSetup.isPending} onConfirm={() => confirmSetup.mutate()} />;
   const scopeFingerprint = receivablesScopeFingerprint(currentAccess);
-  return route === "ledger" ? <ReceivablesLedger accountId={accountId} scopeFingerprint={scopeFingerprint} /> : <ReceivablesDashboard accountId={accountId} scopeFingerprint={scopeFingerprint} />;
+  const allowed = route === "dashboard" || route === "ledger" ? currentAccess.canReadLedger
+    : route === "imports" ? currentAccess.canImport
+      : route === "exports" ? currentAccess.canExport
+        : route === "grants" ? currentAccess.canManageAccess
+          : currentAccess.canManageConfiguration;
+  if (!allowed) return <Result status="403" title="没有此项能力" subTitle="菜单与路由均按服务端返回的最新 capability 开放。" />;
+  if (route === "ledger") return <ReceivablesLedger accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} />;
+  if (route === "imports" || route === "exports") return <ReceivablesTransfers accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} />;
+  if (route === "grants" || route === "departments" || route === "dictionaries") return <ReceivablesAdmin accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} />;
+  return <ReceivablesDashboard accountId={accountId} scopeFingerprint={scopeFingerprint} />;
 }

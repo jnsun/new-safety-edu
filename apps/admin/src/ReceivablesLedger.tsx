@@ -1,23 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Input, message, Modal, Select, Space, Table, Tag, Typography } from "antd";
-import { DownOutlined, SettingOutlined, UpOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Checkbox, Descriptions, Drawer, Form, Input, message, Modal, Select, Space, Table, Tag, Typography, Upload } from "antd";
+import { DownOutlined, PlusOutlined, SettingOutlined, UploadOutlined, UpOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { TableColumnType, TableColumnsType, TableProps } from "antd";
+import type { TableColumnType, TableColumnsType, TableProps, UploadFile } from "antd";
 import { api, json } from "./api";
 import {
-  defaultReceivablesColumnPreference,
-  formatReceivablesDate,
-  formatReceivablesMoney,
-  normalizeReceivablesColumnPreference,
-  receivablesQueryKey,
-  receivablesScopedQueryKey,
-  usableReceivablesData,
-  type ReceivablesColumnId,
-  type ReceivablesColumnPreference,
-  type ReceivablesLedgerDetail,
-  type ReceivablesLedgerListResponse,
-  type ReceivablesLedgerRow,
-  type ReceivablesSort,
+  defaultReceivablesColumnPreference, formatReceivablesDate, formatReceivablesMoney, normalizeReceivablesColumnPreference,
+  normalizeReceivablesMoneyInput, preserveReceivablesConflictDraft, receivablesErrorKind, receivablesQueryKey,
+  receivablesScopedQueryKey, usableReceivablesData, type ReceivablesAccess, type ReceivablesColumnId,
+  type ReceivablesColumnPreference, type ReceivablesDepartment, type ReceivablesLedgerDetail, type ReceivablesLedgerListResponse,
+  type ReceivablesLedgerRow, type ReceivablesSort,
 } from "./receivables-types";
 
 const columnLabels: Record<ReceivablesColumnId, string> = {
@@ -28,22 +20,19 @@ const columnLabels: Record<ReceivablesColumnId, string> = {
 };
 const anomalyLabels = { final_amount_missing: "决算未定", over_received: "超收", writeoff_adjustment_required: "核销待调减" } as const;
 const sortable = new Set<ReceivablesSort>(["updatedAt", "contractNo", "projectName", "customerName", "debtStatus", "finalAmount", "invoicedAmount", "receivedAmount", "balance", "openingChargeDate"]);
-
-const plain = (value: string | null) => value || "—";
+const plain = (value: string | null | undefined) => value || "—";
+const nullable = (value: unknown) => typeof value === "string" ? value.trim() || null : value ?? null;
+const moneyRule = { validator: (_: unknown, value: unknown) => !value || normalizeReceivablesMoneyInput(value) ? Promise.resolve() : Promise.reject(new Error("请输入最多 14 位整数、4 位小数的非负金额")) };
 
 type ListState = {
-  page: number;
-  pageSize: number;
-  status: "active" | "voided" | "all";
-  settlement: "unsettled" | "settled" | "all";
-  financeDepartmentId: string | undefined;
-  debtStatus: string | undefined;
-  creditorUnit: string | undefined;
+  page: number; pageSize: number; status: "active" | "voided" | "all"; settlement: "unsettled" | "settled" | "all";
+  financeDepartmentId: string | undefined; debtStatus: string | undefined; creditorUnit: string | undefined;
   anomaly: "over_received" | "writeoff_adjustment_required" | "final_amount_missing" | undefined;
-  search: string | undefined;
-  sort: ReceivablesSort;
-  order: "asc" | "desc";
+  search: string | undefined; sort: ReceivablesSort; order: "asc" | "desc";
 };
+type DetailOperation =
+  | { type: "create" | "edit" | "void" | "invoice-create" | "receipt-create" | "writeoff" | "attachment-create" }
+  | { type: "invoice-edit" | "invoice-void" | "receipt-edit" | "receipt-void" | "attachment-void"; id: string };
 
 function listPath(state: ListState) {
   const query = new URLSearchParams({ page: String(state.page), pageSize: String(state.pageSize), status: state.status, settlement: state.settlement, sort: state.sort, order: state.order });
@@ -52,170 +41,93 @@ function listPath(state: ListState) {
 }
 
 function ColumnSettings({ value, onChange, onSave, saving }: { value: ReceivablesColumnPreference; onChange: (value: ReceivablesColumnPreference) => void; onSave: () => void; saving: boolean }) {
-  const move = (id: ReceivablesColumnId, direction: -1 | 1) => {
-    const index = value.order.indexOf(id);
-    const target = index + direction;
-    if (target < 0 || target >= value.order.length) return;
-    const order = [...value.order];
-    [order[index], order[target]] = [order[target]!, order[index]!];
-    onChange({ ...value, order });
-  };
-  const setVisible = (id: ReceivablesColumnId, checked: boolean) => onChange({
-    ...value,
-    visible: checked ? [...value.visible, id] : value.visible.filter((item) => item !== id),
-    frozen: checked ? value.frozen : value.frozen.filter((item) => item !== id),
-  });
-  const setFrozen = (id: ReceivablesColumnId, checked: boolean) => onChange({
-    ...value,
-    frozen: checked ? [...value.frozen, id] : value.frozen.filter((item) => item !== id),
-  });
-  return (
-    <>
-      <Typography.Paragraph type="secondary">调整列顺序、显示状态和左侧冻结列。读取台账不依赖偏好保存成功。</Typography.Paragraph>
-      <div className="receivables-column-list">
-        {value.order.map((id, index) => (
-          <div className="receivables-column-item" key={id}>
-            <Checkbox checked={value.visible.includes(id)} onChange={(event) => setVisible(id, event.target.checked)}>{columnLabels[id]}</Checkbox>
-            <Checkbox disabled={!value.visible.includes(id)} checked={value.frozen.includes(id)} onChange={(event) => setFrozen(id, event.target.checked)}>冻结</Checkbox>
-            <Space size={4}>
-              <Button aria-label={`上移${columnLabels[id]}`} icon={<UpOutlined />} size="small" disabled={index === 0} onClick={() => move(id, -1)} />
-              <Button aria-label={`下移${columnLabels[id]}`} icon={<DownOutlined />} size="small" disabled={index === value.order.length - 1} onClick={() => move(id, 1)} />
-            </Space>
-          </div>
-        ))}
-      </div>
-      <div className="receivables-column-actions"><Button type="primary" disabled={value.visible.length === 0} loading={saving} onClick={onSave}>保存列设置</Button></div>
-    </>
-  );
+  const move = (id: ReceivablesColumnId, direction: -1 | 1) => { const index = value.order.indexOf(id); const target = index + direction; if (target < 0 || target >= value.order.length) return; const order = [...value.order]; [order[index], order[target]] = [order[target]!, order[index]!]; onChange({ ...value, order }); };
+  const setVisible = (id: ReceivablesColumnId, checked: boolean) => onChange({ ...value, visible: checked ? [...value.visible, id] : value.visible.filter((item) => item !== id), frozen: checked ? value.frozen : value.frozen.filter((item) => item !== id) });
+  const setFrozen = (id: ReceivablesColumnId, checked: boolean) => onChange({ ...value, frozen: checked ? [...value.frozen, id] : value.frozen.filter((item) => item !== id) });
+  return <><Typography.Paragraph type="secondary">调整列顺序、显示状态和左侧冻结列。读取台账不依赖偏好保存成功。</Typography.Paragraph><div className="receivables-column-list">{value.order.map((id, index) => <div className="receivables-column-item" key={id}><Checkbox checked={value.visible.includes(id)} onChange={(event) => setVisible(id, event.target.checked)}>{columnLabels[id]}</Checkbox><Checkbox disabled={!value.visible.includes(id)} checked={value.frozen.includes(id)} onChange={(event) => setFrozen(id, event.target.checked)}>冻结</Checkbox><Space size={4}><Button aria-label={`上移${columnLabels[id]}`} icon={<UpOutlined />} size="small" disabled={index === 0} onClick={() => move(id, -1)} /><Button aria-label={`下移${columnLabels[id]}`} icon={<DownOutlined />} size="small" disabled={index === value.order.length - 1} onClick={() => move(id, 1)} /></Space></div>)}</div><div className="receivables-column-actions"><Button type="primary" disabled={value.visible.length === 0} loading={saving} onClick={onSave}>保存列设置</Button></div></>;
 }
 
-export function ReceivablesLedger({ accountId, scopeFingerprint }: { accountId: string; scopeFingerprint: string }) {
-  const queryClient = useQueryClient();
+const operationTitles: Record<DetailOperation["type"], string> = { create: "新建台账", edit: "编辑台账", void: "作废台账", "invoice-create": "登记开票", "invoice-edit": "更正开票", "invoice-void": "作废开票", "receipt-create": "登记回款", "receipt-edit": "更正回款", "receipt-void": "作废回款", writeoff: "调整核销金额", "attachment-create": "上传财务附件", "attachment-void": "作废附件" };
+
+export function ReceivablesLedger({ accountId, scopeFingerprint, access }: { accountId: string; scopeFingerprint: string; access: ReceivablesAccess }) {
+  const queryClient = useQueryClient(); const [form] = Form.useForm();
   const [state, setState] = useState<ListState>({ page: 1, pageSize: 50, status: "active", settlement: "unsettled", financeDepartmentId: undefined, debtStatus: undefined, creditorUnit: undefined, anomaly: undefined, search: undefined, sort: "updatedAt", order: "desc" });
-  const [search, setSearch] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [columnModalOpen, setColumnModalOpen] = useState(false);
-  const [preference, setPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference);
-  const [draftPreference, setDraftPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference);
-  const requestPath = useMemo(() => listPath(state), [state]);
-  const ledgers = useQuery({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledgers", state), queryFn: () => api<ReceivablesLedgerListResponse>(requestPath), retry: false });
-  const currentLedgers = usableReceivablesData(ledgers);
+  const [search, setSearch] = useState(""); const [selectedId, setSelectedId] = useState<string | null>(null); const [columnModalOpen, setColumnModalOpen] = useState(false); const [operation, setOperation] = useState<DetailOperation>();
+  const [actionError, setActionError] = useState<string>(); const [retryConfirmed, setRetryConfirmed] = useState(false); const [conflict, setConflict] = useState<{ draft: Record<string, unknown>; latest: ReceivablesLedgerDetail | undefined; retryRequired: true }>(); const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
+  const [preference, setPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference); const [draftPreference, setDraftPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference);
+  const ledgers = useQuery({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledgers", state), queryFn: () => api<ReceivablesLedgerListResponse>(listPath(state)), retry: false }); const currentLedgers = usableReceivablesData(ledgers);
+  const departments = useQuery({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledger-departments"), queryFn: () => api<ReceivablesDepartment[]>("/api/receivables/departments"), enabled: access.canManageConfiguration, retry: false });
   const preferenceQuery = useQuery({ queryKey: receivablesQueryKey(accountId, "preferences", "columns"), queryFn: async () => normalizeReceivablesColumnPreference(await api<unknown>("/api/receivables/preferences/columns")), retry: false });
-  useEffect(() => {
-    if (!preferenceQuery.data) return;
-    setPreference(preferenceQuery.data);
-    setDraftPreference(preferenceQuery.data);
-  }, [preferenceQuery.data]);
-  const savePreference = useMutation({
-    mutationFn: async () => normalizeReceivablesColumnPreference(await api<unknown>("/api/receivables/preferences/columns", json("PUT", draftPreference))),
-    onSuccess: (saved) => {
-      setPreference(saved);
-      queryClient.setQueryData(receivablesQueryKey(accountId, "preferences", "columns"), saved);
-      setColumnModalOpen(false);
-      message.success("列设置已保存");
-    },
-    onError: (error) => message.error(`列设置保存失败：${(error as Error).message}`),
-  });
-  const detail = useQuery({
-    queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledger", selectedId),
-    queryFn: () => api<ReceivablesLedgerDetail>(`/api/receivables/ledgers/${selectedId}`),
-    enabled: !!selectedId,
-    retry: false,
-  });
-  const currentDetail = usableReceivablesData(detail);
+  useEffect(() => { if (preferenceQuery.data) { setPreference(preferenceQuery.data); setDraftPreference(preferenceQuery.data); } }, [preferenceQuery.data]);
+  const savePreference = useMutation({ mutationFn: async () => normalizeReceivablesColumnPreference(await api<unknown>("/api/receivables/preferences/columns", json("PUT", draftPreference))), onSuccess: (saved) => { setPreference(saved); queryClient.setQueryData(receivablesQueryKey(accountId, "preferences", "columns"), saved); setColumnModalOpen(false); message.success("列设置已保存"); }, onError: (error) => message.error(`列设置保存失败：${error.message}`) });
+  const detail = useQuery({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledger", selectedId), queryFn: () => api<ReceivablesLedgerDetail>(`/api/receivables/ledgers/${selectedId}`), enabled: !!selectedId, retry: false }); const currentDetail = usableReceivablesData(detail);
+  const invalidateLedger = async (ledgerId?: string) => { await Promise.all([queryClient.invalidateQueries({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "dashboard") }), queryClient.invalidateQueries({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledgers") }), ...(ledgerId ? [queryClient.invalidateQueries({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledger", ledgerId) })] : [])]); };
+  const closeOperation = () => { setOperation(undefined); setActionError(undefined); setConflict(undefined); setRetryConfirmed(false); setUploadFiles([]); form.resetFields(); };
+  const revokeWorkflow = async () => { closeOperation(); setSelectedId(null); queryClient.removeQueries({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint) }); await queryClient.invalidateQueries({ queryKey: receivablesQueryKey(accountId, "access") }); };
+  const mutation = useMutation({ mutationFn: async ({ path, init, ledgerId }: { path: string; init: RequestInit; ledgerId?: string }) => ({ result: await api<unknown>(path, init), ledgerId }), onSuccess: async ({ ledgerId }) => { message.success("操作已保存"); closeOperation(); await invalidateLedger(ledgerId); }, onError: async (error) => { const kind = receivablesErrorKind(error); if (kind === "revoked") { message.error("财务权限已失效，正在重新核验"); await revokeWorkflow(); return; } if (kind === "conflict" && selectedId) { const draft = form.getFieldsValue(true) as Record<string, unknown>; const latest = await detail.refetch(); const preserved = preserveReceivablesConflictDraft(draft, latest.data); setConflict({ draft: preserved.draft, latest: preserved.latest, retryRequired: true }); setRetryConfirmed(false); setActionError("版本冲突：已保留你的输入。请对照最新服务端值后显式重试。"); return; } setActionError(error.message); } });
+  const departmentOptions = useMemo(() => access.canManageConfiguration
+    ? (usableReceivablesData(departments) ?? []).filter((item) => item.active).map((item) => ({ value: item.id, label: item.name }))
+    : access.writeDepartmentIds.map((id) => ({ value: id, label: currentLedgers?.facets.departments.find((item) => item.value === id)?.name ?? id })), [access.canManageConfiguration, access.writeDepartmentIds, currentLedgers, departments.data, departments.isError, departments.isFetching]);
+
+  const openOperation = (next: DetailOperation) => { setOperation(next); setActionError(undefined); setConflict(undefined); setRetryConfirmed(false); setUploadFiles([]); form.resetFields(); const ledger = currentDetail?.ledger; if (next.type === "edit" && ledger) form.setFieldsValue({ ...ledger, openingChargeDate: formatReceivablesDate(ledger.openingChargeDate) === "—" ? null : formatReceivablesDate(ledger.openingChargeDate), reason: undefined }); if (next.type === "writeoff" && ledger) form.setFieldsValue({ writeoffAmount: ledger.writeoffAmount }); if (next.type === "invoice-edit") { const row = currentDetail?.invoices.find((item) => item.id === next.id); if (row) form.setFieldsValue({ invoiceDate: formatReceivablesDate(row.invoiceDate), invoiceNo: row.invoiceNo, amount: row.amount, note: row.note }); } if (next.type === "receipt-edit") { const row = currentDetail?.receipts.find((item) => item.id === next.id); if (row) form.setFieldsValue({ receiptDate: formatReceivablesDate(row.receiptDate), referenceNo: row.referenceNo, amount: row.amount, note: row.note }); } };
+  const submitOperation = (values: Record<string, unknown>) => {
+    if (!operation) return; if (conflict && !retryConfirmed) { setActionError("请先确认已核对服务端最新值"); return; }
+    const ledger = currentDetail?.ledger; const ledgerId = selectedId ?? undefined;
+    if (operation.type === "create") { const payload = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, key === "financeDepartmentId" || key === "contractNo" ? value : nullable(value)])); mutation.mutate({ path: "/api/receivables/ledgers", init: json("POST", payload) }); return; }
+    if (!ledger || !ledgerId) return; const revision = ledger.revision;
+    if (operation.type === "edit") { const managerFields = ["financeDepartmentId", "contractNo", "projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "contractAmount", "finalAmount", "openingChargeDate", "debtStatus", "collectionOwner", "collectionNotes"]; const allowed = access.canManageAll ? managerFields : ["debtStatus", "collectionOwner", "collectionNotes"]; const payload: Record<string, unknown> = { revision, reason: String(values.reason ?? "").trim() }; for (const key of allowed) if (key in values) payload[key] = nullable(values[key]); mutation.mutate({ path: `/api/receivables/ledgers/${ledgerId}`, init: json("PATCH", payload), ledgerId }); return; }
+    if (operation.type === "void") { mutation.mutate({ path: `/api/receivables/ledgers/${ledgerId}/void`, init: json("POST", { revision, reason: values.reason, confirm: true }), ledgerId }); return; }
+    if (operation.type === "writeoff") { mutation.mutate({ path: `/api/receivables/ledgers/${ledgerId}/writeoff`, init: json("PATCH", { ledgerRevision: revision, reason: values.reason, writeoffAmount: String(values.writeoffAmount).trim() }), ledgerId }); return; }
+    if (operation.type === "attachment-create") { const file = uploadFiles[0]?.originFileObj; if (!file) { setActionError("请选择附件"); return; } const body = new FormData(); body.append("file", file); body.append("ledgerRevision", String(revision)); body.append("category", String(values.category ?? "general")); mutation.mutate({ path: `/api/receivables/ledgers/${ledgerId}/attachments`, init: { method: "POST", body }, ledgerId }); return; }
+    const invoice = operation.type.startsWith("invoice-"); const receipt = operation.type.startsWith("receipt-");
+    if (operation.type === "invoice-create" || operation.type === "receipt-create") { const path = invoice ? "invoices" : "receipts"; mutation.mutate({ path: `/api/receivables/ledgers/${ledgerId}/${path}`, init: json("POST", { ledgerRevision: revision, ...values, amount: String(values.amount).trim() }), ledgerId }); return; }
+    if (invoice || receipt) { if (!("id" in operation)) return; const path = invoice ? "invoices" : "receipts"; const rows = invoice ? currentDetail.invoices : currentDetail.receipts; const row = rows.find((item) => item.id === operation.id); if (!row) return; const voiding = operation.type.endsWith("void"); const payload = voiding ? { ledgerRevision: revision, revision: row.revision, reason: values.reason } : { ledgerRevision: revision, revision: row.revision, reason: values.reason, ...values, amount: String(values.amount).trim() }; mutation.mutate({ path: `/api/receivables/ledgers/${ledgerId}/${path}/${row.id}${voiding ? "/void" : ""}`, init: json(voiding ? "POST" : "PATCH", payload), ledgerId }); return; }
+    if (operation.type === "attachment-void") { const row = currentDetail.attachments.find((item) => item.id === operation.id); if (row) mutation.mutate({ path: `/api/receivables/ledgers/${ledgerId}/attachments/${row.id}/void`, init: json("POST", { ledgerRevision: revision, revision: row.revision, reason: values.reason }), ledgerId }); }
+  };
 
   const sortProperty = (id: ReceivablesColumnId) => state.sort === id ? { sortOrder: state.order === "asc" ? "ascend" as const : "descend" as const } : {};
-  const moneyColumn = (id: ReceivablesColumnId): TableColumnType<ReceivablesLedgerRow> => ({
-    title: columnLabels[id], key: id, dataIndex: id, width: 142, align: "right", sorter: sortable.has(id as ReceivablesSort), ...sortProperty(id), render: (value: string | null) => formatReceivablesMoney(value),
-  });
-  const definitions: Record<ReceivablesColumnId, TableColumnType<ReceivablesLedgerRow>> = {
-    financeDepartmentName: { title: columnLabels.financeDepartmentName, key: "financeDepartmentName", dataIndex: "financeDepartmentName", width: 180 },
-    contractNo: { title: columnLabels.contractNo, key: "contractNo", dataIndex: "contractNo", width: 170, sorter: true, ...sortProperty("contractNo") },
-    projectName: { title: columnLabels.projectName, key: "projectName", dataIndex: "projectName", width: 220, sorter: true, ...sortProperty("projectName"), render: plain },
-    customerName: { title: columnLabels.customerName, key: "customerName", dataIndex: "customerName", width: 200, sorter: true, ...sortProperty("customerName"), render: plain },
-    creditorUnit: { title: columnLabels.creditorUnit, key: "creditorUnit", dataIndex: "creditorUnit", width: 150, render: plain },
-    debtStatus: { title: columnLabels.debtStatus, key: "debtStatus", dataIndex: "debtStatus", width: 132, sorter: true, ...sortProperty("debtStatus"), render: plain },
-    finalAmount: moneyColumn("finalAmount"), invoicedAmount: moneyColumn("invoicedAmount"), receivedAmount: moneyColumn("receivedAmount"),
-    internalReceivable: moneyColumn("internalReceivable"), externalReceivable: moneyColumn("externalReceivable"), balance: moneyColumn("balance"), writeoffAmount: moneyColumn("writeoffAmount"),
-    collectionOwner: { title: columnLabels.collectionOwner, key: "collectionOwner", dataIndex: "collectionOwner", width: 142, render: plain },
-    openingChargeDate: { title: columnLabels.openingChargeDate, key: "openingChargeDate", dataIndex: "openingChargeDate", width: 150, sorter: true, ...sortProperty("openingChargeDate"), render: formatReceivablesDate },
-    anomaly: { title: columnLabels.anomaly, key: "anomaly", dataIndex: "anomaly", width: 150, render: (value: ReceivablesLedgerRow["anomaly"]) => value ? <Tag color="warning">{anomalyLabels[value]}</Tag> : "—" },
-    updatedAt: { title: columnLabels.updatedAt, key: "updatedAt", dataIndex: "updatedAt", width: 136, sorter: true, ...sortProperty("updatedAt"), render: formatReceivablesDate },
-  };
-  const columns = useMemo(() => {
-    const ordered = [...preference.order.filter((id) => preference.frozen.includes(id)), ...preference.order.filter((id) => !preference.frozen.includes(id))];
-    const visible: TableColumnsType<ReceivablesLedgerRow> = ordered.filter((id) => preference.visible.includes(id)).map((id) => preference.frozen.includes(id) ? { ...definitions[id], fixed: "left" as const } : definitions[id]);
-    return [...visible, { title: "详情", key: "detail", fixed: "right" as const, width: 84, render: (_: unknown, row: ReceivablesLedgerRow) => <Button type="link" onClick={() => setSelectedId(row.id)}>查看</Button> }];
-  }, [preference, state.sort, state.order]);
-  const onTableChange: TableProps<ReceivablesLedgerRow>["onChange"] = (pagination, _filters, sorter) => {
-    const selected = Array.isArray(sorter) ? sorter[0] : sorter;
-    const key = selected?.columnKey;
-    setState((current) => ({
-      ...current,
-      page: pagination.current ?? 1,
-      pageSize: pagination.pageSize ?? current.pageSize,
-      ...(selected?.order && typeof key === "string" && sortable.has(key as ReceivablesSort) ? { sort: key as ReceivablesSort, order: selected.order === "ascend" ? "asc" : "desc" } : {}),
-    }));
+  const moneyColumn = (id: ReceivablesColumnId): TableColumnType<ReceivablesLedgerRow> => ({ title: columnLabels[id], key: id, dataIndex: id, width: 142, align: "right", sorter: sortable.has(id as ReceivablesSort), ...sortProperty(id), render: (value: string | null) => formatReceivablesMoney(value) });
+  const definitions: Record<ReceivablesColumnId, TableColumnType<ReceivablesLedgerRow>> = { financeDepartmentName: { title: columnLabels.financeDepartmentName, key: "financeDepartmentName", dataIndex: "financeDepartmentName", width: 180 }, contractNo: { title: columnLabels.contractNo, key: "contractNo", dataIndex: "contractNo", width: 170, sorter: true, ...sortProperty("contractNo") }, projectName: { title: columnLabels.projectName, key: "projectName", dataIndex: "projectName", width: 220, sorter: true, ...sortProperty("projectName"), render: plain }, customerName: { title: columnLabels.customerName, key: "customerName", dataIndex: "customerName", width: 200, sorter: true, ...sortProperty("customerName"), render: plain }, creditorUnit: { title: columnLabels.creditorUnit, key: "creditorUnit", dataIndex: "creditorUnit", width: 150, render: plain }, debtStatus: { title: columnLabels.debtStatus, key: "debtStatus", dataIndex: "debtStatus", width: 132, sorter: true, ...sortProperty("debtStatus"), render: plain }, finalAmount: moneyColumn("finalAmount"), invoicedAmount: moneyColumn("invoicedAmount"), receivedAmount: moneyColumn("receivedAmount"), internalReceivable: moneyColumn("internalReceivable"), externalReceivable: moneyColumn("externalReceivable"), balance: moneyColumn("balance"), writeoffAmount: moneyColumn("writeoffAmount"), collectionOwner: { title: columnLabels.collectionOwner, key: "collectionOwner", dataIndex: "collectionOwner", width: 142, render: plain }, openingChargeDate: { title: columnLabels.openingChargeDate, key: "openingChargeDate", dataIndex: "openingChargeDate", width: 150, sorter: true, ...sortProperty("openingChargeDate"), render: formatReceivablesDate }, anomaly: { title: columnLabels.anomaly, key: "anomaly", dataIndex: "anomaly", width: 150, render: (value: ReceivablesLedgerRow["anomaly"]) => value ? <Tag color="warning">{anomalyLabels[value]}</Tag> : "—" }, updatedAt: { title: columnLabels.updatedAt, key: "updatedAt", dataIndex: "updatedAt", width: 136, sorter: true, ...sortProperty("updatedAt"), render: formatReceivablesDate } };
+  const columns = useMemo(() => { const ordered = [...preference.order.filter((id) => preference.frozen.includes(id)), ...preference.order.filter((id) => !preference.frozen.includes(id))]; const visible: TableColumnsType<ReceivablesLedgerRow> = ordered.filter((id) => preference.visible.includes(id)).map((id) => preference.frozen.includes(id) ? { ...definitions[id], fixed: "left" as const } : definitions[id]); return [...visible, { title: "详情", key: "detail", fixed: "right" as const, width: 84, render: (_: unknown, row: ReceivablesLedgerRow) => <Button type="link" onClick={() => setSelectedId(row.id)}>查看</Button> }]; }, [preference, state.sort, state.order]);
+  const onTableChange: TableProps<ReceivablesLedgerRow>["onChange"] = (pagination, _filters, sorter) => { const selected = Array.isArray(sorter) ? sorter[0] : sorter; const key = selected?.columnKey; setState((current) => ({ ...current, page: pagination.current ?? 1, pageSize: pagination.pageSize ?? current.pageSize, ...(selected?.order && typeof key === "string" && sortable.has(key as ReceivablesSort) ? { sort: key as ReceivablesSort, order: selected.order === "ascend" ? "asc" : "desc" } : {}) })); };
+  const conflictRows = useMemo(() => {
+    if (!conflict) return [];
+    let latest: Record<string, unknown> = conflict.latest?.ledger as unknown as Record<string, unknown> ?? {};
+    if (operation && "id" in operation && operation.type.startsWith("invoice-")) latest = conflict.latest?.invoices.find((row) => row.id === operation.id) as unknown as Record<string, unknown> ?? {};
+    if (operation && "id" in operation && operation.type.startsWith("receipt-")) latest = conflict.latest?.receipts.find((row) => row.id === operation.id) as unknown as Record<string, unknown> ?? {};
+    if (operation && "id" in operation && operation.type === "attachment-void") latest = conflict.latest?.attachments.find((row) => row.id === operation.id) as unknown as Record<string, unknown> ?? {};
+    return Object.entries(conflict.draft).filter(([field]) => !["reason", "confirm"].includes(field)).map(([field, draft]) => ({ field, draft: draft ?? "—", latest: latest[field] ?? "—" }));
+  }, [conflict, operation]);
+
+  const renderOperationFields = () => {
+    if (!operation) return null;
+    if (operation.type === "create" || operation.type === "edit") { const creating = operation.type === "create"; const manager = access.canManageAll; return <>{(creating || manager) && <Form.Item name="financeDepartmentId" label="财务归属部门" rules={[{ required: true }]}><Select options={departmentOptions} /></Form.Item>}{(creating || manager) && <Form.Item name="contractNo" label="合同编号" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>}{(creating || manager) && <><Form.Item name="projectName" label="项目名称"><Input /></Form.Item><Form.Item name="customerName" label="客户名称"><Input /></Form.Item><Form.Item name="customerType" label="客户属性"><Input /></Form.Item><Form.Item name="creditorUnit" label="债权单位"><Input /></Form.Item><Form.Item name="workNature" label="工作性质"><Input /></Form.Item><Form.Item name="sector" label="八大板块"><Input /></Form.Item><Form.Item name="projectStatus" label="项目状态"><Input /></Form.Item><Form.Item name="settlementMethod" label="决算方式"><Input /></Form.Item></>}{manager && <><Form.Item name="contractAmount" label="合同金额" rules={[moneyRule]}><Input inputMode="decimal" /></Form.Item><Form.Item name="finalAmount" label="决算金额" rules={[moneyRule]}><Input inputMode="decimal" /></Form.Item><Form.Item name="openingChargeDate" label="期初挂账日期"><Input type="date" /></Form.Item></>}<Form.Item name="debtStatus" label="债权状态"><Input /></Form.Item><Form.Item name="collectionOwner" label="清收责任人"><Input /></Form.Item><Form.Item name="collectionNotes" label="催收备注"><Input.TextArea rows={4} /></Form.Item>{!creating && <Form.Item name="reason" label="修改原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea rows={3} /></Form.Item>}</>; }
+    if (operation.type === "invoice-create" || operation.type === "invoice-edit") return <><Form.Item name="invoiceDate" label="开票日期" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="invoiceNo" label="发票号"><Input /></Form.Item><Form.Item name="amount" label="含税金额" rules={[{ required: true }, moneyRule]}><Input inputMode="decimal" /></Form.Item><Form.Item name="note" label="备注"><Input.TextArea rows={3} /></Form.Item>{operation.type.endsWith("edit") && <Form.Item name="reason" label="更正原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item>}</>;
+    if (operation.type === "receipt-create" || operation.type === "receipt-edit") return <><Form.Item name="receiptDate" label="回款日期" rules={[{ required: true }]}><Input type="date" /></Form.Item><Form.Item name="referenceNo" label="凭证号"><Input /></Form.Item><Form.Item name="amount" label="含税金额" rules={[{ required: true }, moneyRule]}><Input inputMode="decimal" /></Form.Item><Form.Item name="note" label="备注"><Input.TextArea rows={3} /></Form.Item>{operation.type.endsWith("edit") && <Form.Item name="reason" label="更正原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item>}</>;
+    if (operation.type === "writeoff") return <><Form.Item name="writeoffAmount" label="核销累计金额" rules={[{ required: true }, moneyRule]}><Input inputMode="decimal" /></Form.Item><Form.Item name="reason" label="调整原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea rows={3} /></Form.Item></>;
+    if (operation.type === "attachment-create") return <><Alert type="info" showIcon message="允许 PDF、PNG、JPG、WebP、XLSX；单文件不超过 10 MiB。最终类型与内容由服务端校验。" /><Form.Item name="category" label="附件分类" initialValue="general"><Input /></Form.Item><Form.Item label="选择文件" required><Upload beforeUpload={() => false} maxCount={1} fileList={uploadFiles} onChange={({ fileList }) => setUploadFiles(fileList)}><Button icon={<UploadOutlined />}>选择附件</Button></Upload></Form.Item></>;
+    return <Form.Item name="reason" label="原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea rows={4} /></Form.Item>;
   };
 
-  return (
-    <div className="receivables-page">
-      <div className="page-title receivables-page-title">
-        <div><Typography.Title level={3}>应收账款台账</Typography.Title><Typography.Text type="secondary">默认显示未结合同；筛选、排序和分页均由服务端执行。</Typography.Text></div>
-        <Button icon={<SettingOutlined />} onClick={() => { setDraftPreference(preference); setColumnModalOpen(true); }}>列设置</Button>
-      </div>
-      {preferenceQuery.isError && <Alert className="receivables-inline-alert" type="warning" showIcon message="列偏好读取失败，本次使用默认列设置；台账读取不受影响。" />}
-      <Card className="filters" aria-label="台账筛选">
-        <Form layout="inline">
-          <Form.Item label="搜索">
-            <Input.Search aria-label="搜索合同、项目或客户" allowClear value={search} placeholder="合同、项目或客户" onChange={(event) => setSearch(event.target.value)} onSearch={(value) => setState((current) => ({ ...current, page: 1, search: value.trim() || undefined }))} />
-          </Form.Item>
-          <Form.Item label="结清状态"><Select aria-label="结清状态" value={state.settlement} style={{ width: 124 }} options={[{ value: "unsettled", label: "未结" }, { value: "settled", label: "已结清" }, { value: "all", label: "全部" }]} onChange={(settlement) => setState((current) => ({ ...current, page: 1, settlement }))} /></Form.Item>
-          <Form.Item label="记录状态"><Select aria-label="记录状态" value={state.status} style={{ width: 124 }} options={[{ value: "active", label: "有效" }, { value: "voided", label: "已作废" }, { value: "all", label: "全部" }]} onChange={(status) => setState((current) => ({ ...current, page: 1, status }))} /></Form.Item>
-          <Form.Item label="归属部门"><Select allowClear aria-label="财务归属部门" value={state.financeDepartmentId ?? null} style={{ width: 180 }} placeholder="全部部门" options={(currentLedgers?.facets.departments ?? []).map((item) => ({ value: item.value!, label: item.name }))} onChange={(financeDepartmentId) => setState((current) => ({ ...current, page: 1, financeDepartmentId }))} /></Form.Item>
-          <Form.Item label="债权状态"><Select allowClear aria-label="债权状态" value={state.debtStatus ?? null} style={{ width: 150 }} placeholder="全部状态" options={(currentLedgers?.facets.debtStatuses ?? []).filter((item) => item.value).map((item) => ({ value: item.value!, label: item.value! }))} onChange={(debtStatus) => setState((current) => ({ ...current, page: 1, debtStatus }))} /></Form.Item>
-          <Form.Item label="待核对"><Select allowClear aria-label="待核对事项" value={state.anomaly ?? null} style={{ width: 160 }} placeholder="全部事项" options={Object.entries(anomalyLabels).map(([value, label]) => ({ value, label }))} onChange={(anomaly) => setState((current) => ({ ...current, page: 1, anomaly }))} /></Form.Item>
-        </Form>
-      </Card>
-      {ledgers.isError && <Alert className="receivables-inline-alert" type="error" showIcon message="台账加载失败" description="未显示任何台账数据，请检查网络或权限后重试。" action={<Button onClick={() => void ledgers.refetch()}>重试</Button>} />}
-      <div className="receivables-table-region" role="region" aria-label="应收账款宽表" tabIndex={0}>
-        <Table<ReceivablesLedgerRow>
-          rowKey="id"
-          loading={ledgers.isFetching}
-          dataSource={currentLedgers?.rows ?? []}
-          columns={columns}
-          scroll={{ x: "max-content" }}
-          locale={{ emptyText: ledgers.isFetching ? "正在加载台账…" : "当前筛选下没有台账记录" }}
-          pagination={{ current: currentLedgers?.page ?? state.page, pageSize: currentLedgers?.pageSize ?? state.pageSize, total: currentLedgers?.total ?? 0, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], showTotal: (total) => `共 ${total} 条` }}
-          onChange={onTableChange}
-        />
-      </div>
-      <Modal title="列设置" open={columnModalOpen} footer={null} width={620} onCancel={() => setColumnModalOpen(false)} destroyOnClose>
-        <ColumnSettings value={draftPreference} onChange={setDraftPreference} onSave={() => savePreference.mutate()} saving={savePreference.isPending} />
-      </Modal>
-      <Drawer title="台账详情" width={720} open={!!selectedId} onClose={() => setSelectedId(null)} destroyOnClose>
-        {detail.isFetching && <Typography.Text type="secondary">正在加载详情…</Typography.Text>}
-        {detail.isError && <Alert type="error" showIcon message="详情加载失败" description="记录可能已不存在或当前账号已失去读取权限。" />}
-        {currentDetail && (
-          <Space direction="vertical" size="large" className="receivables-detail">
-            <Descriptions bordered size="small" column={2} items={[
-              { key: "contract", label: "合同编号", children: currentDetail.ledger.contractNo },
-              { key: "department", label: "财务归属部门", children: currentDetail.ledger.financeDepartmentName },
-              { key: "project", label: "项目名称", children: plain(currentDetail.ledger.projectName) },
-              { key: "customer", label: "客户名称", children: plain(currentDetail.ledger.customerName) },
-              { key: "final", label: "决算金额", children: formatReceivablesMoney(currentDetail.ledger.finalAmount) },
-              { key: "invoice", label: "开票金额", children: formatReceivablesMoney(currentDetail.ledger.invoicedAmount) },
-              { key: "receipt", label: "到账金额", children: formatReceivablesMoney(currentDetail.ledger.receivedAmount) },
-              { key: "balance", label: "应收余额", children: formatReceivablesMoney(currentDetail.ledger.balance) },
-              { key: "owner", label: "清收责任人", children: plain(currentDetail.ledger.collectionOwner) },
-              { key: "notes", label: "催收备注", children: plain(currentDetail.ledger.collectionNotes), span: 2 },
-            ]} />
-            <Card size="small" title="开票明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无开票明细" }} dataSource={currentDetail.invoices} columns={[{ title: "日期", dataIndex: "invoiceDate", render: formatReceivablesDate }, { title: "发票号", dataIndex: "invoiceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
-            <Card size="small" title="回款明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无回款明细" }} dataSource={currentDetail.receipts} columns={[{ title: "日期", dataIndex: "receiptDate", render: formatReceivablesDate }, { title: "凭证号", dataIndex: "referenceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
-            <Card size="small" title="附件"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无附件" }} dataSource={currentDetail.attachments} columns={[{ title: "文件名", dataIndex: ["file", "originalName"] }, { title: "分类", dataIndex: "category" }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
-          </Space>
-        )}
-      </Drawer>
-    </div>
-  );
+  return <div className="receivables-page"><div className="page-title receivables-page-title"><div><Typography.Title level={3}>应收账款台账</Typography.Title><Typography.Text type="secondary">默认显示未结合同；筛选、排序和分页均由服务端执行。</Typography.Text></div><Space>{access.canCreateLedger && <Button type="primary" icon={<PlusOutlined />} onClick={() => openOperation({ type: "create" })}>新建台账</Button>}<Button icon={<SettingOutlined />} onClick={() => { setDraftPreference(preference); setColumnModalOpen(true); }}>列设置</Button></Space></div>
+    {preferenceQuery.isError && <Alert className="receivables-inline-alert" type="warning" showIcon message="列偏好读取失败，本次使用默认列设置；台账读取不受影响。" />}
+    <Card className="filters" aria-label="台账筛选"><Form layout="inline"><Form.Item label="搜索"><Input.Search allowClear value={search} placeholder="合同、项目或客户" onChange={(event) => setSearch(event.target.value)} onSearch={(value) => setState((current) => ({ ...current, page: 1, search: value.trim() || undefined }))} /></Form.Item><Form.Item label="结清状态"><Select value={state.settlement} style={{ width: 124 }} options={[{ value: "unsettled", label: "未结" }, { value: "settled", label: "已结清" }, { value: "all", label: "全部" }]} onChange={(settlement) => setState((current) => ({ ...current, page: 1, settlement }))} /></Form.Item><Form.Item label="记录状态"><Select value={state.status} style={{ width: 124 }} options={[{ value: "active", label: "有效" }, { value: "voided", label: "已作废" }, { value: "all", label: "全部" }]} onChange={(status) => setState((current) => ({ ...current, page: 1, status }))} /></Form.Item><Form.Item label="归属部门"><Select allowClear value={state.financeDepartmentId ?? null} style={{ width: 180 }} placeholder="全部部门" options={(currentLedgers?.facets.departments ?? []).map((item) => ({ value: item.value!, label: item.name }))} onChange={(financeDepartmentId) => setState((current) => ({ ...current, page: 1, financeDepartmentId }))} /></Form.Item><Form.Item label="债权状态"><Select allowClear value={state.debtStatus ?? null} style={{ width: 150 }} placeholder="全部状态" options={(currentLedgers?.facets.debtStatuses ?? []).filter((item) => item.value).map((item) => ({ value: item.value!, label: item.value! }))} onChange={(debtStatus) => setState((current) => ({ ...current, page: 1, debtStatus }))} /></Form.Item><Form.Item label="待核对"><Select allowClear value={state.anomaly ?? null} style={{ width: 160 }} placeholder="全部事项" options={Object.entries(anomalyLabels).map(([value, label]) => ({ value, label }))} onChange={(anomaly) => setState((current) => ({ ...current, page: 1, anomaly }))} /></Form.Item></Form></Card>
+    {ledgers.isError && <Alert className="receivables-inline-alert" type="error" showIcon message="台账加载失败" description="未显示任何台账数据，请检查网络或权限后重试。" action={<Button onClick={() => void ledgers.refetch()}>重试</Button>} />}
+    <div className="receivables-table-region" role="region" aria-label="应收账款宽表" tabIndex={0}><Table<ReceivablesLedgerRow> rowKey="id" loading={ledgers.isFetching} dataSource={currentLedgers?.rows ?? []} columns={columns} scroll={{ x: "max-content" }} rowClassName={(row) => row.status === "voided" ? "receivables-row-voided" : ""} locale={{ emptyText: ledgers.isFetching ? "正在加载台账…" : "当前筛选下没有台账记录" }} pagination={{ current: currentLedgers?.page ?? state.page, pageSize: currentLedgers?.pageSize ?? state.pageSize, total: currentLedgers?.total ?? 0, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], showTotal: (total) => `共 ${total} 条` }} onChange={onTableChange} /></div>
+    <Modal title="列设置" open={columnModalOpen} footer={null} width={620} onCancel={() => setColumnModalOpen(false)} destroyOnHidden><ColumnSettings value={draftPreference} onChange={setDraftPreference} onSave={() => savePreference.mutate()} saving={savePreference.isPending} /></Modal>
+    <Drawer title="台账详情" width={840} open={!!selectedId} onClose={() => { closeOperation(); setSelectedId(null); }} destroyOnHidden>{detail.isFetching && <Typography.Text type="secondary">正在加载详情…</Typography.Text>}{detail.isError && <Alert type="error" showIcon message="详情加载失败" description="记录可能已不存在或当前账号已失去读取权限。" action={<Button onClick={() => void detail.refetch()}>重试</Button>} />}{currentDetail && <LedgerDetailView detail={currentDetail} accountId={accountId} openOperation={openOperation} />}</Drawer>
+    <Modal title={operation ? operationTitles[operation.type] : "财务操作"} open={!!operation} footer={null} onCancel={closeOperation} destroyOnHidden width={680}>{actionError && <Alert className="receivables-inline-alert" type="error" showIcon message={actionError} />}{conflict && <Alert className="receivables-inline-alert" type="warning" showIcon message="你的草稿已保留" description={<div><Typography.Paragraph>最新服务端 revision：{conflict.latest?.ledger.revision ?? "读取失败"}。下表仅供核对，系统不会自动合并或覆盖草稿。</Typography.Paragraph><Table size="small" pagination={false} rowKey="field" dataSource={conflictRows} columns={[{ title: "字段", dataIndex: "field" }, { title: "你的草稿", dataIndex: "draft", render: String }, { title: "服务端最新值", dataIndex: "latest", render: String }]} /><Checkbox checked={retryConfirmed} onChange={(event) => setRetryConfirmed(event.target.checked)}>我已逐项核对服务端最新值，按当前草稿重试</Checkbox></div>} />}<Form form={form} layout="vertical" onFinish={submitOperation}>{renderOperationFields()}<Button type={operation?.type.includes("void") ? "default" : "primary"} danger={!!operation?.type.includes("void")} htmlType="submit" loading={mutation.isPending} disabled={!!conflict && !retryConfirmed}>{conflict ? "确认并重试" : "提交"}</Button></Form></Modal>
+  </div>;
+}
+
+function LedgerDetailView({ detail, accountId, openOperation }: { detail: ReceivablesLedgerDetail; accountId: string; openOperation: (operation: DetailOperation) => void }) {
+  const ledger = detail.ledger; const writable = ledger.status === "active";
+  return <div className={`receivables-detail ${ledger.status === "voided" ? "is-voided" : ""}`}><div className="receivables-detail-actions"><Space wrap>{writable && detail.capabilities.canWriteLedger && <><Button onClick={() => openOperation({ type: "edit" })}>编辑</Button><Button onClick={() => openOperation({ type: "attachment-create" })}>上传附件</Button></>}{writable && detail.capabilities.canManageAll && <Button danger onClick={() => openOperation({ type: "void" })}>作废台账</Button>}{writable && detail.capabilities.canManageMoney && <><Button onClick={() => openOperation({ type: "invoice-create" })}>登记开票</Button><Button onClick={() => openOperation({ type: "receipt-create" })}>登记回款</Button><Button onClick={() => openOperation({ type: "writeoff" })}>调整核销</Button></>}</Space></div>
+    <section><Typography.Title level={5}>基本事实</Typography.Title><Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} items={[{ key: "contract", label: "合同编号", children: ledger.contractNo }, { key: "department", label: "财务归属部门", children: ledger.financeDepartmentName }, { key: "project", label: "项目名称", children: plain(ledger.projectName) }, { key: "customer", label: "客户名称", children: plain(ledger.customerName) }, { key: "unit", label: "债权单位", children: plain(ledger.creditorUnit) }, { key: "settlement", label: "决算方式", children: plain(ledger.settlementMethod) }]} /></section>
+    <section><Typography.Title level={5}>状态与权威金额</Typography.Title><Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} items={[{ key: "status", label: "记录状态", children: <Tag color={ledger.status === "active" ? "success" : "default"}>{ledger.status === "active" ? "有效" : "已作废"}</Tag> }, { key: "anomaly", label: "待核对", children: ledger.anomaly ? anomalyLabels[ledger.anomaly] : "—" }, { key: "contractAmount", label: "合同金额", children: formatReceivablesMoney(ledger.contractAmount) }, { key: "final", label: "决算金额", children: formatReceivablesMoney(ledger.finalAmount) }, { key: "invoice", label: "开票金额（服务端汇总）", children: formatReceivablesMoney(ledger.invoicedAmount) }, { key: "receipt", label: "到账金额（服务端汇总）", children: formatReceivablesMoney(ledger.receivedAmount) }, { key: "inside", label: "账内应收", children: formatReceivablesMoney(ledger.internalReceivable) }, { key: "outside", label: "账外应收", children: formatReceivablesMoney(ledger.externalReceivable) }, { key: "balance", label: "应收余额", children: formatReceivablesMoney(ledger.balance) }, { key: "writeoff", label: "核销金额", children: formatReceivablesMoney(ledger.writeoffAmount) }]} /></section>
+    <section><Typography.Title level={5}>债权与催收</Typography.Title><Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} items={[{ key: "debt", label: "债权状态", children: plain(ledger.debtStatus) }, { key: "owner", label: "清收责任人", children: plain(ledger.collectionOwner) }, { key: "opening", label: "最新挂账时间", children: formatReceivablesDate(ledger.openingChargeDate) }, { key: "notes", label: "催收备注", children: plain(ledger.collectionNotes), span: 2 }]} /></section>
+    <section><Typography.Title level={5}>开票明细</Typography.Title><Table rowKey="id" size="small" pagination={false} rowClassName={(row) => row.status === "voided" ? "receivables-row-voided" : ""} locale={{ emptyText: "暂无开票明细" }} dataSource={detail.invoices} columns={[{ title: "日期", dataIndex: "invoiceDate", render: formatReceivablesDate }, { title: "发票号", dataIndex: "invoiceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }, ...(detail.capabilities.canManageMoney && writable ? [{ title: "操作", render: (_: unknown, row: ReceivablesLedgerDetail["invoices"][number]) => row.status === "active" ? <Space><Button type="link" onClick={() => openOperation({ type: "invoice-edit", id: row.id })}>更正</Button><Button type="link" danger onClick={() => openOperation({ type: "invoice-void", id: row.id })}>作废</Button></Space> : "—" }] : [])]} /></section>
+    <section><Typography.Title level={5}>回款明细</Typography.Title><Table rowKey="id" size="small" pagination={false} rowClassName={(row) => row.status === "voided" ? "receivables-row-voided" : ""} locale={{ emptyText: "暂无回款明细" }} dataSource={detail.receipts} columns={[{ title: "日期", dataIndex: "receiptDate", render: formatReceivablesDate }, { title: "凭证号", dataIndex: "referenceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }, ...(detail.capabilities.canManageMoney && writable ? [{ title: "操作", render: (_: unknown, row: ReceivablesLedgerDetail["receipts"][number]) => row.status === "active" ? <Space><Button type="link" onClick={() => openOperation({ type: "receipt-edit", id: row.id })}>更正</Button><Button type="link" danger onClick={() => openOperation({ type: "receipt-void", id: row.id })}>作废</Button></Space> : "—" }] : [])]} /></section>
+    <section><Typography.Title level={5}>附件</Typography.Title><Table rowKey="id" size="small" pagination={false} rowClassName={(row) => row.status === "voided" ? "receivables-row-voided" : ""} locale={{ emptyText: "暂无附件" }} dataSource={detail.attachments} columns={[{ title: "文件名", dataIndex: ["file", "originalName"] }, { title: "分类", dataIndex: "category" }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }, { title: "操作", render: (_: unknown, row: ReceivablesLedgerDetail["attachments"][number]) => <Space><Button type="link" href={`/api/files/${encodeURIComponent(row.file.id)}`} target="_blank">下载</Button>{row.status === "active" && writable && (detail.capabilities.canManageAll || detail.capabilities.role === "reporter" && row.uploadedBy === accountId) && <Button type="link" danger onClick={() => openOperation({ type: "attachment-void", id: row.id })}>作废</Button>}</Space> }]} /></section>
+  </div>;
 }
