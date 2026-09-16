@@ -10,6 +10,7 @@ const unconfiguredAdmin = decideReceivablesAccess({
 });
 assert.equal(unconfiguredAdmin.state, "unconfigured");
 assert.equal(unconfiguredAdmin.canRecover, true);
+assert.equal(decideReceivablesAccess({ accountActive: true, personActive: false, isCompanyAdmin: true, configured: false }).canRecover, true);
 assert.deepEqual(receivablesRoleAssignmentSubjects("account-1", "person-1"), [{ accountId: "account-1" }, { personId: "person-1" }]);
 assert.equal(unconfiguredAdmin.canEnter, false);
 

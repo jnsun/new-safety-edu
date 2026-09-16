@@ -92,7 +92,7 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   const hasBoundOrgLeader = facts.hasBoundOrgLeader ?? configured;
   const configurationConfirmed = facts.configurationConfirmed ?? true;
   const activeIdentity = facts.accountActive && facts.personActive;
-  const canRecover = activeIdentity && !!facts.isCompanyAdmin;
+  const canRecover = facts.accountActive && !!facts.isCompanyAdmin;
   const state: ReceivablesAccessState = !configured
     ? "unconfigured"
     : !hasBoundOrgLeader
