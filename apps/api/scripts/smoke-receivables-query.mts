@@ -25,6 +25,7 @@ const ids = {
 let server: ChildProcess | null = null;
 let serverOutput = "";
 let phoneCounter = 1;
+const originalSetting = await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
 
 type JsonResponse<T = unknown> = { data?: T; error?: { code: string; message: string } };
 type Amounts = {
@@ -169,7 +170,8 @@ async function cleanup() {
   await prisma.receivableReceipt.deleteMany({ where: { id: { in: ids.receipts } } });
   await prisma.receivableLedgerRevision.deleteMany({ where: { id: { in: ids.revisions } } });
   await prisma.receivableLedger.deleteMany({ where: { id: { in: ids.ledgers } } });
-  await prisma.receivableSetting.deleteMany({ where: { financeOrganizationId: { in: ids.organizations } } });
+  if (originalSetting) await prisma.receivableSetting.upsert({ where: { id: 1 }, create: { id: 1, ...originalSetting }, update: originalSetting });
+  else await prisma.receivableSetting.deleteMany({ where: { id: 1, financeOrganizationId: { in: ids.organizations } } });
   await prisma.receivableGrantDepartment.deleteMany({ where: { grantId: { in: ids.grants } } });
   await prisma.receivableAccessGrant.deleteMany({ where: { id: { in: ids.grants } } });
   await prisma.receivableDictionaryOption.deleteMany({ where: { id: { in: ids.dictionaries } } });
@@ -191,7 +193,7 @@ try {
   const readonlyScoped = await createIdentity("readonly-scoped");
   const readonlyAll = await createIdentity("readonly-all");
   const companyAdmin = await createIdentity("company-admin", "company_admin");
-  await prisma.receivableSetting.create({ data: { id: 1, financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
+  await prisma.receivableSetting.upsert({ where: { id: 1 }, create: { id: 1, financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id }, update: { financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
 
   const departmentA = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-a` } }); ids.departments.push(departmentA.id);
   const departmentB = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-b` } }); ids.departments.push(departmentB.id);
@@ -406,7 +408,7 @@ try {
   assert.equal(await prisma.receivableReceipt.count({ where: { id: { in: ids.receipts } } }), 0);
   assert.equal(await prisma.receivableLedgerRevision.count({ where: { id: { in: ids.revisions } } }), 0);
   assert.equal(await prisma.receivableLedger.count({ where: { id: { in: ids.ledgers } } }), 0);
-  assert.equal(await prisma.receivableSetting.count({ where: { financeOrganizationId: { in: ids.organizations } } }), 0);
+  assert.deepEqual(await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } }), originalSetting);
   assert.equal(await prisma.userPreference.count({ where: { accountId: { in: ids.accounts } } }), 0);
   assert.equal(await prisma.receivableAccessGrant.count({ where: { id: { in: ids.grants } } }), 0);
   assert.equal(await prisma.receivableDepartment.count({ where: { id: { in: ids.departments } } }), 0);

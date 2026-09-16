@@ -29,6 +29,7 @@
     "check:receivables-schema": "tsx scripts/check-receivables-schema.mts",
     "check:receivables-access": "tsx scripts/check-receivables-access.mts",
     "check:receivables-import": "tsx scripts/check-receivables-import.mts",
+    "check:receivables-capacity": "tsx scripts/check-receivables-capacity.mts",
     "check:transaction-audit-policy": "tsx scripts/check-transaction-audit-policy.mts",
     "check:request-policy": "tsx scripts/check-request-policy.mts",
     "check:change-request-lifecycle": "tsx scripts/check-change-request-lifecycle.mts",
@@ -63,6 +64,7 @@
     "smoke:receivables-attachments": "tsx scripts/smoke-receivables-attachments.mts",
     "smoke:receivables-import": "tsx scripts/smoke-receivables-import.mts",
     "smoke:receivables-export": "tsx scripts/smoke-receivables-export.mts",
+    "smoke:receivables-e2e": "tsx scripts/smoke-receivables-e2e.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
   },

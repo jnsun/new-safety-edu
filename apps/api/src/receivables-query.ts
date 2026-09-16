@@ -72,6 +72,7 @@ type QueryScope = NormalizedReceivablesFilters & {
   capabilityWriteDepartmentIds: string[];
   cutoffAt: Date | null;
 };
+export type ReceivablesQueryScope = QueryScope;
 export type ReceivablesExportScopeSnapshot = {
   role: Exclude<ReceivablesAccess["role"], null>;
   all: boolean;
@@ -274,8 +275,8 @@ function mapRow(row: RawRow) {
   };
 }
 
-async function amounts(tx: QueryTx, cte: Prisma.Sql) {
-  const [row] = await tx.$queryRaw<RawAmounts[]>(Prisma.sql`${cte}
+function amountsStatement(cte: Prisma.Sql) {
+  return Prisma.sql`${cte}
     SELECT COUNT(*) FILTER (WHERE status = 'active')::int AS active_ledger_count,
       SUM(final_amount) FILTER (WHERE status = 'active' AND final_amount IS NOT NULL) AS final_amount,
       COALESCE(SUM(invoiced_amount) FILTER (WHERE status = 'active'), 0::numeric) AS invoiced_amount,
@@ -287,7 +288,11 @@ async function amounts(tx: QueryTx, cte: Prisma.Sql) {
       COUNT(*) FILTER (WHERE status = 'active' AND anomaly = 'final_amount_missing')::int AS final_amount_missing_count,
       COUNT(*) FILTER (WHERE status = 'active' AND anomaly = 'over_received')::int AS over_received_count,
       COUNT(*) FILTER (WHERE status = 'active' AND anomaly = 'writeoff_adjustment_required')::int AS writeoff_adjustment_required_count
-    FROM filtered`);
+    FROM filtered`;
+}
+
+async function amounts(tx: QueryTx, statement: Prisma.Sql) {
+  const [row] = await tx.$queryRaw<RawAmounts[]>(statement);
   if (!row) throw new Error("RECEIVABLES_TOTALS_MISSING");
   return {
     activeLedgerCount: row.active_ledger_count,
@@ -304,49 +309,74 @@ async function amounts(tx: QueryTx, cte: Prisma.Sql) {
   };
 }
 
-async function facet(tx: QueryTx, cte: Prisma.Sql, column: Prisma.Sql): Promise<Facet[]> {
-  return tx.$queryRaw<RawFacet[]>(Prisma.sql`${cte}
-    SELECT ${column} AS value, COUNT(*)::int AS count FROM filtered f GROUP BY ${column} ORDER BY ${column} ASC NULLS FIRST`);
+function facetStatement(cte: Prisma.Sql, column: Prisma.Sql) {
+  return Prisma.sql`${cte}
+    SELECT ${column} AS value, COUNT(*)::int AS count FROM filtered f GROUP BY ${column} ORDER BY ${column} ASC NULLS FIRST`;
 }
 
-async function statusFacets(tx: QueryTx, cte: Prisma.Sql) {
-  return facet(tx, cte, Prisma.sql`f.status::text`);
+function statusFacetStatement(cte: Prisma.Sql) {
+  return facetStatement(cte, Prisma.sql`f.status::text`);
 }
 
-async function anomalyFacets(tx: QueryTx, cte: Prisma.Sql, activeOnly = false) {
-  if (!activeOnly) return facet(tx, cte, Prisma.sql`f.anomaly`);
-  return tx.$queryRaw<RawFacet[]>(Prisma.sql`${cte}
+function anomalyFacetStatement(cte: Prisma.Sql, activeOnly = false) {
+  if (!activeOnly) return facetStatement(cte, Prisma.sql`f.anomaly`);
+  return Prisma.sql`${cte}
     SELECT f.anomaly AS value, COUNT(*)::int AS count FROM filtered f WHERE f.status = 'active'
-    GROUP BY f.anomaly ORDER BY f.anomaly ASC NULLS FIRST`);
+    GROUP BY f.anomaly ORDER BY f.anomaly ASC NULLS FIRST`;
 }
 
-async function listLedgers(tx: QueryTx, scope: QueryScope, input: ReceivablesListInput) {
+export function buildReceivablesListStatements(scope: ReceivablesQueryScope, input: ReceivablesListInput) {
   const page = input.page ?? 1;
   const pageSize = input.pageSize ?? 50;
   const sort = input.sort ?? "updatedAt";
   const order = input.order ?? "desc";
   const direction = order === "asc" ? Prisma.sql`ASC` : Prisma.sql`DESC`;
   const cte = filteredCte(scope);
+  return {
+    page,
+    pageSize,
+    rows: Prisma.sql`${cte} SELECT ${rowColumns} FROM filtered f ORDER BY ${sortColumns[sort]} ${direction} NULLS LAST, f.id ${direction} LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
+    count: Prisma.sql`${cte} SELECT COUNT(*)::int AS count FROM filtered`,
+    departmentFacets: Prisma.sql`${cte} SELECT f.finance_department_id AS value, f.finance_department_name AS name, COUNT(*)::int AS count FROM filtered f GROUP BY f.finance_department_id, f.finance_department_name ORDER BY f.finance_department_name, f.finance_department_id`,
+    debtStatuses: facetStatement(cte, Prisma.sql`f.debt_status`),
+    creditorUnits: facetStatement(cte, Prisma.sql`f.creditor_unit`),
+    statuses: statusFacetStatement(cte),
+    anomalies: anomalyFacetStatement(cte),
+    totals: amountsStatement(cte),
+  };
+}
+
+export function buildReceivablesDashboardStatements(scope: ReceivablesQueryScope) {
+  const cte = filteredCte(scope);
+  return { totals: amountsStatement(cte), statuses: statusFacetStatement(cte), anomalies: anomalyFacetStatement(cte, true) };
+}
+
+async function listLedgers(tx: QueryTx, scope: QueryScope, input: ReceivablesListInput) {
+  const statements = buildReceivablesListStatements(scope, input);
   const [rawRows, countRows, departmentFacets, debtStatuses, creditorUnits, statuses, anomalies, totals] = await Promise.all([
-    tx.$queryRaw<RawRow[]>(Prisma.sql`${cte} SELECT ${rowColumns} FROM filtered f ORDER BY ${sortColumns[sort]} ${direction} NULLS LAST, f.id ${direction} LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`),
-    tx.$queryRaw<Array<{ count: number }>>(Prisma.sql`${cte} SELECT COUNT(*)::int AS count FROM filtered`),
-    tx.$queryRaw<RawDepartmentFacet[]>(Prisma.sql`${cte} SELECT f.finance_department_id AS value, f.finance_department_name AS name, COUNT(*)::int AS count FROM filtered f GROUP BY f.finance_department_id, f.finance_department_name ORDER BY f.finance_department_name, f.finance_department_id`),
-    facet(tx, cte, Prisma.sql`f.debt_status`),
-    facet(tx, cte, Prisma.sql`f.creditor_unit`),
-    statusFacets(tx, cte),
-    anomalyFacets(tx, cte),
-    amounts(tx, cte),
+    tx.$queryRaw<RawRow[]>(statements.rows),
+    tx.$queryRaw<Array<{ count: number }>>(statements.count),
+    tx.$queryRaw<RawDepartmentFacet[]>(statements.departmentFacets),
+    tx.$queryRaw<RawFacet[]>(statements.debtStatuses),
+    tx.$queryRaw<RawFacet[]>(statements.creditorUnits),
+    tx.$queryRaw<RawFacet[]>(statements.statuses),
+    tx.$queryRaw<RawFacet[]>(statements.anomalies),
+    amounts(tx, statements.totals),
   ]);
   return {
-    rows: rawRows.map(mapRow), page, pageSize, total: countRows[0]?.count ?? 0,
+    rows: rawRows.map(mapRow), page: statements.page, pageSize: statements.pageSize, total: countRows[0]?.count ?? 0,
     facets: { departments: departmentFacets, debtStatuses, creditorUnits, statuses, anomalies },
     totals,
   };
 }
 
 async function dashboard(tx: QueryTx, scope: QueryScope) {
-  const cte = filteredCte(scope);
-  const [dashboardAmounts, statuses, anomalies] = await Promise.all([amounts(tx, cte), statusFacets(tx, cte), anomalyFacets(tx, cte, true)]);
+  const statements = buildReceivablesDashboardStatements(scope);
+  const [dashboardAmounts, statuses, anomalies] = await Promise.all([
+    amounts(tx, statements.totals),
+    tx.$queryRaw<RawFacet[]>(statements.statuses),
+    tx.$queryRaw<RawFacet[]>(statements.anomalies),
+  ]);
   return { amounts: dashboardAmounts, statuses, anomalies };
 }
 
@@ -517,10 +547,16 @@ export async function queryReceivablesExportBatch(principal: Principal, snapshot
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) throw new Error("RECEIVABLES_EXPORT_BATCH_SIZE_INVALID");
   return prisma.$transaction(async (tx) => {
     const scope = await resolveReceivablesExportScope(tx, principal, snapshot, filters);
-    const cte = filteredCte(scope);
-    const cursor = afterId ? Prisma.sql`AND f.id > ${afterId}::uuid` : Prisma.empty;
-    const statement = Prisma.sql`${cte} SELECT ${rowColumns} FROM filtered f WHERE f.created_at <= ${scope.cutoffAt!.toISOString()}::timestamp ${cursor} ORDER BY f.id ASC LIMIT ${batchSize}`;
+    const statement = buildReceivablesExportBatchStatement(scope, afterId, batchSize);
     const rows = await tx.$queryRaw<RawRow[]>(statement);
     return rows.map(mapRow);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+export function buildReceivablesExportBatchStatement(scope: ReceivablesQueryScope, afterId: string | null, batchSize = 500) {
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) throw new Error("RECEIVABLES_EXPORT_BATCH_SIZE_INVALID");
+  if (!scope.cutoffAt) throw new Error("RECEIVABLES_EXPORT_CUTOFF_UNAVAILABLE");
+  const cte = filteredCte(scope);
+  const cursor = afterId ? Prisma.sql`AND f.id > ${afterId}::uuid` : Prisma.empty;
+  return Prisma.sql`${cte} SELECT ${rowColumns} FROM filtered f WHERE f.created_at <= ${scope.cutoffAt.toISOString()}::timestamp ${cursor} ORDER BY f.id ASC LIMIT ${batchSize}`;
 }
