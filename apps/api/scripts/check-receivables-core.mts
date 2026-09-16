@@ -7,6 +7,7 @@ import {
   calculateReceivableAmounts,
   normalizeContractNo,
   reporterCreateFields,
+  reporterCollectionFields,
   reporterPatchFields,
 } from "../src/receivables-core.js";
 
@@ -51,12 +52,22 @@ assert.doesNotThrow(() => assertWriteoffAllowed({ previous: "20", next: "10", fi
 
 assert.ok(reporterCreateFields.includes("contractNo"));
 assert.ok(reporterPatchFields.includes("debtStatus"));
+assert.ok(reporterCollectionFields.includes("latestProgress"));
 assert.throws(() => (reporterPatchFields as unknown as string[]).push("finalAmount"), TypeError);
 assert.equal(reporterPatchFields.includes("finalAmount" as never), false);
 assert.throws(() => assertLedgerPatchAllowed({ canManageAll: false, canCreateLedger: true }, null, { finalAmount: "100" }), /REPORTER_FIELD_NOT_ALLOWED/);
 assert.throws(() => assertLedgerPatchAllowed({ canManageAll: false, canCreateLedger: false }, null, { contractNo: "HT-001" }), /REPORTER_CREATE_NOT_ALLOWED/);
 assert.throws(() => assertLedgerPatchAllowed({ canManageAll: false, canCreateLedger: true }, { id: "ledger-1" }, { contractNo: "HT-002" }), /REPORTER_FIELD_NOT_ALLOWED/);
 assert.doesNotThrow(() => assertLedgerPatchAllowed({ canManageAll: true, canCreateLedger: false }, { id: "ledger-1" }, { finalAmount: "100" }));
+assert.throws(
+  () => assertLedgerPatchAllowed({ canManageAll: false, canCreateLedger: false, canMaintainCollection: false }, { id: "ledger-1" }, { latestProgress: "已对账" }),
+  /REPORTER_FIELD_NOT_ALLOWED/,
+);
+assert.doesNotThrow(() => assertLedgerPatchAllowed(
+  { canManageAll: false, canCreateLedger: false, canMaintainCollection: true },
+  { id: "ledger-1" },
+  { projectStatus: "完工", dunningDate: "2026-09-16", latestProgress: "已对账" },
+));
 
 assert.throws(() => assertTransition("voided", "update"), /VOIDED_FACT_IMMUTABLE/);
 assert.doesNotThrow(() => assertTransition("active", "update"));

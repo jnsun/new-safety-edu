@@ -117,6 +117,11 @@ type RawRow = {
   debt_status: string | null;
   collection_owner: string | null;
   collection_notes: string | null;
+  dunning_date: Date | null;
+  comm_method: string | null;
+  feedback: string | null;
+  latest_progress: string | null;
+  next_plan: string | null;
   status: "active" | "voided";
   revision: number;
   voided_at: Date | null;
@@ -226,7 +231,8 @@ const rowColumns = Prisma.sql`
   f.id, f.finance_department_id, f.finance_department_name, f.contract_no, f.project_name, f.customer_name,
   f.customer_type, f.creditor_unit, f.work_nature, f.sector, f.project_status, f.settlement_method,
   f.contract_amount, f.final_amount, f.writeoff_amount, f.opening_charge_date, f.debt_status,
-  f.collection_owner, f.collection_notes, f.status, f.revision, f.voided_at, f.voided_by, f.void_reason,
+  f.collection_owner, f.collection_notes, f.dunning_date, f.comm_method, f.feedback, f.latest_progress, f.next_plan,
+  f.status, f.revision, f.voided_at, f.voided_by, f.void_reason,
   f.created_by, f.updated_by, f.created_at, f.updated_at, f.invoiced_amount, f.received_amount,
   f.internal_receivable, f.external_receivable, f.balance, f.anomaly
 `;
@@ -252,6 +258,11 @@ function mapRow(row: RawRow) {
     debtStatus: row.debt_status,
     collectionOwner: row.collection_owner,
     collectionNotes: row.collection_notes,
+    dunningDate: row.dunning_date,
+    communicationMethod: row.comm_method,
+    counterpartyFeedback: row.feedback,
+    latestProgress: row.latest_progress,
+    nextPlan: row.next_plan,
     status: row.status,
     revision: row.revision,
     voidedAt: row.voided_at,
@@ -382,7 +393,8 @@ async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: Query
       id: true, financeDepartmentId: true, contractNo: true, projectName: true, customerName: true, customerType: true,
       creditorUnit: true, workNature: true, sector: true, projectStatus: true, settlementMethod: true, contractAmount: true,
       finalAmount: true, writeoffAmount: true, openingChargeDate: true, debtStatus: true, collectionOwner: true,
-      collectionNotes: true, status: true, revision: true, voidedAt: true, voidedBy: true, voidReason: true,
+      collectionNotes: true, dunningDate: true, communicationMethod: true, counterpartyFeedback: true, latestProgress: true, nextPlan: true,
+      status: true, revision: true, voidedAt: true, voidedBy: true, voidReason: true,
       createdBy: true, updatedBy: true, createdAt: true, updatedAt: true,
       financeDepartment: { select: { name: true } },
       invoices: { orderBy: [{ invoiceDate: "asc" }, { id: "asc" }], select: { id: true, invoiceNo: true, invoiceDate: true, amount: true, note: true, source: true, status: true, revision: true, voidedAt: true, voidedBy: true, voidReason: true, createdBy: true, createdAt: true, updatedAt: true } },

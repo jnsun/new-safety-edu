@@ -1393,6 +1393,7 @@ model ReceivableAccessGrant {
   canCreate    Boolean                     @default(false) @map("can_create")
   canExport    Boolean                     @default(false) @map("can_export")
   canViewAll   Boolean                     @default(false) @map("can_view_all")
+  canMaintainCollection Boolean            @default(false) @map("can_maintain_collection")
   active       Boolean                     @default(true)
   revision     Int                         @default(1)
   grantedBy    String                      @map("granted_by") @db.Uuid
@@ -1447,6 +1448,11 @@ model ReceivableLedger {
   debtStatus             String?                    @map("debt_status") @db.VarChar(120)
   collectionOwner        String?                    @map("collection_owner") @db.VarChar(120)
   collectionNotes        String?                    @map("collection_notes")
+  dunningDate            DateTime?                  @map("dunning_date") @db.Date
+  communicationMethod    String?                    @map("comm_method") @db.VarChar(120)
+  counterpartyFeedback   String?                    @map("feedback") @db.VarChar(240)
+  latestProgress         String?                    @map("latest_progress") @db.VarChar(240)
+  nextPlan               String?                    @map("next_plan") @db.VarChar(240)
   status                 ReceivableRecordStatus     @default(active)
   revision               Int                        @default(1)
   voidedAt               DateTime?                  @map("voided_at")

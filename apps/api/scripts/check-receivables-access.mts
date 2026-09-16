@@ -29,6 +29,7 @@ const owner = decideReceivablesAccess({ accountActive: true, personActive: true,
 assert.equal(owner.role, "owner");
 assert.equal(owner.canManageAll, true);
 assert.equal(owner.canViewAll, true);
+assert.equal(owner.canMaintainCollection, true);
 
 const configuredAdmin = decideReceivablesAccess({ accountActive: true, personActive: true, isCompanyAdmin: true, configured: true, grant: null });
 assert.equal(configuredAdmin.canReadLedger, false);
@@ -54,6 +55,7 @@ const reporter = decideReceivablesAccess({
     canCreate: true,
     canExport: false,
     canViewAll: false,
+    canMaintainCollection: true,
     departments: [
       { departmentId: "department-a", canRead: true, canWrite: true },
       { departmentId: "department-b", canRead: true, canWrite: false },
@@ -61,6 +63,7 @@ const reporter = decideReceivablesAccess({
   },
 });
 assert.equal(reporter.canCreateLedger, true);
+assert.equal(reporter.canMaintainCollection, true);
 assert.deepEqual(reporter.readDepartmentIds, ["department-a", "department-b"]);
 assert.deepEqual(reporter.writeDepartmentIds, ["department-a"]);
 assert.doesNotThrow(() => requireReceivables(reporter, "read", "department-b"));
@@ -81,6 +84,7 @@ const viewer = decideReceivablesAccess({
 assert.equal(viewer.canCreateLedger, false);
 assert.equal(viewer.canWriteLedger, false);
 assert.equal(viewer.canExport, true);
+assert.equal(viewer.canMaintainCollection, false);
 assert.deepEqual(viewer.writeDepartmentIds, []);
 
 assert.equal(decideReceivablesAccess({ accountActive: false, personActive: true, grant: { role: "admin" } }).canEnter, false);

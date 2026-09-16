@@ -16,6 +16,10 @@ const references = {
     { category: "client_attr", value: "内部单位", active: true },
     { category: "work_nature", value: "综合物探", active: true },
     { category: "sector", value: "能源资源勘查开发", active: true },
+    { category: "comm_method", value: "电话", active: true },
+    { category: "feedback", value: "正在筹款，近期付", active: true },
+    { category: "progress_note", value: "已安排对账", active: true },
+    { category: "next_plan", value: "跟踪付款进度", active: true },
   ],
   ledgers: [{ id: "existing-ledger", contractNoNormalized: "HT-EXISTING", revision: 7, financeDepartmentId: "department-active" }],
 } as const;
@@ -34,10 +38,10 @@ function codes(result: ReturnType<typeof parseReceivablesImportWorkbook>) {
 
 const valid = parseReceivablesImportWorkbook(workbook([
   "归属部门", "合同号", "项目名称", "客户名称", "客户属性", "债权单位", "工作性质", "八大板块",
-  "项目状态", "决算方式", "合同金额", "决算金额", "最新挂账时间", "开票金额", "开票日期", "到账金额", "到账日期", "债权状态", "未知旧列",
+  "项目状态", "决算方式", "合同金额", "决算金额", "最新挂账时间", "最新催收时间", "沟通方式", "对方反馈", "最新进展", "下一步计划", "开票金额", "开票日期", "到账金额", "到账日期", "债权状态", "未知旧列",
 ], [[
   "D001", " HT-EXISTING ", "匿名项目", "匿名客户", "内部单位", "物化院", "综合物探", "能源资源勘查开发",
-  "完工", "合同金额", "100.1234", "", "2026-09-01", "10.0000", "2026-09-01", "3.2000", "2026-09-02", "正常", "ignored",
+  "完工", "合同金额", "100.1234", "", "2026-09-01", "2026-09-16", "电话", "正在筹款，近期付", "已安排对账", "跟踪付款进度", "10.0000", "2026-09-01", "3.2000", "2026-09-02", "正常", "ignored",
 ]]), references);
 assert.deepEqual(codes(valid), []);
 assert.deepEqual(valid.warnings.map(({ code }) => code), ["UNKNOWN_COLUMN", "EXISTING_OPENING_TOTALS_SKIP_ONLY"]);
@@ -48,9 +52,14 @@ assert.equal(valid.rows[0]?.normalizedData.contractAmount, "100.1234");
 assert.equal(valid.rows[0]?.normalizedData.finalAmount, "100.1234", "non-workload import should reuse contract amount");
 assert.equal(valid.rows[0]?.normalizedData.openingInvoiceAmount, "10.0000");
 assert.equal(valid.rows[0]?.normalizedData.openingReceiptAmount, "3.2000");
+assert.equal(valid.rows[0]?.normalizedData.dunningDate, "2026-09-16");
+assert.equal(valid.rows[0]?.normalizedData.communicationMethod, "电话");
+assert.equal(valid.rows[0]?.normalizedData.counterpartyFeedback, "正在筹款，近期付");
+assert.equal(valid.rows[0]?.normalizedData.latestProgress, "已安排对账");
+assert.equal(valid.rows[0]?.normalizedData.nextPlan, "跟踪付款进度");
 assert.equal(valid.rows[0]?.ledgerId, "existing-ledger");
 assert.equal(valid.rows[0]?.targetRevision, 7);
-assert.deepEqual(valid.rows[0]?.normalizedData.presentFields, ["financeDepartmentId", "contractNo", "projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "contractAmount", "finalAmount", "openingChargeDate", "openingInvoiceAmount", "openingInvoiceDate", "openingReceiptAmount", "openingReceiptDate", "debtStatus"]);
+assert.deepEqual(valid.rows[0]?.normalizedData.presentFields, ["financeDepartmentId", "contractNo", "projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "contractAmount", "finalAmount", "openingChargeDate", "dunningDate", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan", "openingInvoiceAmount", "openingInvoiceDate", "openingReceiptAmount", "openingReceiptDate", "debtStatus"]);
 assert.deepEqual(valid.rows[0]?.allowedDecisions, ["skip"], "existing opening totals must be skip-only");
 assert.ok(valid.rows[0]?.warnings.some(({ code }) => code === "EXISTING_OPENING_TOTALS_SKIP_ONLY"));
 
@@ -81,6 +90,7 @@ const failures = [
   ["unknown department", workbook(["合同号", "归属部门"], [["A", "不存在"]]), "DEPARTMENT_NOT_FOUND"],
   ["decimal scale", workbook(["合同号", "归属部门", "合同金额"], [["A", "一所", "1.00001"]]), "AMOUNT_INVALID"],
   ["invalid date", workbook(["合同号", "归属部门", "最新挂账时间"], [["A", "一所", "2026-02-30"]]), "DATE_INVALID"],
+  ["invalid dunning date", workbook(["合同号", "归属部门", "最新催收时间"], [["A", "一所", "2026-02-30"]]), "DATE_INVALID"],
   ["dictionary", workbook(["合同号", "归属部门", "债权单位"], [["A", "一所", "未知单位"]]), "DICTIONARY_VALUE_INVALID"],
   ["invoice date", workbook(["合同号", "归属部门", "开票金额"], [["A", "一所", "1"]]), "OPENING_INVOICE_DATE_REQUIRED"],
   ["receipt date", workbook(["合同号", "归属部门", "到账金额"], [["A", "一所", "1"]]), "OPENING_RECEIPT_DATE_REQUIRED"],

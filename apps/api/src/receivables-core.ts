@@ -12,6 +12,7 @@ type ReceivableAmount = DecimalValue | ReceivableAmountDetail;
 export type ReceivablesActorCapabilities = {
   canManageAll: boolean;
   canCreateLedger: boolean;
+  canMaintainCollection?: boolean;
 };
 
 export const reporterCreateFields = Object.freeze([
@@ -28,9 +29,17 @@ export const reporterCreateFields = Object.freeze([
   "debtStatus",
   "collectionOwner",
   "collectionNotes",
+  "dunningDate",
+  "communicationMethod",
+  "counterpartyFeedback",
+  "latestProgress",
+  "nextPlan",
 ] as const);
 
 export const reporterPatchFields = Object.freeze(["debtStatus", "collectionOwner", "collectionNotes"] as const);
+export const reporterCollectionFields = Object.freeze([
+  "projectStatus", "dunningDate", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan",
+] as const);
 
 export function normalizeContractNo(value: string): string {
   return value.trim();
@@ -98,7 +107,11 @@ export function assertLedgerPatchAllowed(
   if (actor.canManageAll) return;
   if (current === null && !actor.canCreateLedger) throw new Error("REPORTER_CREATE_NOT_ALLOWED");
 
-  const allowedFields = current === null ? reporterCreateFields : reporterPatchFields;
+  const allowedFields: readonly string[] = current === null
+    ? reporterCreateFields
+    : actor.canMaintainCollection
+      ? [...reporterPatchFields, ...reporterCollectionFields]
+      : reporterPatchFields;
   for (const field of Object.keys(patch)) {
     if (!allowedFields.includes(field as never)) throw new Error("REPORTER_FIELD_NOT_ALLOWED");
   }

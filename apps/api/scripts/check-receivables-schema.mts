@@ -303,6 +303,24 @@ try {
   `;
   assert.equal(aggregates.length, 0, "ReceivableLedger must not store editable invoice or receipt aggregates");
 
+  const collectionColumns = await prisma.$queryRaw<Array<{ tableName: string; columnName: string; nullable: string; defaultValue: string | null }>>`
+    SELECT table_name AS "tableName", column_name AS "columnName", is_nullable AS nullable, column_default AS "defaultValue"
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND (table_name, column_name) IN (
+        ('receivable_access_grants', 'can_maintain_collection'),
+        ('receivable_ledgers', 'dunning_date'),
+        ('receivable_ledgers', 'comm_method'),
+        ('receivable_ledgers', 'feedback'),
+        ('receivable_ledgers', 'latest_progress'),
+        ('receivable_ledgers', 'next_plan')
+      )
+  `;
+  assert.equal(collectionColumns.length, 6, "Missing collection tracking columns");
+  const grantColumn = collectionColumns.find(({ columnName }) => columnName === "can_maintain_collection");
+  assert.deepEqual(grantColumn && { nullable: grantColumn.nullable, defaultValue: grantColumn.defaultValue }, { nullable: "NO", defaultValue: "false" });
+  for (const column of collectionColumns.filter(({ tableName }) => tableName === "receivable_ledgers")) assert.equal(column.nullable, "YES", `${column.columnName} must remain nullable`);
+
   const lifecycleColumns = await prisma.$queryRaw<Array<{ tableName: string; columnName: string }>>`
     SELECT table_name AS "tableName", column_name AS "columnName"
     FROM information_schema.columns

@@ -12,6 +12,7 @@ type GrantFacts = {
   canCreate?: boolean;
   canExport?: boolean;
   canViewAll?: boolean;
+  canMaintainCollection?: boolean;
   departments?: readonly DepartmentScope[];
 };
 
@@ -38,6 +39,7 @@ export type ReceivablesAccess = ReceivablesActorCapabilities & {
   canImport: boolean;
   canExport: boolean;
   canViewAll: boolean;
+  canMaintainCollection: boolean;
   canConfirmSetup: boolean;
   canRecover: boolean;
   readDepartmentIds: string[];
@@ -77,6 +79,7 @@ const emptyAccess = (state: ReceivablesAccessState, canRecover: boolean): Receiv
   canImport: false,
   canExport: false,
   canViewAll: false,
+  canMaintainCollection: false,
   canConfirmSetup: false,
   canRecover,
   readDepartmentIds: [],
@@ -119,6 +122,7 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       canImport: true,
       canExport: true,
       canViewAll: true,
+      canMaintainCollection: true,
     };
   }
 
@@ -144,6 +148,7 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       canImport: true,
       canExport: true,
       canViewAll: true,
+      canMaintainCollection: true,
       readDepartmentIds,
       writeDepartmentIds,
     };
@@ -161,6 +166,7 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
     canCreateLedger: grant.role === "reporter" && !!grant.canCreate && canWriteLedger,
     canExport: !!grant.canExport && canReadLedger,
     canViewAll,
+    canMaintainCollection: grant.role === "reporter" && !!grant.canMaintainCollection,
     readDepartmentIds,
     writeDepartmentIds,
   };
@@ -211,6 +217,7 @@ export async function resolveReceivablesAccess(principal: Principal, db: AccessD
             canCreate: true,
             canExport: true,
             canViewAll: true,
+            canMaintainCollection: true,
             departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true } },
           },
         })

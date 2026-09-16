@@ -34,6 +34,8 @@ type LedgerResponse = {
   id: string; financeDepartmentId: string; contractNo: string; contractNoNormalized: string;
   contractAmount: string | null; finalAmount: string | null; settlementMethod: string | null;
   collectionOwner: string | null; collectionNotes: string | null; status: "active" | "voided";
+  projectStatus: string | null; dunningDate: string | null; communicationMethod: string | null;
+  counterpartyFeedback: string | null; latestProgress: string | null; nextPlan: string | null;
   revision: number; voidReason: string | null;
 };
 
@@ -83,10 +85,10 @@ async function createIdentity(label: string, role?: "org_leader" | "company_admi
   return account;
 }
 
-async function createGrant(input: { accountId: string; grantedBy: string; role: "admin" | "reporter" | "readonly"; canCreate?: boolean; departmentIds?: string[] }) {
+async function createGrant(input: { accountId: string; grantedBy: string; role: "admin" | "reporter" | "readonly"; canCreate?: boolean; canMaintainCollection?: boolean; departmentIds?: string[] }) {
   const grant = await prisma.receivableAccessGrant.create({
     data: {
-      accountId: input.accountId, grantedBy: input.grantedBy, role: input.role, canCreate: input.canCreate ?? false,
+      accountId: input.accountId, grantedBy: input.grantedBy, role: input.role, canCreate: input.canCreate ?? false, canMaintainCollection: input.canMaintainCollection ?? false,
       departments: { create: (input.departmentIds ?? []).map((financeDepartmentId) => ({ financeDepartmentId, canRead: true, canWrite: input.role === "reporter" })) },
     },
   });
@@ -205,7 +207,7 @@ try {
   const migrationRaceSource = await prisma.receivableDepartment.create({ data: { name: `${marker}-migration-race-source`, active: false } }); ids.departments.push(migrationRaceSource.id);
   const migrationRaceTarget = await prisma.receivableDepartment.create({ data: { name: `${marker}-migration-race-target` } }); ids.departments.push(migrationRaceTarget.id);
   await createGrant({ accountId: admin.id, grantedBy: owner.id, role: "admin" });
-  await createGrant({ accountId: reporterA.id, grantedBy: owner.id, role: "reporter", canCreate: true, departmentIds: [departmentA.id] });
+  await createGrant({ accountId: reporterA.id, grantedBy: owner.id, role: "reporter", canCreate: true, canMaintainCollection: true, departmentIds: [departmentA.id] });
   await createGrant({ accountId: reporterNoCreate.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentA.id] });
   await createGrant({ accountId: reporterB.id, grantedBy: owner.id, role: "reporter", canCreate: true, departmentIds: [departmentB.id] });
   const revokeRaceGrant = await createGrant({ accountId: revokeRaceReporter.id, grantedBy: owner.id, role: "reporter", canCreate: true, departmentIds: [departmentA.id] });
@@ -260,6 +262,17 @@ try {
   await expectStatus(`/api/receivables/ledgers/${explicitNullPatch.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "显式清空决算", contractAmount: "80", finalAmount: null }) });
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitNullPatch.id } })).finalAmount?.toFixed(4), "80.0000", "non-workload explicit patch final null must carry from effective contract amount");
   const reporterCreated = await createLedger(tokens.reporterA!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-reporter`, projectName: "报账员项目", debtStatus: "正常催收" });
+  const collectionLedger = await createLedger(tokens.owner!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-collection`, projectName: "催收权限项目" });
+  await expectError(`/api/receivables/ledgers/${collectionLedger.id}`, tokens.reporterNoCreate!, 403, "RECEIVABLES_REPORTER_FIELD_NOT_ALLOWED", { method: "PATCH", body: jsonBody({ revision: 1, reason: "未授权催收维护", latestProgress: "不得写入" }) });
+  const collectionPatched = (await expectStatus<LedgerResponse>(`/api/receivables/ledgers/${collectionLedger.id}`, tokens.reporterA!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "更新催收进展", projectStatus: "在建", dunningDate: "2026-09-16", communicationMethod: "  电话  ", counterpartyFeedback: "  本周安排  ", latestProgress: "  已完成对账  ", nextPlan: "  跟进付款  " }) })).data!;
+  assert.deepEqual({
+    revision: collectionPatched.revision, projectStatus: collectionPatched.projectStatus, dunningDate: collectionPatched.dunningDate,
+    communicationMethod: collectionPatched.communicationMethod, counterpartyFeedback: collectionPatched.counterpartyFeedback,
+    latestProgress: collectionPatched.latestProgress, nextPlan: collectionPatched.nextPlan,
+  }, { revision: 2, projectStatus: "在建", dunningDate: "2026-09-16T00:00:00.000Z", communicationMethod: "电话", counterpartyFeedback: "本周安排", latestProgress: "已完成对账", nextPlan: "跟进付款" });
+  const collectionFacts = await ledgerFacts(collectionLedger.id);
+  assert.equal(collectionFacts.revisions.length, 1);
+  assert.equal(collectionFacts.audits.length, 2);
 
   await expectError("/api/receivables/ledgers", tokens.owner!, 400, "VALIDATION_ERROR", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: "   " }) });
   await expectError("/api/receivables/ledgers", tokens.owner!, 400, "VALIDATION_ERROR", { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: `${marker}-unknown`, surprise: true }) });
@@ -475,7 +488,7 @@ try {
   assert.equal((voidFacts.revisions[0]!.beforeSnapshot as Record<string, unknown>).status, "active");
   await expectError(`/api/receivables/ledgers/${toVoid.id}`, tokens.owner!, 409, "RECEIVABLES_LEDGER_VOIDED", { method: "PATCH", body: jsonBody({ revision: 2, reason: "voided patch", collectionNotes: "no" }) });
   await expectError(`/api/receivables/ledgers/${toVoid.id}/void`, tokens.owner!, 409, "RECEIVABLES_LEDGER_VOIDED", { method: "POST", body: jsonBody({ revision: 2, reason: "repeat void", confirm: true }) });
-  await expectError(`/api/receivables/ledgers/${toVoid.id}`, tokens.owner!, 404, "NOT_FOUND", { method: "DELETE" });
+  await expectStatus(`/api/receivables/ledgers/${toVoid.id}`, tokens.owner!, 404, { method: "DELETE" });
   const afterRejectedVoid = await ledgerFacts(toVoid.id);
   assert.equal(afterRejectedVoid.revisions.length, 1);
   assert.equal(afterRejectedVoid.audits.length, 2);

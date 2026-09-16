@@ -22,6 +22,11 @@ type LedgerFields = {
   debtStatus?: string | null | undefined;
   collectionOwner?: string | null | undefined;
   collectionNotes?: string | null | undefined;
+  dunningDate?: string | null | undefined;
+  communicationMethod?: string | null | undefined;
+  counterpartyFeedback?: string | null | undefined;
+  latestProgress?: string | null | undefined;
+  nextPlan?: string | null | undefined;
 };
 
 export type ReceivablesLedgerOperation =
@@ -36,6 +41,7 @@ const ledgerSelect = {
   customerName: true, customerType: true, creditorUnit: true, workNature: true, sector: true,
   projectStatus: true, settlementMethod: true, contractAmount: true, finalAmount: true, writeoffAmount: true,
   openingChargeDate: true, debtStatus: true, collectionOwner: true, collectionNotes: true, status: true,
+  dunningDate: true, communicationMethod: true, counterpartyFeedback: true, latestProgress: true, nextPlan: true,
   revision: true, voidedAt: true, voidedBy: true, voidReason: true, createdBy: true, updatedBy: true,
   createdByImportBatchId: true, createdAt: true, updatedAt: true,
 } satisfies Prisma.ReceivableLedgerSelect;
@@ -51,7 +57,7 @@ const reporterFieldForbidden = () => httpError(403, "RECEIVABLES_REPORTER_FIELD_
 const unexpectedUniqueConflict = () => httpError(500, "INTERNAL_ERROR", "未识别的唯一约束冲突");
 const setupLockKey = 8_645_136_501n;
 const workloadSettlement = "按工作量结算";
-const textFields = ["projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "debtStatus", "collectionOwner", "collectionNotes"] as const;
+const textFields = ["projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "debtStatus", "collectionOwner", "collectionNotes", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan"] as const;
 
 function snapshot(row: LedgerRow): Prisma.InputJsonObject {
   return JSON.parse(JSON.stringify(row)) as Prisma.InputJsonObject;
@@ -73,11 +79,11 @@ function decimal18_4(value: string | null, field: string): Prisma.Decimal | null
   }
 }
 
-function dateOnly(value: string | null): Date | null {
+function dateOnly(value: string | null, label: string): Date | null {
   if (value === null) return null;
   const parsed = new Date(`${value}T00:00:00.000Z`);
   if (Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value) {
-    throw httpError(400, "RECEIVABLES_DATE_INVALID", "挂账日期格式无效");
+    throw httpError(400, "RECEIVABLES_DATE_INVALID", `${label}格式无效`);
   }
   return parsed;
 }
@@ -96,7 +102,8 @@ function normalizeFields(input: LedgerFields, current?: LedgerRow): Prisma.Recei
   }
   if (input.contractAmount !== undefined) data.contractAmount = decimal18_4(input.contractAmount, "合同金额");
   if (input.finalAmount !== undefined) data.finalAmount = decimal18_4(input.finalAmount, "决算金额");
-  if (input.openingChargeDate !== undefined) data.openingChargeDate = dateOnly(input.openingChargeDate);
+  if (input.openingChargeDate !== undefined) data.openingChargeDate = dateOnly(input.openingChargeDate, "挂账日期");
+  if (input.dunningDate !== undefined) data.dunningDate = dateOnly(input.dunningDate, "最新催收时间");
 
   const shouldConsiderAutoFinal = current
     ? current.finalAmount === null && (input.contractAmount !== undefined || input.settlementMethod !== undefined)

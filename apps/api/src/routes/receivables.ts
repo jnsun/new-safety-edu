@@ -33,6 +33,7 @@ const grantFields = z.object({
   canCreate: z.boolean().default(false),
   canExport: z.boolean().default(false),
   canViewAll: z.boolean().default(false),
+  canMaintainCollection: z.boolean().default(false),
   departments: z.array(departmentScopeInput).max(200).default([]),
 }).strict();
 const grantCreateInput = grantFields.extend({ accountId: z.string().uuid(), reason: reasonInput }).strict();
@@ -76,6 +77,8 @@ const ledgerFields = {
   contractAmount: z.string().min(1).max(80).nullable().optional(), finalAmount: z.string().min(1).max(80).nullable().optional(),
   openingChargeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   debtStatus: ledgerText(120), collectionOwner: ledgerText(120), collectionNotes: ledgerText(10_000),
+  dunningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  communicationMethod: ledgerText(120), counterpartyFeedback: ledgerText(240), latestProgress: ledgerText(240), nextPlan: ledgerText(240),
 };
 const ledgerCreateInput = z.object(ledgerFields).strict();
 const ledgerPatchInput = z.object({

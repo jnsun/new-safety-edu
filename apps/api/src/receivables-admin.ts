@@ -7,7 +7,7 @@ import { requireReceivables, resolveReceivablesAccess, type ReceivablesAction } 
 import { writeCriticalAudit } from "./transaction-audit.js";
 
 type GrantScope = { departmentId: string; canRead: boolean; canWrite: boolean };
-type GrantFields = { role: ReceivableGrantRole; canCreate: boolean; canExport: boolean; canViewAll: boolean; departments: GrantScope[] };
+type GrantFields = { role: ReceivableGrantRole; canCreate: boolean; canExport: boolean; canViewAll: boolean; canMaintainCollection: boolean; departments: GrantScope[] };
 type MigrationInput =
   | { mode: "preview"; targetId: string }
   | { mode: "apply"; targetId: string; token: string; reason: string; confirm: true };
@@ -43,7 +43,7 @@ async function runMigrationApply<T>(apply: () => Promise<T>) {
 }
 
 const grantSelect = {
-  id: true, accountId: true, role: true, canCreate: true, canExport: true, canViewAll: true, active: true, revision: true,
+  id: true, accountId: true, role: true, canCreate: true, canExport: true, canViewAll: true, canMaintainCollection: true, active: true, revision: true,
   grantedBy: true, grantedAt: true, revokedAt: true, revokedBy: true, revokeReason: true,
   departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true }, orderBy: { financeDepartmentId: "asc" as const } },
 } satisfies Prisma.ReceivableAccessGrantSelect;
@@ -104,8 +104,8 @@ function validateGrantPolicy(input: GrantFields) {
   const ids = input.departments.map(({ departmentId }) => departmentId);
   if (new Set(ids).size !== ids.length) throw httpError(400, "RECEIVABLES_GRANT_SCOPE_DUPLICATE", "财务归属部门范围不能重复");
   if (input.departments.some(({ canRead, canWrite }) => canWrite && !canRead)) throw httpError(400, "RECEIVABLES_GRANT_SCOPE_INVALID", "写权限必须同时包含读权限");
-  if (input.role === "admin" && (input.canCreate || input.canExport || input.canViewAll || input.departments.length > 0)) throw httpError(400, "RECEIVABLES_ADMIN_FLAGS_INVALID", "财务管理员使用固定模块权限，不能提交范围或能力标志");
-  if (input.role === "readonly" && (input.canCreate || input.departments.some(({ canWrite }) => canWrite))) throw httpError(400, "RECEIVABLES_READONLY_FLAGS_INVALID", "财务只读授权不能包含新增或写权限");
+  if (input.role === "admin" && (input.canCreate || input.canExport || input.canViewAll || input.canMaintainCollection || input.departments.length > 0)) throw httpError(400, "RECEIVABLES_ADMIN_FLAGS_INVALID", "财务管理员使用固定模块权限，不能提交范围或能力标志");
+  if (input.role === "readonly" && (input.canCreate || input.canMaintainCollection || input.departments.some(({ canWrite }) => canWrite))) throw httpError(400, "RECEIVABLES_READONLY_FLAGS_INVALID", "财务只读授权不能包含新增或写权限");
 }
 
 async function requireAction(context: ReceivablesAdminContext, action: ReceivablesAction, tx?: Prisma.TransactionClient) {
@@ -175,7 +175,7 @@ async function createGrant(context: ReceivablesAdminContext, input: Extract<Rece
     await assertActiveGrantSubject(tx, input.accountId);
     await validateGrantDepartments(tx, input);
     const created = await tx.receivableAccessGrant.create({ data: {
-      accountId: input.accountId, role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, grantedBy: context.principal.accountId,
+      accountId: input.accountId, role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, grantedBy: context.principal.accountId,
       departments: { create: input.departments.map(({ departmentId, canRead, canWrite }) => ({ financeDepartmentId: departmentId, canRead, canWrite })) },
     }, select: grantSelect });
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.grant.create", objectType: "receivable_access_grant", objectId: created.id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata(null, created, 1) });
@@ -200,7 +200,7 @@ async function updateGrant(context: ReceivablesAdminContext, id: string, input: 
     }
     await assertActiveGrantSubject(tx, before.accountId);
     await validateGrantDepartments(tx, input);
-    const result = await tx.receivableAccessGrant.updateMany({ where: { id, revision: input.revision, active: true, revokedAt: null }, data: { role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, revision: { increment: 1 } } });
+    const result = await tx.receivableAccessGrant.updateMany({ where: { id, revision: input.revision, active: true, revokedAt: null }, data: { role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, revision: { increment: 1 } } });
     if (result.count !== 1) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务授权已被其他操作更新");
     await tx.receivableGrantDepartment.deleteMany({ where: { grantId: id } });
     if (input.departments.length) await tx.receivableGrantDepartment.createMany({ data: input.departments.map(({ departmentId, canRead, canWrite }) => ({ grantId: id, financeDepartmentId: departmentId, canRead, canWrite })) });

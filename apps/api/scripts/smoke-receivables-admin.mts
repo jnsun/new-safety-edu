@@ -26,8 +26,8 @@ let serverOutput = "";
 let phoneCounter = 1;
 
 type JsonResponse<T = unknown> = { data?: T; error?: { code: string; message: string } };
-type AccessResponse = { role: "owner" | "admin" | "reporter" | "readonly" | null; canViewAll: boolean; canCreateLedger: boolean; canExport: boolean; readDepartmentIds: string[]; writeDepartmentIds: string[] };
-type GrantResponse = { id: string; accountId: string; role: "admin" | "reporter" | "readonly"; revision: number; active: boolean; canCreate: boolean; canExport: boolean; canViewAll: boolean; departments: Array<{ financeDepartmentId: string; canRead: boolean; canWrite: boolean }> };
+type AccessResponse = { role: "owner" | "admin" | "reporter" | "readonly" | null; canViewAll: boolean; canCreateLedger: boolean; canExport: boolean; canMaintainCollection: boolean; readDepartmentIds: string[]; writeDepartmentIds: string[] };
+type GrantResponse = { id: string; accountId: string; role: "admin" | "reporter" | "readonly"; revision: number; active: boolean; canCreate: boolean; canExport: boolean; canViewAll: boolean; canMaintainCollection: boolean; departments: Array<{ financeDepartmentId: string; canRead: boolean; canWrite: boolean }> };
 type DepartmentResponse = { id: string; name: string; code: string | null; sortOrder: number; active: boolean; revision: number };
 type DictionaryResponse = { id: string; category: string; value: string; sortOrder: number; active: boolean; revision: number };
 type PreviewResponse = { impactCount: number; token: string; expiresAt: string };
@@ -233,24 +233,27 @@ try {
   await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ accountId: inactivePerson.id, role: "readonly", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "inactive person" }) });
   await expectStatus("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ accountId: readonly.id, role: "readonly", canCreate: true, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: true }], reason: "readonly escalation" }) });
 
-  let reporterGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ accountId: reporter.id, role: "reporter", canCreate: true, canExport: true, canViewAll: false, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: true }, { departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "reporting coverage" }) })).data!;
+  let reporterGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ accountId: reporter.id, role: "reporter", canCreate: true, canExport: true, canViewAll: false, canMaintainCollection: true, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: true }, { departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "reporting coverage" }) })).data!;
   ids.grants.push(reporterGrant.id);
   let reporterAccess = (await expectStatus<AccessResponse>("/api/receivables/access", tokens.reporter!, 200)).data!;
   assert.deepEqual(reporterAccess.readDepartmentIds, [departmentA.id, departmentB.id].sort());
   assert.deepEqual(reporterAccess.writeDepartmentIds, [departmentA.id]);
   assert.equal(reporterAccess.canViewAll, false);
+  assert.equal(reporterAccess.canMaintainCollection, true);
 
-  reporterGrant = (await expectStatus<GrantResponse>(`/api/receivables/grants/${reporterGrant.id}`, tokens.owner!, 200, { method: "PATCH", body: JSON.stringify({ revision: reporterGrant.revision, role: "reporter", canCreate: true, canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: true }], reason: "replace scope" }) })).data!;
+  reporterGrant = (await expectStatus<GrantResponse>(`/api/receivables/grants/${reporterGrant.id}`, tokens.owner!, 200, { method: "PATCH", body: JSON.stringify({ revision: reporterGrant.revision, role: "reporter", canCreate: true, canExport: false, canViewAll: false, canMaintainCollection: true, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: true }], reason: "replace scope" }) })).data!;
   reporterAccess = (await expectStatus<AccessResponse>("/api/receivables/access", tokens.reporter!, 200)).data!;
   assert.deepEqual(reporterAccess.readDepartmentIds, [departmentB.id]);
   assert.deepEqual(reporterAccess.writeDepartmentIds, [departmentB.id]);
   assert.equal(reporterAccess.canExport, false);
   assert.equal(reporterAccess.canViewAll, false);
+  assert.equal(reporterAccess.canMaintainCollection, true);
 
-  reporterGrant = (await expectStatus<GrantResponse>(`/api/receivables/grants/${reporterGrant.id}`, tokens.owner!, 200, { method: "PATCH", body: JSON.stringify({ revision: reporterGrant.revision, role: "reporter", canCreate: false, canExport: true, canViewAll: true, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "separate all-view" }) })).data!;
+  reporterGrant = (await expectStatus<GrantResponse>(`/api/receivables/grants/${reporterGrant.id}`, tokens.owner!, 200, { method: "PATCH", body: JSON.stringify({ revision: reporterGrant.revision, role: "reporter", canCreate: false, canExport: true, canViewAll: true, canMaintainCollection: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "separate all-view" }) })).data!;
   reporterAccess = (await expectStatus<AccessResponse>("/api/receivables/access", tokens.reporter!, 200)).data!;
   assert.equal(reporterAccess.canViewAll, true);
   assert.equal(reporterAccess.canCreateLedger, false);
+  assert.equal(reporterAccess.canMaintainCollection, false);
   assert.deepEqual(reporterAccess.readDepartmentIds, [departmentB.id]);
   assert.deepEqual(reporterAccess.writeDepartmentIds, []);
   await expectStatus(`/api/receivables/grants/${reporterGrant.id}`, tokens.financeAdmin!, 403, { method: "PATCH", body: JSON.stringify({ revision: reporterGrant.revision, role: "reporter", canCreate: false, canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "admin cannot alter grants" }) });

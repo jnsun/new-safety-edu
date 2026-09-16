@@ -149,9 +149,13 @@ async function lockAuthority(tx: Tx, principal: Principal) {
 
 const writeScope = (access: ReceivablesAccess) => access.canManageAll ? {} : { financeDepartmentId: { in: access.writeDepartmentIds } };
 const auditScope = (access: ReceivablesAccess, departmentId: string) => ({ actorRole: access.role, actorScopeType: access.canManageAll ? "receivables" : "receivable_department", actorScopeId: access.canManageAll ? null : departmentId });
+const requireAttachmentUpload = (access: ReceivablesAccess) => {
+  if (!access.canManageAll && (access.role !== "reporter" || !access.canMaintainCollection)) throw ledgerNotFound();
+};
 export async function authorizeReceivableAttachmentUpload(principal: Principal, ledgerId: string) {
   const access = await resolveReceivablesAccess(principal);
   if (!access.canWriteLedger) throw ledgerNotFound();
+  requireAttachmentUpload(access);
   const ledger = await prisma.receivableLedger.findFirst({ where: { id: ledgerId, status: "active", ...writeScope(access) }, select: { id: true } });
   if (!ledger) throw ledgerNotFound();
 }
@@ -179,6 +183,7 @@ async function updateLedger(tx: Tx, context: ReceivablesFilesContext, access: Re
 export async function createReceivableAttachment(context: ReceivablesFilesContext, input: { ledgerId: string; ledgerRevision: number; category: string; file: UploadedPrivateFile }) {
   return prisma.$transaction(async (tx) => {
     const access = await lockAuthority(tx, context.principal);
+    requireAttachmentUpload(access);
     const ledger = await writableLedger(tx, access, input.ledgerId);
     if (ledger.revision !== input.ledgerRevision) throw conflict();
     const file = await tx.privateFile.create({ data: { kind: "attachment", ...input.file, uploadedBy: context.principal.accountId } });

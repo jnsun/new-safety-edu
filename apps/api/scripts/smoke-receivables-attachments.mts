@@ -48,8 +48,8 @@ async function identity(label: string, role?: "org_leader" | "company_admin", sc
   return account;
 }
 
-async function grant(accountId: string, grantedBy: string, role: "admin" | "reporter" | "readonly", departmentId?: string, canViewAll = false) {
-  const row = await prisma.receivableAccessGrant.create({ data: { accountId, grantedBy, role, canViewAll, departments: departmentId ? { create: { financeDepartmentId: departmentId, canRead: true, canWrite: role === "reporter" } } : undefined } }); ids.grants.push(row.id);
+async function grant(accountId: string, grantedBy: string, role: "admin" | "reporter" | "readonly", departmentId?: string, canViewAll = false, canMaintainCollection = false) {
+  const row = await prisma.receivableAccessGrant.create({ data: { accountId, grantedBy, role, canViewAll, canMaintainCollection, departments: departmentId ? { create: { financeDepartmentId: departmentId, canRead: true, canWrite: role === "reporter" } } : undefined } }); ids.grants.push(row.id);
 }
 
 async function token(accountId: string) {
@@ -239,7 +239,7 @@ try {
   const department = await prisma.receivableDepartment.create({ data: { name: `${marker}-department` } }); const otherDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-other` } }); ids.departments.push(department.id, otherDepartment.id);
   originalSetting = await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } }); settingExisted = originalSetting !== null;
   await prisma.receivableSetting.upsert({ where: { id: 1 }, create: { id: 1, financeOrganizationId: financeOrg.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id }, update: { financeOrganizationId: financeOrg.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
-  await grant(admin.id, owner.id, "admin"); await grant(reporter.id, owner.id, "reporter", department.id); await grant(sameReporter.id, owner.id, "reporter", department.id); await grant(readonly.id, owner.id, "readonly", department.id); await grant(viewAll.id, owner.id, "readonly", undefined, true); await grant(crossReporter.id, owner.id, "reporter", otherDepartment.id);
+  await grant(admin.id, owner.id, "admin"); await grant(reporter.id, owner.id, "reporter", department.id, false, true); await grant(sameReporter.id, owner.id, "reporter", department.id); await grant(readonly.id, owner.id, "readonly", department.id); await grant(viewAll.id, owner.id, "readonly", undefined, true); await grant(crossReporter.id, owner.id, "reporter", otherDepartment.id, false, true);
   const [ownerToken, adminToken, reporterToken, sameReporterToken, readonlyToken, viewAllToken, recoveryToken, crossReporterToken] = await Promise.all([token(owner.id), token(admin.id), token(reporter.id), token(sameReporter.id), token(readonly.id), token(viewAll.id), token(recovery.id), token(crossReporter.id)]);
   const ledger = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-contract`, contractNoNormalized: `${marker}-contract`, createdBy: owner.id } }); ids.ledgers.push(ledger.id);
   await start();
@@ -253,6 +253,7 @@ try {
     ["compressed workbook bomb", ownerToken, { filename: "bomb.xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content: await bombXlsx() }],
   ];
   for (const [label, bearer, fixture] of invalids) await unchanged(ledger.id, () => expect(attachmentPath, bearer, label === "recovery" || label === "readonly" ? 404 : 400, { method: "POST", body: form(1, fixture) }));
+  await unchanged(ledger.id, () => expect(attachmentPath, sameReporterToken, 404, { method: "POST", body: form(1, pdf) }));
   const malformedMultipart = { method: "POST", headers: { "content-type": "multipart/form-data; boundary=broken" }, body: "not-a-valid-boundary" };
   for (const bearer of [readonlyToken, recoveryToken, crossReporterToken]) await unchanged(ledger.id, () => expect(attachmentPath, bearer, 404, malformedMultipart));
   await unchanged(ledger.id, () => expect(attachmentPath, ownerToken, 413, { method: "POST", body: form(1, { filename: "large.pdf", mime: "application/pdf", content: Buffer.alloc(10 * 1024 * 1024 + 1) }) }));

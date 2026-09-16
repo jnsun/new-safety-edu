@@ -42,6 +42,11 @@ export type ReceivablesImportData = {
   debtStatus: string | null;
   collectionOwner: string | null;
   collectionNotes: string | null;
+  dunningDate: string | null;
+  communicationMethod: string | null;
+  counterpartyFeedback: string | null;
+  latestProgress: string | null;
+  nextPlan: string | null;
   openingInvoiceAmount: string | null;
   openingInvoiceDate: string | null;
   openingReceiptAmount: string | null;
@@ -76,6 +81,11 @@ const aliases: Record<ReceivablesImportField, readonly string[]> = {
   debtStatus: ["债权状态", "debt_status", "debtStatus"],
   collectionOwner: ["清收责任人", "collection_owner", "collectionOwner"],
   collectionNotes: ["催收备注", "collection_notes", "collectionNotes"],
+  dunningDate: ["最新催收时间", "催收时间", "催收日期", "询证日期", "dunning_date", "dunningDate"],
+  communicationMethod: ["沟通方式", "comm_method", "communicationMethod"],
+  counterpartyFeedback: ["对方反馈", "反馈", "feedback", "counterpartyFeedback"],
+  latestProgress: ["最新进展", "进展", "latest_progress", "latestProgress"],
+  nextPlan: ["下一步计划", "计划", "next_plan", "nextPlan"],
   openingInvoiceAmount: ["开票金额", "期初开票金额", "opening_invoice_amount", "openingInvoiceAmount"],
   openingInvoiceDate: ["开票日期", "期初开票日期", "opening_invoice_date", "openingInvoiceDate"],
   openingReceiptAmount: ["到账金额", "回款金额", "期初到账金额", "opening_receipt_amount", "openingReceiptAmount"],
@@ -90,6 +100,10 @@ const dictionaryCategories: Partial<Record<keyof ReceivablesImportData, string>>
   creditorUnit: "unit",
   workNature: "work_nature",
   sector: "sector",
+  communicationMethod: "comm_method",
+  counterpartyFeedback: "feedback",
+  latestProgress: "progress_note",
+  nextPlan: "next_plan",
 };
 
 const textLimits: Partial<Record<keyof ReceivablesImportData, number>> = {
@@ -105,10 +119,14 @@ const textLimits: Partial<Record<keyof ReceivablesImportData, number>> = {
   debtStatus: 120,
   collectionOwner: 120,
   collectionNotes: 10_000,
+  communicationMethod: 120,
+  counterpartyFeedback: 240,
+  latestProgress: 240,
+  nextPlan: 240,
 };
 
 const amountFields = ["contractAmount", "finalAmount", "openingInvoiceAmount", "openingReceiptAmount"] as const;
-const dateFields = ["openingChargeDate", "openingInvoiceDate", "openingReceiptDate"] as const;
+const dateFields = ["openingChargeDate", "dunningDate", "openingInvoiceDate", "openingReceiptDate"] as const;
 const issue = (code: string, message: string, extra: Omit<ReceivablesImportIssue, "code" | "message"> = {}): ReceivablesImportIssue => ({ code, message, ...extra });
 
 function cellText(cell: ExcelJS.Cell): string {
@@ -393,7 +411,7 @@ async function lockAuthority(tx: Tx, principal: Principal) {
   return resolveReceivablesAccess(principal, tx);
 }
 
-const ledgerFields = ["financeDepartmentId", "contractNo", "projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "contractAmount", "finalAmount", "openingChargeDate", "debtStatus", "collectionOwner", "collectionNotes"] as const;
+const ledgerFields = ["financeDepartmentId", "contractNo", "projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "contractAmount", "finalAmount", "openingChargeDate", "debtStatus", "collectionOwner", "collectionNotes", "dunningDate", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan"] as const;
 function ledgerData(data: ReceivablesImportData, mode: "create" | "update") {
   const values = {
     financeDepartmentId: data.financeDepartmentId!, contractNo: data.contractNo!, contractNoNormalized: data.contractNo!,
@@ -402,6 +420,9 @@ function ledgerData(data: ReceivablesImportData, mode: "create" | "update") {
     contractAmount: data.contractAmount === null ? null : new Prisma.Decimal(data.contractAmount), finalAmount: data.finalAmount === null ? null : new Prisma.Decimal(data.finalAmount),
     openingChargeDate: data.openingChargeDate === null ? null : new Date(`${data.openingChargeDate}T00:00:00.000Z`),
     debtStatus: data.debtStatus, collectionOwner: data.collectionOwner, collectionNotes: data.collectionNotes,
+    dunningDate: data.dunningDate === null ? null : new Date(`${data.dunningDate}T00:00:00.000Z`),
+    communicationMethod: data.communicationMethod, counterpartyFeedback: data.counterpartyFeedback,
+    latestProgress: data.latestProgress, nextPlan: data.nextPlan,
   };
   if (mode === "create") return values;
   const present = new Set(data.presentFields);
