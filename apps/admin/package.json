@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "check:account-form": "tsx scripts/check-account-form.mts",
     "check:platform-access": "tsx scripts/check-platform-access.mts",
     "typecheck": "tsc -b --pretty false"
   },

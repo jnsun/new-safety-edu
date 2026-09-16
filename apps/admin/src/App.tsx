@@ -48,6 +48,7 @@ import {
 } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
+import { accountUsernamePattern, accountUsernameRuleMessage } from "./account-form";
 import { CoursewarePage, QuestionsPage, TrainingPage } from "./Day2Pages";
 import { DashboardPage, RecordsPage, ReportsPage } from "./Day4Pages";
 import { PersonImport } from "./PersonImport";
@@ -819,7 +820,7 @@ function AccountsPanel({
       >
         <Alert type="warning" showIcon message="修改后旧用户名不再复用，该账号现有会话将立即失效。" style={{ marginBottom: 16 }} />
         <Form layout="vertical" initialValues={{ username: editAccount?.username ?? "" }} onFinish={(values: { username: string; reason: string }) => editAccount && usernameUpdate.mutate({ accountId: editAccount.id, ...values })}>
-          <Form.Item name="username" label="新用户名" rules={[{ required: true }, { pattern: /^[A-Za-z0-9._-]{4,40}$/, message: "仅允许英文字母、数字、点、短横线和下划线，长度 4—40 位" }]}>
+          <Form.Item name="username" label="新用户名" rules={[{ required: true }, { pattern: accountUsernamePattern, message: accountUsernameRuleMessage }]}>
             <Input autoComplete="off" />
           </Form.Item>
           <Form.Item name="reason" label="修改原因" rules={[{ required: true, min: 2, max: 500 }]}>
@@ -865,9 +866,10 @@ function AccountsPanel({
           {companyAdmin && <Form.Item
             name="username"
             label="用户名"
-            rules={[{ required: true }]}
+            extra={accountUsernameRuleMessage}
+            rules={[{ required: true }, { pattern: accountUsernamePattern, message: accountUsernameRuleMessage }]}
           >
-            <Input />
+            <Input placeholder="例如 finance.leader" />
           </Form.Item>}
           {companyAdmin && <Form.Item
             name="password"
