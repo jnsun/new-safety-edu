@@ -57,13 +57,11 @@ Page({
     const action = identityActions[actionIndex]
     if (action.needsPerson && candidateIndex < 0) return wx.showToast({ title: '请选择人员档案', icon: 'none' })
     const personId = action.needsPerson ? activeReview.candidates[candidateIndex].id : undefined
-    try {
-      await this.run(
-        () => api.request(`/api/identity-binding-requests/${activeReview.id}/review`, 'POST', { action: action.value, note: reviewNote, ...(personId ? { personId } : {}) }),
-        action.value === 'reject' ? '申请已驳回' : action.value === 'escalate_company' ? '已升级公司处理' : '身份绑定已处理'
-      )
-      this.closeIdentityReview()
-    } catch (_) {}
+    const succeeded = await this.run(
+      () => api.request(`/api/identity-binding-requests/${activeReview.id}/review`, 'POST', { action: action.value, note: reviewNote, ...(personId ? { personId } : {}) }),
+      action.value === 'reject' ? '申请已驳回' : action.value === 'escalate_company' ? '已升级公司处理' : '身份绑定已处理'
+    )
+    if (succeeded) this.closeIdentityReview()
   },
   async remind(e) { await this.run(() => api.request('/api/management/reminders', 'POST', { assignmentIds: [e.currentTarget.dataset.id] }), '已催办') },
   async unlock(e) { if (this.data.unlockReason.trim().length < 2) return wx.showToast({ title: '请先填写解锁原因', icon: 'none' }); await this.run(() => api.request(`/api/management/assignments/${e.currentTarget.dataset.id}/unlock`, 'POST', { reason: this.data.unlockReason }), '已解锁，需补学') },
@@ -76,7 +74,7 @@ Page({
     await this.run(() => api.request(path, 'POST', { note: this.data.reviewNote }), '审核完成')
   },
   async run(action, title) {
-    try { await action(); wx.showToast({ title }); await this.onShow() }
-    catch (error) { wx.showToast({ title: error.message, icon: 'none' }); throw error }
+    try { await action(); wx.showToast({ title }); await this.onShow(); return true }
+    catch (error) { wx.showToast({ title: error.message, icon: 'none' }); return false }
   }
 })
