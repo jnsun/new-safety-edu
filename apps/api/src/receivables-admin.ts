@@ -11,6 +11,9 @@ type GrantFields = { role: ReceivableGrantRole; canCreate: boolean; canExport: b
 type MigrationInput =
   | { mode: "preview"; targetId: string }
   | { mode: "apply"; targetId: string; token: string; reason: string; confirm: true };
+type DictionaryRenameInput =
+  | { mode: "preview"; value: string }
+  | { mode: "apply"; value: string; token: string; reason: string; confirm: true };
 
 export type ReceivablesAdminOperation =
   | { type: "candidate.list"; search: string }
@@ -23,6 +26,7 @@ export type ReceivablesAdminOperation =
   | { type: "dictionary.list"; category?: string | undefined }
   | { type: "dictionary.create"; input: { category: string; value: string; sortOrder: number } }
   | { type: "dictionary.update"; id: string; input: { revision: number; value?: string | undefined; sortOrder?: number | undefined; active?: false | undefined; reason?: string | undefined } }
+  | { type: "dictionary.rename"; id: string; input: DictionaryRenameInput }
   | { type: "department.migrate"; sourceId: string; input: MigrationInput }
   | { type: "dictionary.migrate"; sourceId: string; input: MigrationInput };
 
@@ -57,7 +61,7 @@ export type ReceivablesAdminResult = CandidateRow[] | GrantRow | GrantRow[] | De
 
 const migrationTokenPayload = z.object({
   version: z.literal(2),
-  kind: z.enum(["department", "dictionary"]),
+  kind: z.enum(["department", "dictionary", "dictionary-rename"]),
   actorId: z.string().uuid(),
   sourceId: z.string().uuid(),
   targetId: z.string().uuid(),
@@ -65,6 +69,7 @@ const migrationTokenPayload = z.object({
   targetRevision: z.number().int().positive(),
   impactCount: z.number().int().nonnegative(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  targetValue: z.string().min(1).max(240).optional(),
   expiresAt: z.number().int().positive(),
 }).strict();
 type MigrationTokenPayload = z.infer<typeof migrationTokenPayload>;
@@ -127,12 +132,16 @@ async function assertActiveGrantSubject(tx: Prisma.TransactionClient, accountId:
 }
 
 type DictionaryMigration = {
+  kind: "ledger" | "attachment";
+  ledgerField?: LedgerDictionaryField;
   affected(tx: Prisma.TransactionClient, value: string): Promise<AffectedRow[]>;
   apply(tx: Prisma.TransactionClient, ids: string[], sourceValue: string, targetValue: string): Promise<number>;
 };
 
-type LedgerDictionaryField = "projectStatus" | "settlementMethod" | "debtStatus" | "customerType" | "creditorUnit" | "workNature" | "sector";
+type LedgerDictionaryField = "projectStatus" | "settlementMethod" | "debtStatus" | "customerType" | "creditorUnit" | "workNature" | "sector" | "communicationMethod" | "counterpartyFeedback" | "latestProgress" | "nextPlan";
 const ledgerDictionaryMigration = (field: LedgerDictionaryField): DictionaryMigration => ({
+  kind: "ledger",
+  ledgerField: field,
   affected: (tx, value) => tx.receivableLedger.findMany({ where: { [field]: value } as Prisma.ReceivableLedgerWhereInput, select: { id: true, revision: true }, orderBy: { id: "asc" } }),
   apply: async (tx, ids, sourceValue, targetValue) => (await tx.receivableLedger.updateMany({
     where: { id: { in: ids }, [field]: sourceValue } as Prisma.ReceivableLedgerWhereInput,
@@ -148,7 +157,12 @@ const dictionaryMigrations: Record<string, DictionaryMigration> = {
   unit: ledgerDictionaryMigration("creditorUnit"),
   work_nature: ledgerDictionaryMigration("workNature"),
   sector: ledgerDictionaryMigration("sector"),
+  comm_method: ledgerDictionaryMigration("communicationMethod"),
+  feedback: ledgerDictionaryMigration("counterpartyFeedback"),
+  progress_note: ledgerDictionaryMigration("latestProgress"),
+  next_plan: ledgerDictionaryMigration("nextPlan"),
   attach_category: {
+    kind: "attachment",
     affected: (tx, value) => tx.receivableAttachment.findMany({ where: { category: value }, select: { id: true, revision: true }, orderBy: { id: "asc" } }),
     apply: async (tx, ids, sourceValue, targetValue) => (await tx.receivableAttachment.updateMany({ where: { id: { in: ids }, category: sourceValue }, data: { category: targetValue, revision: { increment: 1 } } })).count,
   },
@@ -160,7 +174,7 @@ const assertSourceAndTarget = (source: { active: boolean } | null, target: { act
   if (!target || !target.active) throw httpError(409, "RECEIVABLES_MIGRATION_TARGET_INACTIVE", `迁移目标${noun}不存在或已停用`);
 };
 
-const assertTokenIdentity = (payload: MigrationTokenPayload, expected: { kind: "department" | "dictionary"; actorId: string; sourceId: string; targetId: string }) => {
+const assertTokenIdentity = (payload: MigrationTokenPayload, expected: { kind: "department" | "dictionary" | "dictionary-rename"; actorId: string; sourceId: string; targetId: string }) => {
   if (payload.kind !== expected.kind || payload.actorId !== expected.actorId || payload.sourceId !== expected.sourceId || payload.targetId !== expected.targetId) throw httpError(400, "RECEIVABLES_MIGRATION_TOKEN_MISMATCH", "迁移令牌与当前请求不匹配");
 };
 
@@ -278,6 +292,66 @@ async function updateDictionary(context: ReceivablesAdminContext, id: string, in
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: input.active === false ? "receivables.admin.dictionary.deactivate" : "receivables.admin.dictionary.update", objectType: "receivable_dictionary_option", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", ...(input.reason ? { reason: input.reason } : {}), metadata: auditMetadata(before, after, impactCount) });
     return after;
   });
+}
+
+async function renameDictionary(context: ReceivablesAdminContext, id: string, input: DictionaryRenameInput) {
+  const value = input.value.trim();
+  await requireAction(context, "manageConfiguration");
+  const inspect = async (tx: Prisma.TransactionClient) => {
+    const source = await tx.receivableDictionaryOption.findUnique({ where: { id }, select: dictionarySelect });
+    if (!source || !source.active) throw httpError(409, "RECEIVABLES_DICTIONARY_INACTIVE", "业务字典值不存在或已停用");
+    if (source.value === value) throw httpError(400, "RECEIVABLES_DICTIONARY_RENAME_UNCHANGED", "新值不能与原值相同");
+    const migration = dictionaryMigrations[source.category];
+    if (!migration) throw httpError(409, "RECEIVABLES_DICTIONARY_MIGRATION_UNSUPPORTED", "该业务字典类别没有可同步的持久化字段");
+    if (await tx.receivableDictionaryOption.count({ where: { category: source.category, value, id: { not: id } } })) {
+      throw httpError(409, "RECEIVABLES_DICTIONARY_VALUE_CONFLICT", "同类别字典值已存在");
+    }
+    return { source, migration };
+  };
+  if (input.mode === "preview") {
+    return prisma.$transaction(async (tx) => {
+      await requireAction(context, "manageConfiguration", tx);
+      const { source, migration } = await inspect(tx);
+      const snapshot = migrationSnapshot(await migration.affected(tx, source.value));
+      const expiresAt = Date.now() + migrationTokenLifetimeMs;
+      const token = issueMigrationToken({ version: 2, kind: "dictionary-rename", actorId: context.principal.accountId, sourceId: id, targetId: id, sourceRevision: source.revision, targetRevision: source.revision, targetValue: value, ...snapshot, expiresAt });
+      return { impactCount: snapshot.impactCount, token, expiresAt: new Date(expiresAt).toISOString() };
+    });
+  }
+  const payload = readMigrationToken(input.token);
+  assertTokenIdentity(payload, { kind: "dictionary-rename", actorId: context.principal.accountId, sourceId: id, targetId: id });
+  if (payload.targetValue !== value) throw httpError(400, "RECEIVABLES_MIGRATION_TOKEN_MISMATCH", "改名令牌与当前请求不匹配");
+  return runMigrationApply(() => prisma.$transaction(async (tx) => {
+    const access = await requireAction(context, "manageConfiguration", tx);
+    await tx.$queryRaw`SELECT id FROM receivable_dictionary_options WHERE id = ${id}::uuid FOR UPDATE`;
+    const { source, migration } = await inspect(tx);
+    const initialRows = await migration.affected(tx, source.value);
+    if (initialRows.length) {
+      if (migration.kind === "ledger") await tx.$queryRaw`SELECT id FROM receivable_ledgers WHERE id IN (${Prisma.join(initialRows.map(({ id: ledgerId }) => Prisma.sql`${ledgerId}::uuid`))}) ORDER BY id FOR UPDATE`;
+      else await tx.$queryRaw`SELECT id FROM receivable_attachments WHERE id IN (${Prisma.join(initialRows.map(({ id: attachmentId }) => Prisma.sql`${attachmentId}::uuid`))}) ORDER BY id FOR UPDATE`;
+    }
+    const rows = await migration.affected(tx, source.value);
+    assertTokenFresh(payload, source.revision, source.revision, migrationSnapshot(rows));
+    if (migration.kind === "ledger") {
+      const field = migration.ledgerField!;
+      const ledgers = await tx.receivableLedger.findMany({ where: { id: { in: rows.map(({ id: ledgerId }) => ledgerId) } }, orderBy: { id: "asc" } });
+      for (const before of ledgers) {
+        await tx.receivableLedgerRevision.create({ data: { ledgerId: before.id, revision: before.revision, beforeSnapshot: JSON.parse(JSON.stringify(before)) as Prisma.InputJsonObject, reason: input.reason, changedBy: context.principal.accountId } });
+        const updated = await tx.receivableLedger.updateMany({
+          where: { id: before.id, revision: before.revision, [field]: source.value } as Prisma.ReceivableLedgerWhereInput,
+          data: { [field]: value, updatedBy: context.principal.accountId, revision: { increment: 1 } } as Prisma.ReceivableLedgerUpdateManyMutationInput,
+        });
+        if (updated.count !== 1) throw migrationStateChanged();
+      }
+    } else if (await migration.apply(tx, rows.map(({ id: affectedId }) => affectedId), source.value, value) !== rows.length) {
+      throw migrationStateChanged();
+    }
+    const optionUpdated = await tx.receivableDictionaryOption.updateMany({ where: { id, active: true, revision: payload.sourceRevision, value: source.value }, data: { value, revision: { increment: 1 } } });
+    if (optionUpdated.count !== 1) throw migrationStateChanged();
+    const after = await tx.receivableDictionaryOption.findUniqueOrThrow({ where: { id }, select: dictionarySelect });
+    await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.dictionary.rename", objectType: "receivable_dictionary_option", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata({ category: source.category, value: source.value, revision: source.revision, fingerprint: payload.fingerprint }, { category: after.category, value: after.value, revision: after.revision }, rows.length) });
+    return { impactCount: rows.length };
+  }, { isolationLevel: "Serializable" }));
 }
 
 async function migrateDepartment(context: ReceivablesAdminContext, sourceId: string, input: MigrationInput) {
@@ -402,6 +476,7 @@ export async function administerReceivables(context: ReceivablesAdminContext, op
       return prisma.receivableDictionaryOption.findMany({ ...(operation.category ? { where: { category: operation.category } } : {}), select: dictionarySelect, orderBy: [{ category: "asc" }, { active: "desc" }, { sortOrder: "asc" }, { value: "asc" }] });
     case "dictionary.create": return createDictionary(context, operation.input);
     case "dictionary.update": return updateDictionary(context, operation.id, operation.input);
+    case "dictionary.rename": return renameDictionary(context, operation.id, operation.input);
     case "department.migrate": return migrateDepartment(context, operation.sourceId, operation.input);
     case "dictionary.migrate": return migrateDictionary(context, operation.sourceId, operation.input);
   }

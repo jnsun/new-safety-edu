@@ -122,6 +122,32 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     else if (section === "grants") { const grant = row as ReceivablesGrant; const normalized = normalizeReceivablesGrantDraft(grant.role, { canCreate: grant.canCreate, canExport: grant.canExport, canViewAll: grant.canViewAll, departments: emptyScopes.map((scope) => { const existing = grant.departments.find((item) => item.financeDepartmentId === scope.departmentId); return { ...scope, canRead: !!existing?.canRead, canWrite: !!existing?.canWrite }; }) }); form.setFieldsValue({ ...grant, ...normalized, departmentScopes: grant.role === "admin" ? [] : normalized.departments }); }
     else form.setFieldsValue(row);
   };
+  const submitEditor = async (values: Record<string, unknown>) => {
+    if (section !== "dictionaries" || editor === "create" || !editor || String(values.value).trim() === (editor as ReceivablesDictionaryOption).value) {
+      save.mutate(values);
+      return;
+    }
+    const option = editor as ReceivablesDictionaryOption;
+    const value = String(values.value).trim();
+    const reason = String(values.reason ?? "").trim();
+    try {
+      const preview = await api<{ impactCount: number; token: string; expiresAt: string }>(`${path}/${option.id}/rename`, json("POST", { mode: "preview", value }));
+      Modal.confirm({
+        title: "确认同步改名",
+        content: `“${option.value}”将改为“${value}”，并同步更新 ${preview.impactCount} 条引用。`,
+        okText: "确认改名",
+        cancelText: "取消",
+        onOk: async () => {
+          try {
+            await api(`${path}/${option.id}/rename`, json("POST", { mode: "apply", value, token: preview.token, reason, confirm: true }));
+            if (Number(values.sortOrder ?? 0) !== option.sortOrder) await api(`${path}/${option.id}`, json("PATCH", { revision: option.revision + 1, sortOrder: values.sortOrder ?? 0, reason }));
+            message.success(`改名完成，共更新 ${preview.impactCount} 条引用`);
+            setEditor(undefined); setConflict(undefined); form.resetFields(); await invalidate();
+          } catch (error) { fail(error as Error); throw error; }
+        },
+      });
+    } catch (error) { fail(error as Error); }
+  };
   return <div className="receivables-page">
     <div className="page-title receivables-page-title"><div><Typography.Title level={3}>{title}</Typography.Title><Typography.Text type="secondary">所有变更均以服务端权限、修订号和审计原因校验。</Typography.Text></div><Button type="primary" onClick={() => openEditor()}>新建</Button></div>
     {rows.isFetching && <Card loading />}
@@ -133,7 +159,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
       { title: "操作", render: (_: unknown, row) => <Space><Button size="small" disabled={"active" in row && !row.active} onClick={() => openEditor(row)}>编辑</Button><Button size="small" danger disabled={"active" in row && !row.active} onClick={() => { setDeactivateTarget(row); setDeactivateReason(""); setDeactivateReconfirm(false); setConflict(undefined); }}>{section === "grants" ? "撤销" : "停用"}</Button>{section !== "grants" && !(row as ReceivablesDepartment | ReceivablesDictionaryOption).active && access.canManageAccess && <Select aria-label="迁移目标" placeholder="迁移到…" style={{ width: 170 }} options={activeTargets.filter((item) => item.id !== row.id && (section !== "dictionaries" || (item as ReceivablesDictionaryOption).category === (row as ReceivablesDictionaryOption).category)).map((item) => ({ value: item.id, label: "name" in item ? item.name : item.value }))} onChange={(targetId) => void previewMigration(row.id, targetId)} />}</Space> },
     ]} />}
     <Modal title={`${editor === "create" ? "新建" : "编辑"}${title}`} open={!!editor} footer={null} destroyOnClose onCancel={() => setEditor(undefined)}>
-      <Form form={form} layout="vertical" onFinish={(values) => save.mutate(values)}>
+      <Form form={form} layout="vertical" onFinish={(values) => void submitEditor(values)}>
         {section === "grants" && <><Form.Item name="accountId" label="财务候选账号" rules={[{ required: true }]} extra={editor === "create" ? "输入姓名或用户名至少 2 个字符；仅显示全公司有效账号及人员。" : undefined}><Select showSearch filterOption={false} disabled={editor !== "create"} onSearch={setCandidateSearch} notFoundContent={candidates.isFetching ? "搜索中…" : candidates.isError ? "搜索失败，已关闭候选数据" : "请输入至少 2 个字符"} options={currentCandidates.map((item) => ({ value: item.accountId, disabled: item.hasActiveGrant, label: `${item.name} · ${item.username ?? "无用户名"}${item.hasActiveGrant ? "（已有授权）" : ""}` }))} /></Form.Item><Form.Item name="role" label="角色" rules={[{ required: true }]}><Select onChange={changeGrantRole} options={Object.entries(roleLabels).map(([value, label]) => ({ value, label }))} /></Form.Item><Form.Item noStyle shouldUpdate>{({ getFieldValue, setFieldValue }) => getFieldValue("role") !== "admin" && <Form.List name="departmentScopes">{(fields) => <Space direction="vertical" style={{ width: "100%" }}>{fields.map((field, index) => { const department = currentDepartments.filter((item) => item.active)[index]; return <Space key={field.key}><Form.Item name={[field.name, "departmentId"]} hidden><Input /></Form.Item><Typography.Text style={{ width: 160 }}>{department?.name}</Typography.Text><Form.Item name={[field.name, "canRead"]} valuePropName="checked"><Checkbox>可读</Checkbox></Form.Item><Form.Item name={[field.name, "canWrite"]} valuePropName="checked"><Checkbox disabled={getFieldValue("role") === "readonly"} onChange={(event) => { if (event.target.checked) setFieldValue(["departmentScopes", index, "canRead"], true); }}>可写</Checkbox></Form.Item></Space>; })}</Space>}</Form.List>}</Form.Item><Form.Item noStyle shouldUpdate>{({ getFieldValue }) => { const role = getFieldValue("role") as ReceivablesGrant["role"] | undefined; return role && role !== "admin" ? <Space wrap>{role === "reporter" && <Form.Item name="canCreate" valuePropName="checked"><Checkbox>允许新建台账</Checkbox></Form.Item>}<Form.Item name="canExport" valuePropName="checked"><Checkbox>允许导出</Checkbox></Form.Item><Form.Item name="canViewAll" valuePropName="checked"><Checkbox>允许查看全部部门</Checkbox></Form.Item></Space> : null; }}</Form.Item><Form.Item name="reason" label="变更原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item></>}
         {section === "departments" && <><Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item><Form.Item name="code" label="代码"><Input /></Form.Item><Form.Item name="sortOrder" label="排序"><InputNumber precision={0} /></Form.Item>{editor !== "create" && <Form.Item name="reason" label="变更原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item>}</>}
         {section === "dictionaries" && <><Form.Item name="category" label="分类" rules={[{ required: true }]}><Select showSearch disabled={editor !== "create"} options={receivablesReferenceCategories.map((value) => ({ value, label: value }))} /></Form.Item><Form.Item name="value" label="值" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item><Form.Item name="sortOrder" label="排序"><InputNumber precision={0} /></Form.Item>{editor !== "create" && <Form.Item name="reason" label="变更原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item>}</>}

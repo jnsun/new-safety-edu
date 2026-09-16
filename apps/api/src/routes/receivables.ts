@@ -47,6 +47,10 @@ const dictionaryUpdateInput = z.object({ revision: z.number().int().positive(), 
 const migrationPreviewInput = z.object({ mode: z.literal("preview"), targetId: z.string().uuid() }).strict();
 const migrationApplyInput = z.object({ mode: z.literal("apply"), targetId: z.string().uuid(), token: z.string().min(1).max(2048), reason: reasonInput, confirm: z.literal(true) }).strict();
 const migrationInput = z.discriminatedUnion("mode", [migrationPreviewInput, migrationApplyInput]);
+const dictionaryRenameInput = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("preview"), value: z.string().trim().min(1).max(240) }).strict(),
+  z.object({ mode: z.literal("apply"), value: z.string().trim().min(1).max(240), token: z.string().min(1).max(2048), reason: reasonInput, confirm: z.literal(true) }).strict(),
+]);
 const receivablesFilters = {
   financeDepartmentId: z.string().uuid().optional(),
   status: z.enum(["active", "voided", "all"]).optional(),
@@ -295,6 +299,7 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     return reply.code(201).send({ data });
   });
   app.patch("/api/receivables/dictionary-options/:id", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "dictionary.update", id: idParams.parse(request.params).id, input: dictionaryUpdateInput.parse(request.body) }) }));
+  app.post("/api/receivables/dictionary-options/:id/rename", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "dictionary.rename", id: idParams.parse(request.params).id, input: dictionaryRenameInput.parse(request.body) }) }));
 
   app.post("/api/receivables/departments/:id/migrate", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "department.migrate", sourceId: idParams.parse(request.params).id, input: migrationInput.parse(request.body) }) }));
   app.post("/api/receivables/dictionary-options/:id/migrate", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "dictionary.migrate", sourceId: idParams.parse(request.params).id, input: migrationInput.parse(request.body) }) }));

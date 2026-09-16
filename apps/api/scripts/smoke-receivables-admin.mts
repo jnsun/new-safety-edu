@@ -351,8 +351,8 @@ try {
   await prisma.receivableDictionaryOption.update({ where: { id: activeDictionarySource.id }, data: { active: true } });
   await expectRejectedWithoutMutation(`/api/receivables/dictionary-options/${activeDictionarySource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", targetId: activeDictionaryTarget.id, token: activeDictionaryPreview.token, confirm: true, reason: "active dictionary source rejected at apply" }) });
 
-  const unsupportedSource = await createDictionaryFixture("comm_method", "unsupported-source", false);
-  const unsupportedTarget = await createDictionaryFixture("comm_method", "unsupported-target", true);
+  const unsupportedSource = await createDictionaryFixture("unsupported_category", "unsupported-source", false);
+  const unsupportedTarget = await createDictionaryFixture("unsupported_category", "unsupported-target", true);
   await expectRejectedWithoutMutation(`/api/receivables/dictionary-options/${unsupportedSource.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: unsupportedTarget.id }) });
 
   const staleSource = await createDepartmentFixture("stale-source-revision", false);
@@ -414,6 +414,50 @@ try {
   assert.equal((await prisma.receivableDepartment.findUniqueOrThrow({ where: { id: concurrentTarget.id }, select: { revision: true } })).revision, concurrentTarget.revision + 1);
   assert.equal(await prisma.auditLog.count({ where: { action: "receivables.admin.department.migrate", objectId: concurrentSource.id } }), concurrentAuditBefore + 1);
 
+  const renameCases = [
+    ["project_status", "projectStatus"],
+    ["comm_method", "communicationMethod"],
+    ["feedback", "counterpartyFeedback"],
+    ["progress_note", "latestProgress"],
+    ["next_plan", "nextPlan"],
+  ] as const;
+  const renameOptions = Object.fromEntries(await Promise.all(renameCases.map(async ([category]) => {
+    const option = await createDictionaryFixture(category, `rename-${category}`, true);
+    return [category, option] as const;
+  }))) as Record<(typeof renameCases)[number][0], DictionaryResponse>;
+  const renameLedger = await prisma.receivableLedger.create({ data: {
+    financeDepartmentId: departmentB.id, contractNo: `${marker}-rename-ledger`, contractNoNormalized: `${marker}-rename-ledger`, createdBy: owner.id,
+    projectStatus: renameOptions.project_status.value, communicationMethod: renameOptions.comm_method.value,
+    counterpartyFeedback: renameOptions.feedback.value, latestProgress: renameOptions.progress_note.value, nextPlan: renameOptions.next_plan.value,
+  } });
+  ids.ledgers.push(renameLedger.id);
+  for (let index = 0; index < renameCases.length; index += 1) {
+    const [category, field] = renameCases[index]!;
+    const option = renameOptions[category];
+    const nextValue = `${option.value}-new`;
+    const preview = (await expectStatus<PreviewResponse>(`/api/receivables/dictionary-options/${option.id}/rename`, tokens.financeAdmin!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", value: nextValue }) })).data!;
+    assert.equal(preview.impactCount, 1);
+    await expectStatus(`/api/receivables/dictionary-options/${option.id}/rename`, tokens.financeAdmin!, 200, { method: "POST", body: JSON.stringify({ mode: "apply", value: nextValue, token: preview.token, confirm: true, reason: `rename ${category}` }) });
+    const [ledgerAfter, optionAfter, revisions] = await Promise.all([
+      prisma.receivableLedger.findUniqueOrThrow({ where: { id: renameLedger.id } }),
+      prisma.receivableDictionaryOption.findUniqueOrThrow({ where: { id: option.id } }),
+      prisma.receivableLedgerRevision.findMany({ where: { ledgerId: renameLedger.id }, orderBy: { revision: "asc" } }),
+    ]);
+    assert.equal(ledgerAfter[field], nextValue);
+    assert.equal(ledgerAfter.revision, index + 2);
+    assert.equal(optionAfter.value, nextValue);
+    assert.equal(optionAfter.revision, 2);
+    assert.equal(revisions.length, index + 1);
+    assert.equal((revisions[index]!.beforeSnapshot as Record<string, unknown>)[field], option.value);
+  }
+  const staleRenameOption = renameOptions.next_plan;
+  const staleRenameValue = `${staleRenameOption.value}-stale`;
+  const staleRenamePreview = (await expectStatus<PreviewResponse>(`/api/receivables/dictionary-options/${staleRenameOption.id}/rename`, tokens.financeAdmin!, 200, { method: "POST", body: JSON.stringify({ mode: "preview", value: staleRenameValue }) })).data!;
+  await prisma.receivableLedger.update({ where: { id: renameLedger.id }, data: { revision: { increment: 1 } } });
+  await expectRejectedWithoutMutation(`/api/receivables/dictionary-options/${staleRenameOption.id}/rename`, tokens.financeAdmin!, 409, { method: "POST", body: JSON.stringify({ mode: "apply", value: staleRenameValue, token: staleRenamePreview.token, confirm: true, reason: "stale rename" }) });
+  const conflictOption = await createDictionaryFixture("next_plan", "rename-conflict", true);
+  await expectRejectedWithoutMutation(`/api/receivables/dictionary-options/${staleRenameOption.id}/rename`, tokens.financeAdmin!, 409, { method: "POST", body: JSON.stringify({ mode: "preview", value: conflictOption.value }) });
+
   const grants = (await expectStatus<GrantResponse[]>("/api/receivables/grants", tokens.owner!, 200)).data!;
   assert.ok(grants.some((grant) => grant.id === adminGrant.id));
   const revokedAdmin = (await expectStatus<GrantResponse>(`/api/receivables/grants/${adminGrant.id}`, tokens.owner!, 200, { method: "PATCH", body: JSON.stringify({ revision: adminGrant.revision, revoke: true, reason: "rotation" }) })).data!;
@@ -431,6 +475,7 @@ try {
   }
   assert.ok(auditRows.some((row) => row.action === "receivables.admin.department.migrate" && (row.metadata as Record<string, unknown>).impactCount === 2));
   assert.ok(auditRows.some((row) => row.action === "receivables.admin.dictionary.migrate" && (row.metadata as Record<string, unknown>).impactCount === 1));
+  assert.equal(auditRows.filter((row) => row.action === "receivables.admin.dictionary.rename").length, renameCases.length);
   console.log("RECEIVABLES_ADMIN_SMOKE=PASS");
 } finally {
   await stopServer();
