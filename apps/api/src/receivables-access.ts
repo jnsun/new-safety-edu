@@ -182,6 +182,11 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   };
 }
 
+export const receivablesRoleAssignmentSubjects = (accountId: string, personId: string | null) => [
+  { accountId },
+  ...(personId ? [{ personId }] : []),
+];
+
 export async function resolveReceivablesAccess(principal: Pick<Principal, "accountId">, db: AccessDb = prisma): Promise<ReceivablesAccess> {
   const [account, setting] = await Promise.all([
     db.account.findUnique({
@@ -210,13 +215,9 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
   const configured = !!setting?.financeOrganizationId && setting.financeOrganization?.type === "department";
   const isFinanceOrganizationMember = Boolean(configured
     && account?.person?.organizations.some(({ organizationId }) => organizationId === setting.financeOrganizationId));
-  const roleIdentity = account?.personId
-    ? { personId: account.personId }
-    : { accountId: principal.accountId, personId: null };
-
   const [companyAdmin, leaderRoles, grants] = await Promise.all([
     db.roleAssignment.findFirst({
-      where: { ...roleIdentity, role: "company_admin", scopeType: "company", active: true, activationPending: false },
+      where: { OR: receivablesRoleAssignmentSubjects(principal.accountId, account?.personId ?? null), role: "company_admin", scopeType: "company", active: true, activationPending: false },
       select: { id: true },
     }),
     configured

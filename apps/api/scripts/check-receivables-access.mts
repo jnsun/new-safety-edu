@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { decideReceivablesAccess, requireReceivables, selectSingleReceivablesGrant } from "../src/receivables-access.js";
+import { decideReceivablesAccess, receivablesRoleAssignmentSubjects, requireReceivables, selectSingleReceivablesGrant } from "../src/receivables-access.js";
 
 const unconfiguredAdmin = decideReceivablesAccess({
   accountActive: true,
@@ -10,6 +10,7 @@ const unconfiguredAdmin = decideReceivablesAccess({
 });
 assert.equal(unconfiguredAdmin.state, "unconfigured");
 assert.equal(unconfiguredAdmin.canRecover, true);
+assert.deepEqual(receivablesRoleAssignmentSubjects("account-1", "person-1"), [{ accountId: "account-1" }, { personId: "person-1" }]);
 assert.equal(unconfiguredAdmin.canEnter, false);
 
 const pendingOwner = decideReceivablesAccess({
