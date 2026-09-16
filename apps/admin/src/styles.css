@@ -249,6 +249,28 @@ button, input, textarea, select { font: inherit; }
   padding: 18px;
 }
 
+.organization-people {
+  margin-top: 24px;
+}
+
+.master-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.master-section-heading h4.ant-typography {
+  margin: 0;
+}
+
+.table-link {
+  height: auto;
+  padding: 0;
+  font-weight: 600;
+}
+
 @media (max-width: 900px) {
   .master-workbench {
     grid-template-columns: 1fr;

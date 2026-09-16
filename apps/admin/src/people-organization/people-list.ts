@@ -34,6 +34,11 @@ export function filterPeopleRows<T extends PeopleListRow>(rows: T[], filters: Pe
   });
 }
 
+export function peopleInOrganization<T extends { organizations: Array<{ organization: { id: string } }> }>(rows: T[], organizationId?: string) {
+  if (!organizationId) return [];
+  return rows.filter((row) => row.organizations.some(({ organization }) => organization.id === organizationId));
+}
+
 export function readPeopleView(value: string | null): PeopleView {
   return value === "grouped" ? "grouped" : "list";
 }

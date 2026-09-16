@@ -62,7 +62,7 @@ import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
 import { receivablesErrorKind, receivablesNavigation, receivablesPortalMode, receivablesQueryKey, receivablesScopeFingerprint, receivablesScopeQueryPrefix, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 import { platformConditionalModule } from "./platform-access";
 import { masterDataSelectedKey, peopleOrganizationNav } from "./people-organization/navigation";
-import { filterPeopleRows, readPeopleView, type PeopleView } from "./people-organization/people-list";
+import { filterPeopleRows, peopleInOrganization, readPeopleView, type PeopleView } from "./people-organization/people-list";
 
 declare global {
   interface Window {
@@ -2040,6 +2040,7 @@ function PersonDetail({
 
 function OrganizationProjects({ principal, view = "organizations" }: { principal: Principal; view?: "organizations" | "projects" }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const receivablesAccess = useReceivablesAccess(principal.accountId);
   const currentReceivablesAccess = usableReceivablesAccess(receivablesAccess);
   const organizations = useQuery({
@@ -2150,6 +2151,7 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
   const normalizedDirectorySearch = directorySearch.trim().toLocaleLowerCase("zh-CN");
   const organizationRows = (organizations.data ?? []).filter((organization) => organization.type !== "company" && (!normalizedDirectorySearch || organization.name.toLocaleLowerCase("zh-CN").includes(normalizedDirectorySearch)));
   const selectedOrganization = organizationRows.find((organization) => organization.id === selectedOrganizationId) ?? organizationRows[0];
+  const selectedOrganizationPeople = peopleInOrganization(people.data ?? [], selectedOrganization?.id);
   const projectRows = (projects.data ?? []).filter((project) => !normalizedDirectorySearch || [project.name, project.code, project.responsibleOrganization.name].some((value) => value.toLocaleLowerCase("zh-CN").includes(normalizedDirectorySearch)));
   const selectedProject = projectRows.find((project) => project.id === selectedProjectId) ?? projectRows[0];
   const canChangeProjectStatus = (project: Project) =>
@@ -2251,6 +2253,7 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
             key: "org",
             label: "组织",
             children: (
+              <>
               <Table
                 rowKey="id"
                 pagination={false}
@@ -2356,6 +2359,47 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
                   },
                 ]}
               />
+              {selectedOrganization && (
+                <div className="organization-people">
+                  <div className="master-section-heading">
+                    <Typography.Title level={4}>组织人员</Typography.Title>
+                    <Typography.Text type="secondary">共 {selectedOrganizationPeople.length} 人</Typography.Text>
+                  </div>
+                  <Table
+                    rowKey="id"
+                    loading={people.isLoading}
+                    pagination={false}
+                    dataSource={selectedOrganizationPeople}
+                    locale={{ emptyText: "该组织暂无人员" }}
+                    columns={[
+                      {
+                        title: "姓名",
+                        dataIndex: "name",
+                        render: (value: string, row: Person) => <Button type="link" className="table-link" onClick={() => navigate(`/people/${row.id}`)}>{value}</Button>,
+                      },
+                      { title: "人员类型", dataIndex: "type", render: (value: string) => labels[value] ?? value },
+                      { title: "手机号", dataIndex: "phone" },
+                      {
+                        title: "账号",
+                        render: (_: unknown, row: Person) => row.account
+                          ? <Tag color={row.account.status === "active" ? "green" : "default"}>{labels[row.account.status] ?? row.account.status}</Tag>
+                          : <Typography.Text type="secondary">未开通</Typography.Text>,
+                      },
+                      {
+                        title: "本组织职责",
+                        render: (_: unknown, row: Person) => {
+                          const roles = row.roleAssignments.filter((role) => role.scopeType === "organization" && role.scopeId === selectedOrganization.id && role.role !== "learner");
+                          return roles.length
+                            ? <Space size={[0, 4]} wrap>{roles.map((role) => <Tag color="blue" key={role.id}>{labels[role.role] ?? role.role}{role.activationPending ? "（待激活）" : ""}</Tag>)}</Space>
+                            : <Typography.Text type="secondary">普通人员</Typography.Text>;
+                        },
+                      },
+                      { title: "人员状态", dataIndex: "status", render: (value: string) => <Tag color={value === "active" ? "green" : "default"}>{labels[value] ?? value}</Tag> },
+                    ]}
+                  />
+                </div>
+              )}
+              </>
             ),
           },
           {
