@@ -350,7 +350,7 @@ export const receivablesNavigation = (access: ReceivablesAccess) => [
     { path: "/receivables/ledger", label: "应收账款台账" },
   ] : []),
   ...(access.canCreateLedger || access.canImport || access.canExport ? [{ path: "/receivables/data", label: "数据处理" }] : []),
-  ...(access.canManageAccess ? [{ path: "/receivables/access", label: "财务授权" }] : []),
+  ...(access.canManageAccess ? [{ path: "/receivables/access", label: "账号与权限" }] : []),
   ...(access.canManageConfiguration ? [
     { path: "/receivables/departments", label: "财务归属部门" },
     { path: "/receivables/dictionaries", label: "业务字典" },

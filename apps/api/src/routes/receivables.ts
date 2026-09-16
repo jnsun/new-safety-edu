@@ -19,11 +19,6 @@ type RouteDependencies = {
   enableAccessSmokeRoute?: boolean;
 };
 
-const organizationInput = z.object({
-  organizationId: z.string().uuid(),
-  reason: z.string().trim().min(1).max(500).optional(),
-  confirm: z.boolean().optional(),
-});
 const setupLockKey = 8_645_136_501n;
 const reasonInput = z.string().trim().min(1).max(500);
 const idParams = z.object({ id: z.string().uuid() }).strict();
@@ -125,30 +120,6 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
       return { data: { allowed: true } };
     });
   }
-
-  app.put("/api/receivables/setup/organization", { preHandler: deps.authenticate }, async (request) => {
-    const input = organizationInput.parse(request.body);
-    const principal = request.principal as Principal;
-    const data = await prisma.$transaction(async (tx) => {
-      await lockReceivablesSetup(tx);
-      requireReceivables(await resolveReceivablesAccess(principal, tx), "recover");
-      const organization = await tx.organization.findUnique({ where: { id: input.organizationId }, select: { id: true, name: true, type: true } });
-      if (!organization) throw httpError(404, "RECEIVABLES_ORGANIZATION_NOT_FOUND", "组织不存在");
-      if (organization.type !== "department") throw httpError(409, "RECEIVABLES_ORGANIZATION_NOT_DEPARTMENT", "应收账款组织必须是部门类型");
-      const previous = await tx.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
-      const isRebind = !!previous?.financeOrganizationId && previous.financeOrganizationId !== organization.id;
-      if (isRebind && (input.confirm !== true || !input.reason)) throw httpError(400, "RECEIVABLES_REBIND_CONFIRMATION_REQUIRED", "换绑必须填写原因并二次确认");
-      if (previous?.financeOrganizationId === organization.id) return resolveReceivablesAccess(principal, tx);
-      await tx.receivableSetting.upsert({ where: { id: 1 }, create: { id: 1, financeOrganizationId: organization.id }, update: { financeOrganizationId: organization.id, configurationConfirmedAt: null, configurationConfirmedBy: null } });
-      await writeCriticalAudit(tx, {
-        actorId: principal.accountId, action: isRebind ? "receivables.setup.rebind" : "receivables.setup.bind", objectType: "receivable_setting", objectId: organization.id,
-        requestId: request.id, actorRole: "company_admin", actorScopeType: "company", ...(input.reason ? { reason: input.reason } : {}),
-        metadata: { before: previous ?? null, after: { financeOrganizationId: organization.id, configurationConfirmedAt: null, configurationConfirmedBy: null } },
-      });
-      return resolveReceivablesAccess(principal, tx);
-    });
-    return { data };
-  });
 
   app.post("/api/receivables/setup/confirm", { preHandler: deps.authenticate }, async (request) => {
     const principal = request.principal as Principal;

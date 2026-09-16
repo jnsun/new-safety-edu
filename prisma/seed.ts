@@ -1,5 +1,6 @@
 import argon2 from "argon2";
 import { PrismaClient } from "@prisma/client";
+import { receivableSettingBinding, selectFinanceOrganizationId } from "./receivables-defaults.js";
 
 const prisma = new PrismaClient();
 
@@ -28,11 +29,23 @@ const receivableDictionary = {
 } as const;
 
 async function seedReceivables() {
+  const financeOrganizations = await prisma.organization.findMany({
+    where: { name: "财务资产部", type: "department" },
+    select: { id: true },
+  });
+  const financeOrganizationId = selectFinanceOrganizationId(financeOrganizations);
+  const currentSetting = await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true } });
+  const settingBinding = receivableSettingBinding(currentSetting?.financeOrganizationId, financeOrganizationId);
   const dictionaryRows = Object.entries(receivableDictionary).flatMap(([category, values]) =>
     values.map((value, index) => ({ category, value, sortOrder: index + 1 })),
   );
 
   await prisma.$transaction([
+    prisma.receivableSetting.upsert({
+      where: { id: 1 },
+      create: { id: 1, financeOrganizationId },
+      update: settingBinding,
+    }),
     ...receivableDepartments.map(([name, code], index) => prisma.receivableDepartment.upsert({
       where: { name },
       update: {},

@@ -58,7 +58,7 @@ import {
   QualificationsPage,
 } from "./SafetyManagementPages";
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
-import { receivablesErrorKind, receivablesNavigation, receivablesPortalMode, receivablesQueryKey, receivablesScopeFingerprint, receivablesScopeQueryPrefix, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
+import { receivablesNavigation, receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 import { personMatchesSearch } from "./person-search";
 import { platformConditionalModule } from "./platform-access";
 
@@ -2081,8 +2081,6 @@ function PersonDetail({
 
 function OrganizationProjects({ principal }: { principal: Principal }) {
   const qc = useQueryClient();
-  const receivablesAccess = useReceivablesAccess(principal.accountId);
-  const currentReceivablesAccess = usableReceivablesAccess(receivablesAccess);
   const organizations = useQuery({
     queryKey: ["organizations"],
     queryFn: () => api<Organization[]>("/api/organizations"),
@@ -2147,20 +2145,6 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
       void qc.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (e) => message.error(e.message),
-  });
-  const receivablesRecovery = useMutation({
-    mutationFn: (values: { organizationId: string; reason: string; confirm: boolean }) => api<ReceivablesAccess>("/api/receivables/setup/organization", json("PUT", { ...values, confirm: true })),
-    onSuccess: async () => {
-      message.success("财务资产部绑定已更新，请由部门负责人继续完成应收账款配置");
-      await qc.invalidateQueries({ queryKey: receivablesQueryKey(principal.accountId, "access") });
-    },
-    onError: async (error) => {
-      message.error(error.message);
-      if (receivablesErrorKind(error) === "revoked") {
-        if (currentReceivablesAccess) qc.removeQueries({ queryKey: receivablesScopeQueryPrefix(principal.accountId, receivablesScopeFingerprint(currentReceivablesAccess)) });
-        await receivablesAccess.refetch();
-      }
-    },
   });
   const companyAdmin = principal.roles.some(
     (role) => role.role === "company_admin",
@@ -2253,16 +2237,6 @@ function OrganizationProjects({ principal }: { principal: Principal }) {
           </Button>
         )}
       </Space>
-      {receivablesAccess.isError && <Alert className="receivables-inline-alert" type="error" showIcon message="应收账款恢复权限核验失败" description="组织和项目数据仍可使用；为避免越权，恢复入口暂时隐藏。" action={<Button onClick={() => void receivablesAccess.refetch()}>重新核验</Button>} />}
-      {currentReceivablesAccess?.canRecover && <Card className="filters receivables-recovery" title="应收账款组织恢复">
-        <Alert type="info" showIcon message="此处只绑定财务资产部" description="页面不会加载台账、金额、导入或导出数据。绑定后由财务资产部负责人继续授权和配置。" />
-        <Form layout="vertical" onFinish={(values) => receivablesRecovery.mutate(values)}>
-          <Form.Item name="organizationId" label="财务资产部" rules={[{ required: true, message: "请选择部门" }]}><Select showSearch optionFilterProp="label" options={(organizations.data ?? []).filter((organization) => organization.type === "department").map((organization) => ({ value: organization.id, label: organization.name }))} /></Form.Item>
-          <Form.Item name="reason" label="绑定或换绑原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea maxLength={500} showCount /></Form.Item>
-          <Form.Item name="confirm" valuePropName="checked" rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error("请确认绑定影响")) }]}><Checkbox>我确认该部门是当前财务资产部；换绑会使原配置进入待确认状态</Checkbox></Form.Item>
-          <Button type="primary" htmlType="submit" loading={receivablesRecovery.isPending}>确认绑定</Button>
-        </Form>
-      </Card>}
       <Tabs
         items={[
           {

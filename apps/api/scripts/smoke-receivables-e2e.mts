@@ -348,21 +348,9 @@ async function runAutomated(fixture: Awaited<ReturnType<typeof setupFixture>>) {
     assert.equal(access.canEnter, label !== "company-admin");
   }
   const companyAccess = (await expect<Access>(sessions["company-admin"], "/api/receivables/access", 200)).body.data!;
-  assert.equal(companyAccess.canRecover, true); assert.equal(companyAccess.canReadLedger, false);
-  const reboundAccess = (await expect<Access>(sessions["company-admin"], "/api/receivables/setup/organization", 200, json("PUT", { organizationId: fixture.replacementFinanceOrganization.id, confirm: true, reason: "Task 13 真实换绑验证" }))).body.data!;
-  assert.equal(reboundAccess.state, "pending_confirmation"); assert.equal(reboundAccess.canRecover, true); assert.equal(reboundAccess.canReadLedger, false);
-  let reboundSetting = await prisma.receivableSetting.findUniqueOrThrow({ where: { id: 1 } });
-  assert.equal(reboundSetting.financeOrganizationId, fixture.replacementFinanceOrganization.id); assert.equal(reboundSetting.configurationConfirmedAt, null); assert.equal(reboundSetting.configurationConfirmedBy, null);
-  assert.equal(await prisma.auditLog.count({ where: { actorId: fixture.companyAdmin.accountId, action: "receivables.setup.rebind", objectId: fixture.replacementFinanceOrganization.id } }), 1);
-  await deniedWithoutMutation(sessions["company-admin"], "company admin finance data denial after rebind", "/api/receivables/ledgers?status=all&settlement=all", 403, "RECEIVABLES_FORBIDDEN");
-  const replacementOwnerAccess = (await expect<Access>(sessions.owner, "/api/receivables/access", 200)).body.data!;
-  assert.equal(replacementOwnerAccess.state, "pending_confirmation"); assert.equal(replacementOwnerAccess.canConfirmSetup, true);
-  assert.equal((await expect<Access>(sessions.owner, "/api/receivables/setup/confirm", 200, json("POST", {}))).body.data!.state, "ready");
-  const restoredAccess = (await expect<Access>(sessions["company-admin"], "/api/receivables/setup/organization", 200, json("PUT", { organizationId: fixture.financeOrganization.id, confirm: true, reason: "Task 13 恢复原财务组织" }))).body.data!;
-  assert.equal(restoredAccess.state, "pending_confirmation"); assert.equal(restoredAccess.canReadLedger, false);
-  reboundSetting = await prisma.receivableSetting.findUniqueOrThrow({ where: { id: 1 } });
-  assert.equal(reboundSetting.financeOrganizationId, fixture.financeOrganization.id); assert.equal(reboundSetting.configurationConfirmedAt, null); assert.equal(reboundSetting.configurationConfirmedBy, null);
-  assert.equal((await expect<Access>(sessions.owner, "/api/receivables/setup/confirm", 200, json("POST", {}))).body.data!.state, "ready");
+  assert.equal(companyAccess.canRecover, false); assert.equal(companyAccess.canReadLedger, false);
+  await expect<unknown>(sessions["company-admin"], "/api/receivables/setup/organization", 404, json("PUT", { organizationId: fixture.replacementFinanceOrganization.id, confirm: true, reason: "removed recovery endpoint" }));
+  assert.equal((await prisma.receivableSetting.findUniqueOrThrow({ where: { id: 1 } })).financeOrganizationId, fixture.financeOrganization.id);
   await deniedWithoutMutation(sessions["company-admin"], "company admin finance data denial", "/api/receivables/ledgers?status=all&settlement=all", 403, "RECEIVABLES_FORBIDDEN");
 
   const reporterAList = await expect<{ rows: Ledger[]; total: number }>(sessions["reporter-a"], `/api/receivables/ledgers?status=all&settlement=all&search=${encodeURIComponent(marker)}`, 200);

@@ -37,6 +37,12 @@ const httpError = (statusCode: number, code: string, message: string) => Object.
 const migrationStateChanged = () => httpError(409, "RECEIVABLES_MIGRATION_STATE_CHANGED", "迁移状态已变化，请重新预览");
 const auditMetadata = (before: unknown, after: unknown, impactCount: number) => JSON.parse(JSON.stringify({ before, after, impactCount })) as Prisma.InputJsonValue;
 
+export function assertReceivablesGrantManagement(actorRole: "owner" | "admin" | ReceivableGrantRole | null, existingRole: ReceivableGrantRole | null, requestedRole: ReceivableGrantRole | null): void {
+  if (actorRole === "owner") return;
+  if (actorRole === "admin" && existingRole !== "admin" && requestedRole !== "admin") return;
+  throw httpError(403, "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", "财务管理员只能管理填报人和只读人员授权");
+}
+
 async function runMigrationApply<T>(apply: () => Promise<T>) {
   try {
     return await apply();
@@ -186,6 +192,7 @@ async function createGrant(context: ReceivablesAdminContext, input: Extract<Rece
   validateGrantPolicy(input);
   return prisma.$transaction(async (tx) => {
     const access = await requireAction(context, "manageAccess", tx);
+    assertReceivablesGrantManagement(access.role, null, input.role);
     await assertActiveGrantSubject(tx, input.accountId);
     await validateGrantDepartments(tx, input);
     const created = await tx.receivableAccessGrant.create({ data: {
@@ -203,6 +210,7 @@ async function updateGrant(context: ReceivablesAdminContext, id: string, input: 
     const access = await requireAction(context, "manageAccess", tx);
     const before = await tx.receivableAccessGrant.findUnique({ where: { id }, select: grantSelect });
     if (!before) throw httpError(404, "RECEIVABLES_GRANT_NOT_FOUND", "财务授权不存在");
+    assertReceivablesGrantManagement(access.role, before.role, "revoke" in input ? null : input.role);
     if (!before.active || before.revokedAt) throw httpError(409, "RECEIVABLES_GRANT_INACTIVE", "财务授权已撤销");
     if (before.revision !== input.revision) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务授权已被其他操作更新");
     if ("revoke" in input) {

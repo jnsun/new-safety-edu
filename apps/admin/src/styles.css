@@ -144,9 +144,6 @@ button, input, textarea, select { font: inherit; }
 .receivables-transfer-stage .ant-alert { margin-bottom: 16px; }
 .receivables-transfer-stage .ant-descriptions { margin-bottom: 16px; }
 .receivables-reset { margin-top: 18px; }
-.receivables-recovery { max-width: 760px; }
-.receivables-recovery .ant-alert { margin-bottom: 18px; }
-.receivables-recovery .ant-form { max-width: 620px; }
 .receivables-page .ant-table-cell { overflow-wrap: anywhere; }
 .receivables-page .ant-drawer-content-wrapper { max-width: 100vw; }
 @media print {

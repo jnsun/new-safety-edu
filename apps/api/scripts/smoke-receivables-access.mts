@@ -17,7 +17,6 @@ assert.equal(apiUrl.port, "55448", "Receivables smoke API must use port 55448");
 const prisma = new PrismaClient();
 const marker = `rxa-${randomUUID()}`;
 const jwtSecret = "receivables-access-smoke-jwt-secret";
-const setupLockKey = 8_645_136_501n;
 const ids = { accounts: [] as string[], people: [] as string[], organizations: [] as string[], financeDepartments: [] as string[], grants: [] as string[] };
 let server: ChildProcess | null = null;
 let serverOutput = "";
@@ -41,21 +40,6 @@ type AccessResponse = {
 };
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
-
-async function waitForSetupLockWaiters(expected: number) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const [row] = await prisma.$queryRaw<Array<{ count: bigint }>>`
-      SELECT COUNT(*)::bigint AS count
-      FROM pg_stat_activity
-      WHERE datname = current_database()
-        AND wait_event_type = 'Lock'
-        AND query ILIKE '%pg_advisory_xact_lock%'
-    `;
-    if (Number(row?.count ?? 0n) >= expected) return;
-    await delay(20);
-  }
-  assert.fail(`Expected ${expected} setup request(s) waiting on the transaction lock`);
-}
 
 async function createIdentity(input: {
   label: string;
@@ -199,7 +183,6 @@ try {
 
   const companyAdmin = await createIdentity({ label: "company-admin", role: "company_admin", scopeType: "company" });
   const owner = await createIdentity({ label: "owner", role: "org_leader", scopeType: "organization", scopeId: financeOrganization.id });
-  const replacementOwner = await createIdentity({ label: "replacement-owner", role: "org_leader", scopeType: "organization", scopeId: replacementOrganization.id });
   const financeAdmin = await createIdentity({ label: "finance-admin" });
   const reporterA = await createIdentity({ label: "reporter-a" });
   const reporterB = await createIdentity({ label: "reporter-b" });
@@ -219,7 +202,7 @@ try {
   await grant({ accountId: disabled.id, grantedBy: companyAdmin.id, role: "admin" });
   await grant({ accountId: inactivePerson.id, grantedBy: companyAdmin.id, role: "admin" });
 
-  const tokens = Object.fromEntries(await Promise.all(Object.entries({ companyAdmin, owner, replacementOwner, financeAdmin, reporterA, reporterB, viewer, inactiveDepartmentViewer, ordinary, pending, disabled, inactivePerson })
+  const tokens = Object.fromEntries(await Promise.all(Object.entries({ companyAdmin, owner, financeAdmin, reporterA, reporterB, viewer, inactiveDepartmentViewer, ordinary, pending, disabled, inactivePerson })
     .map(async ([key, account]) => [key, await token(account.id)]))) as Record<string, string>;
 
   await startServer();
@@ -227,7 +210,7 @@ try {
   const initialAdmin = await access(tokens.companyAdmin!);
   assert.equal(initialAdmin.response.status, 200);
   assert.equal(initialAdmin.body.data?.state, "unconfigured");
-  assert.equal(initialAdmin.body.data?.canRecover, true);
+  assert.equal(initialAdmin.body.data?.canRecover, false);
   assert.equal(initialAdmin.body.data?.canEnter, false);
   const initialOrdinary = await access(tokens.ordinary!);
   assert.equal(initialOrdinary.body.data?.canRecover, false);
@@ -236,16 +219,12 @@ try {
   assert.equal(initialFinanceAdmin.body.data?.canRecover, false);
   assert.equal(initialFinanceAdmin.body.data?.canEnter, false);
 
-  const invalidBind = await request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify({ organizationId: company.id }) });
-  assert.equal(invalidBind.status, 409);
-  assert.equal((await invalidBind.json() as { error: { code: string } }).error.code, "RECEIVABLES_ORGANIZATION_NOT_DEPARTMENT");
-
-  const bind = await request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify({ organizationId: financeOrganization.id }) });
-  assert.equal(bind.status, 200);
+  assert.equal((await request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify({ organizationId: financeOrganization.id }) })).status, 404);
+  await prisma.receivableSetting.create({ data: { id: 1, financeOrganizationId: financeOrganization.id } });
   const pendingAdmin = await access(tokens.companyAdmin!);
   assert.equal(pendingAdmin.body.data?.state, "pending_confirmation");
   assert.equal(pendingAdmin.body.data?.canReadLedger, false);
-  assert.equal(pendingAdmin.body.data?.canRecover, true);
+  assert.equal(pendingAdmin.body.data?.canRecover, false);
   const pendingOwner = await access(tokens.owner!);
   assert.equal(pendingOwner.body.data?.role, "owner");
   assert.equal(pendingOwner.body.data?.canConfirmSetup, true);
@@ -301,42 +280,9 @@ try {
   assert.equal((await access(tokens.disabled!)).response.status, 401);
   assert.equal((await access(tokens.inactivePerson!)).response.status, 401);
 
-  for (const body of [
-    { organizationId: replacementOrganization.id, confirm: true },
-    { organizationId: replacementOrganization.id, confirm: false, reason: "smoke rebind" },
-    { organizationId: replacementOrganization.id, confirm: true, reason: "   " },
-  ]) {
-    assert.equal((await request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify(body) })).status, 400);
-  }
-  let releaseSetupLock!: () => void;
-  let setupLockReady!: () => void;
-  const releaseSetupLockPromise = new Promise<void>((resolveRelease) => { releaseSetupLock = resolveRelease; });
-  const setupLockReadyPromise = new Promise<void>((resolveReady) => { setupLockReady = resolveReady; });
-  const setupLockHolder = prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
-    setupLockReady();
-    await releaseSetupLockPromise;
-  }).catch((error) => { setupLockReady(); throw error; });
-  void setupLockHolder.catch(() => undefined);
-  await setupLockReadyPromise;
-  const rebindPromise = request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify({ organizationId: replacementOrganization.id, confirm: true, reason: "smoke recovery rebind" }) });
-  let staleOwnerConfirmPromise: Promise<Response> | undefined;
-  try {
-    await waitForSetupLockWaiters(1);
-    staleOwnerConfirmPromise = request("/api/receivables/setup/confirm", tokens.owner!, { method: "POST", body: "{}" });
-    await waitForSetupLockWaiters(2);
-  } finally {
-    releaseSetupLock();
-    await setupLockHolder;
-  }
-  const rebind = await rebindPromise;
-  const staleOwnerConfirm = await staleOwnerConfirmPromise!;
-  assert.equal(rebind.status, 200);
-  assert.equal(staleOwnerConfirm.status, 403);
-  assert.equal((await access(tokens.companyAdmin!)).body.data?.state, "pending_confirmation");
-  assert.equal((await request("/api/receivables/setup/confirm", tokens.replacementOwner!, { method: "POST", body: "{}" })).status, 200);
-
-  assert.equal(await prisma.auditLog.count({ where: { action: { in: ["receivables.setup.bind", "receivables.setup.rebind", "receivables.setup.confirm"] }, objectId: { in: ids.organizations } } }), 4);
+  assert.equal((await request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: JSON.stringify({ organizationId: replacementOrganization.id, confirm: true, reason: "removed recovery endpoint" }) })).status, 404);
+  assert.equal((await prisma.receivableSetting.findUniqueOrThrow({ where: { id: 1 } })).financeOrganizationId, financeOrganization.id);
+  assert.equal(await prisma.auditLog.count({ where: { action: "receivables.setup.confirm", objectId: financeOrganization.id } }), 1);
   assert.equal(await prisma.receivableAccessGrant.count({ where: { id: adminGrant.id, active: true } }), 1);
   console.log("RECEIVABLES_ACCESS_SMOKE=PASS");
 } finally {

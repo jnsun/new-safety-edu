@@ -494,26 +494,8 @@ try {
   assert.equal(afterRejectedVoid.audits.length, 2);
 
   const rebindOrganization = await prisma.organization.create({ data: { name: `${marker}-rebind-finance-org`, type: "department", parentId: company.id } }); ids.organizations.push(rebindOrganization.id);
-  const setupRaceContract = `${marker}-setup-rebind-race`;
-  const setupRaceAuditBefore = await prisma.auditLog.count({ where: { actorId: owner.id, action: "receivables.ledger.create" } });
-  let rebindRequest!: ReturnType<typeof request>;
-  let setupRaceWrite!: ReturnType<typeof request<LedgerResponse>>;
-  let setupRaceWriteWaited = false;
-  await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(8645136501)`;
-    rebindRequest = request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: jsonBody({ organizationId: rebindOrganization.id, reason: "race rebind wins", confirm: true }) });
-    assert.equal(await waitForLockWaiters("pg_advisory_xact_lock", "%", 1), true, "setup rebind did not enter the advisory-lock queue");
-    setupRaceWrite = request<LedgerResponse>("/api/receivables/ledgers", tokens.owner!, { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: setupRaceContract }) });
-    setupRaceWriteWaited = await waitForLockWaiters("pg_advisory_xact_lock", "%", 2);
-  });
-  const [rebindResult, setupRaceWriteResult] = await Promise.all([rebindRequest, setupRaceWrite]);
-  if (setupRaceWriteResult.body.data?.id) ids.ledgers.push(setupRaceWriteResult.body.data.id);
-  assert.equal(setupRaceWriteWaited, true, "ledger write did not queue behind the earlier setup rebind");
-  assert.equal(rebindResult.response.status, 200, JSON.stringify(rebindResult.body));
-  assert.equal(setupRaceWriteResult.response.status, 403, JSON.stringify(setupRaceWriteResult.body));
-  assert.equal(setupRaceWriteResult.body.error?.code, "RECEIVABLES_FORBIDDEN");
-  assert.equal(await prisma.receivableLedger.count({ where: { contractNoNormalized: setupRaceContract } }), 0);
-  assert.equal(await prisma.auditLog.count({ where: { actorId: owner.id, action: "receivables.ledger.create" } }), setupRaceAuditBefore);
+  assert.equal((await request("/api/receivables/setup/organization", tokens.companyAdmin!, { method: "PUT", body: jsonBody({ organizationId: rebindOrganization.id, reason: "removed recovery endpoint", confirm: true }) })).response.status, 404);
+  assert.equal((await prisma.receivableSetting.findUniqueOrThrow({ where: { id: 1 } })).financeOrganizationId, financeOrganization.id);
 
   console.log("RECEIVABLES_LEDGER_SMOKE=PASS");
 } finally {

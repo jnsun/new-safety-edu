@@ -19,7 +19,6 @@ type GrantFacts = {
 export type ReceivablesAccessFacts = {
   accountActive: boolean;
   personActive: boolean;
-  isCompanyAdmin?: boolean;
   isFinanceOrganizationMember?: boolean;
   configured?: boolean;
   configurationConfirmed?: boolean;
@@ -92,7 +91,7 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   const hasBoundOrgLeader = facts.hasBoundOrgLeader ?? configured;
   const configurationConfirmed = facts.configurationConfirmed ?? true;
   const activeIdentity = facts.accountActive && facts.personActive;
-  const canRecover = facts.accountActive && !!facts.isCompanyAdmin;
+  const canRecover = false;
   const state: ReceivablesAccessState = !configured
     ? "unconfigured"
     : !hasBoundOrgLeader
@@ -155,6 +154,7 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       canCreateLedger: true,
       canManageMoney: true,
       canManageConfiguration: true,
+      canManageAccess: true,
       canImport: true,
       canExport: true,
       canViewAll: true,
@@ -181,11 +181,6 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
     writeDepartmentIds,
   };
 }
-
-export const receivablesRoleAssignmentSubjects = (accountId: string, personId: string | null) => [
-  { accountId },
-  ...(personId ? [{ personId }] : []),
-];
 
 export async function resolveReceivablesAccess(principal: Pick<Principal, "accountId">, db: AccessDb = prisma): Promise<ReceivablesAccess> {
   const [account, setting] = await Promise.all([
@@ -215,11 +210,7 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
   const configured = !!setting?.financeOrganizationId && setting.financeOrganization?.type === "department";
   const isFinanceOrganizationMember = Boolean(configured
     && account?.person?.organizations.some(({ organizationId }) => organizationId === setting.financeOrganizationId));
-  const [companyAdmin, leaderRoles, grants] = await Promise.all([
-    db.roleAssignment.findFirst({
-      where: { OR: receivablesRoleAssignmentSubjects(principal.accountId, account?.personId ?? null), role: "company_admin", scopeType: "company", active: true, activationPending: false },
-      select: { id: true },
-    }),
+  const [leaderRoles, grants] = await Promise.all([
     configured
       ? db.roleAssignment.findMany({
           where: {
@@ -259,7 +250,6 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
   return decideReceivablesAccess({
     accountActive,
     personActive,
-    isCompanyAdmin: !!companyAdmin,
     isFinanceOrganizationMember,
     configured,
     configurationConfirmed: !!setting?.configurationConfirmedAt,
