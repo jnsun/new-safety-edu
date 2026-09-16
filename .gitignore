@@ -15,3 +15,4 @@ var/release-*.tar.gz
 apps/miniprogram/private.config.json
 apps/miniprogram/project.private.config.json
 .artifact-work/
+.worktrees/
