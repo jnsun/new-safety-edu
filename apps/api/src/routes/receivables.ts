@@ -6,7 +6,7 @@ import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import { administerReceivables } from "../receivables-admin.js";
 import { requireReceivables, resolveReceivablesAccess } from "../receivables-access.js";
-import { getReceivablesColumnPreference, getReceivablesReferenceData, queryReceivables, receivablesColumnPreferenceSchema, saveReceivablesColumnPreference } from "../receivables-query.js";
+import { getReceivablesColumnPreference, getReceivablesReferenceData, previewReceivablesExport, queryReceivables, receivablesColumnPreferenceSchema, receivablesExportCategoryIds, receivablesExportColumnIds, saveReceivablesColumnPreference } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
 import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
@@ -68,7 +68,9 @@ const receivablesListInput = z.object({
   order: z.enum(["asc", "desc"]).default("desc"),
 }).strict();
 const receivablesDashboardInput = z.object(receivablesFilters).strict();
-const receivablesExportCreateInput = z.object({ idempotencyKey: z.string().uuid(), filters: z.object(receivablesFilters).strict().default({}) }).strict();
+const receivablesExportCategoryFiltersInput = z.object(Object.fromEntries(receivablesExportCategoryIds.map((id) => [id, z.array(z.string().trim().min(1).max(240)).max(100).optional()]))).strict();
+const receivablesExportCreateInput = z.object({ idempotencyKey: z.string().uuid(), filters: z.object(receivablesFilters).strict().default({}), categoryFilters: receivablesExportCategoryFiltersInput.default({}), columns: z.array(z.enum(receivablesExportColumnIds as [typeof receivablesExportColumnIds[number], ...typeof receivablesExportColumnIds])).min(1).max(receivablesExportColumnIds.length).optional() }).strict();
+const receivablesExportPreviewInput = z.object({ filters: z.object(receivablesFilters).strict().default({}), categoryFilters: receivablesExportCategoryFiltersInput.default({}) }).strict();
 const receivablesExportListInput = z.object({ page: z.coerce.number().int().positive().default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50) }).strict();
 const receivablesExportTokenInput = z.object({ token: z.string().min(32).max(200) }).strict();
 const ledgerText = (max: number) => z.string().max(max).nullable().optional();
@@ -186,9 +188,13 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.get("/api/receivables/exports", { preHandler: deps.authenticate }, async (request) => ({
     data: await listReceivablesExports(request.principal as Principal, receivablesExportListInput.parse(request.query), exportEnvironment),
   }));
+  app.post("/api/receivables/exports/preview", { preHandler: deps.authenticate }, async (request) => {
+    const { filters, categoryFilters } = receivablesExportPreviewInput.parse(request.body);
+    return { data: await previewReceivablesExport(request.principal as Principal, filters, categoryFilters) };
+  });
   app.post("/api/receivables/exports", { preHandler: deps.authenticate }, async (request, reply) => {
-    const { idempotencyKey, filters } = receivablesExportCreateInput.parse(request.body);
-    const job = await createReceivablesExportJob(request.principal as Principal, filters, exportEnvironment, idempotencyKey);
+    const { idempotencyKey, filters, categoryFilters, columns } = receivablesExportCreateInput.parse(request.body);
+    const job = await createReceivablesExportJob(request.principal as Principal, filters, exportEnvironment, idempotencyKey, categoryFilters, columns);
     return reply.code(202).send({ data: { id: job.id, status: job.status } });
   });
   app.post("/api/receivables/exports/:id/token", { preHandler: deps.authenticate }, async (request) => ({

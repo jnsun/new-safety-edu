@@ -226,6 +226,14 @@ export type ReceivablesExportJob = {
   createdAt: string;
 };
 export type ReceivablesExportList = { rows: ReceivablesExportJob[]; page: number; pageSize: number; total: number };
+export const receivablesExportCategoryIds = ["financeDepartment", "creditorUnit", "customerType", "workNature", "sector", "projectStatus", "settlementMethod", "debtStatus", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan", "status"] as const;
+export type ReceivablesExportCategoryId = typeof receivablesExportCategoryIds[number];
+export type ReceivablesExportCategoryFilters = Partial<Record<ReceivablesExportCategoryId, string[]>>;
+export type ReceivablesExportPreview = {
+  rowCount: number;
+  categoryOptions: Record<ReceivablesExportCategoryId, Array<{ value: string; label: string }>>;
+  columns: Array<{ id: string; label: string; nonEmptyCount: number }>;
+};
 
 export const receivablesColumnIds = [
   "financeDepartmentName", "contractNo", "projectName", "customerName", "creditorUnit", "debtStatus", "finalAmount",

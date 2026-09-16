@@ -15,6 +15,21 @@ export type ReceivablesFiltersInput = {
   search?: string | undefined;
 };
 
+export const receivablesExportCategoryIds = ["financeDepartment", "creditorUnit", "customerType", "workNature", "sector", "projectStatus", "settlementMethod", "debtStatus", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan", "status"] as const;
+export type ReceivablesExportCategoryId = typeof receivablesExportCategoryIds[number];
+export type ReceivablesExportCategoryFilters = Partial<Record<ReceivablesExportCategoryId, string[]>>;
+export const receivablesExportColumns = [
+  ["contractNo", "合同编号"], ["financeDepartmentName", "财务归属部门"], ["projectName", "项目名称"], ["customerName", "客户名称"],
+  ["customerType", "客户属性"], ["creditorUnit", "债权单位"], ["workNature", "工作性质"], ["sector", "板块"], ["projectStatus", "项目状态"],
+  ["settlementMethod", "决算方式"], ["contractAmount", "合同金额"], ["finalAmount", "决算金额"], ["invoicedAmount", "开票金额"],
+  ["receivedAmount", "到账金额"], ["writeoffAmount", "核销金额"], ["internalReceivable", "账内应收"], ["externalReceivable", "账外应收"],
+  ["balance", "应收余额"], ["openingChargeDate", "最新挂账时间"], ["debtStatus", "债权状态"], ["collectionOwner", "清收责任人"],
+  ["collectionNotes", "催收备注"], ["dunningDate", "最新催收时间"], ["communicationMethod", "沟通方式"], ["counterpartyFeedback", "对方反馈"],
+  ["latestProgress", "最新进展"], ["nextPlan", "下一步计划"], ["status", "记录状态"], ["anomaly", "异常"], ["updatedAt", "更新时间"],
+] as const;
+export type ReceivablesExportColumnId = typeof receivablesExportColumns[number][0];
+export const receivablesExportColumnIds = receivablesExportColumns.map(([id]) => id) as ReceivablesExportColumnId[];
+
 export type ReceivablesListInput = ReceivablesFiltersInput & {
   page?: number | undefined;
   pageSize?: number | undefined;
@@ -64,6 +79,7 @@ export type NormalizedReceivablesFilters = {
   creditorUnit: string | null;
   anomaly: "over_received" | "writeoff_adjustment_required" | "final_amount_missing" | null;
   search: string | null;
+  categoryFilters: Record<ReceivablesExportCategoryId, string[]>;
 };
 
 type QueryScope = NormalizedReceivablesFilters & {
@@ -157,7 +173,11 @@ const sortColumns = {
   openingChargeDate: Prisma.sql`f.opening_charge_date`,
 } satisfies Record<NonNullable<ReceivablesListInput["sort"]>, Prisma.Sql>;
 
-export function normalizeReceivablesFilters(input: ReceivablesFiltersInput): NormalizedReceivablesFilters {
+function normalizeCategoryFilters(input: ReceivablesExportCategoryFilters = {}) {
+  return Object.fromEntries(receivablesExportCategoryIds.map((id) => [id, [...new Set((input[id] ?? []).map((value) => value.trim()).filter(Boolean))].sort()])) as Record<ReceivablesExportCategoryId, string[]>;
+}
+
+export function normalizeReceivablesFilters(input: ReceivablesFiltersInput, categoryFilters: ReceivablesExportCategoryFilters = {}): NormalizedReceivablesFilters {
   return {
     financeDepartmentId: input.financeDepartmentId ?? null,
     status: input.status ?? "active",
@@ -166,6 +186,7 @@ export function normalizeReceivablesFilters(input: ReceivablesFiltersInput): Nor
     creditorUnit: text(input.creditorUnit),
     anomaly: input.anomaly ?? null,
     search: text(input.search),
+    categoryFilters: normalizeCategoryFilters(categoryFilters),
   };
 }
 
@@ -196,6 +217,16 @@ function queryWhere(scope: QueryScope): Prisma.Sql {
   if (scope.search) {
     const search = `%${scope.search}%`;
     clauses.push(Prisma.sql`(q.contract_no ILIKE ${search} OR q.project_name ILIKE ${search} OR q.customer_name ILIKE ${search})`);
+  }
+  const categoryColumns: Record<ReceivablesExportCategoryId, Prisma.Sql> = {
+    financeDepartment: Prisma.sql`q.finance_department_id::text`, creditorUnit: Prisma.sql`q.creditor_unit`, customerType: Prisma.sql`q.customer_type`,
+    workNature: Prisma.sql`q.work_nature`, sector: Prisma.sql`q.sector`, projectStatus: Prisma.sql`q.project_status`, settlementMethod: Prisma.sql`q.settlement_method`,
+    debtStatus: Prisma.sql`q.debt_status`, communicationMethod: Prisma.sql`q.comm_method`, counterpartyFeedback: Prisma.sql`q.feedback`, latestProgress: Prisma.sql`q.latest_progress`,
+    nextPlan: Prisma.sql`q.next_plan`, status: Prisma.sql`q.status::text`,
+  };
+  for (const category of receivablesExportCategoryIds) {
+    const values = scope.categoryFilters?.[category] ?? [];
+    if (values.length) clauses.push(Prisma.sql`${categoryColumns[category]} IN (${Prisma.join(values)})`);
   }
   return clauses.length ? Prisma.join(clauses, " AND ") : Prisma.sql`TRUE`;
 }
@@ -494,10 +525,10 @@ export async function saveReceivablesColumnPreference(principal: Principal, valu
   });
 }
 
-export async function createReceivablesExportSnapshotInTransaction(tx: QueryTx, principal: Principal, input: ReceivablesFiltersInput) {
+export async function createReceivablesExportSnapshotInTransaction(tx: QueryTx, principal: Principal, input: ReceivablesFiltersInput, categoryFilters: ReceivablesExportCategoryFilters = {}) {
   const access = await resolveReceivablesAccess(principal, tx);
   requireReceivables(access, "export", input.financeDepartmentId);
-  const scope = await resolveQueryScope(tx, access, input);
+  const scope = { ...await resolveQueryScope(tx, access, input), categoryFilters: normalizeCategoryFilters(categoryFilters) };
   if (scope.readDepartmentIds !== null && scope.readDepartmentIds.length === 0) throw forbiddenDepartment();
   if (!access.role) throw forbiddenDepartment();
   const cutoffRows = await tx.$queryRaw<Array<{ cutoffAt: Date }>>`SELECT clock_timestamp() AS "cutoffAt"`;
@@ -510,25 +541,25 @@ export async function createReceivablesExportSnapshotInTransaction(tx: QueryTx, 
       readDepartmentIds: scope.readDepartmentIds ?? [],
       cutoffAt: cutoffAt!.toISOString(),
     } satisfies ReceivablesExportScopeSnapshot,
-    filterSnapshot: normalizeReceivablesFilters(input),
+    filterSnapshot: normalizeReceivablesFilters(input, categoryFilters),
   };
 }
 
-export async function createReceivablesExportSnapshot(principal: Principal, input: ReceivablesFiltersInput) {
-  return prisma.$transaction((tx) => createReceivablesExportSnapshotInTransaction(tx, principal, input), { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+export async function createReceivablesExportSnapshot(principal: Principal, input: ReceivablesFiltersInput, categoryFilters: ReceivablesExportCategoryFilters = {}) {
+  return prisma.$transaction((tx) => createReceivablesExportSnapshotInTransaction(tx, principal, input, categoryFilters), { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 
 export async function resolveReceivablesExportScope(tx: QueryTx, principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters) {
   const access = await resolveReceivablesAccess(principal, tx);
   requireReceivables(access, "export", filters.financeDepartmentId ?? undefined);
-  const current = await resolveQueryScope(tx, access, {
+  const current = { ...await resolveQueryScope(tx, access, {
     ...(filters.financeDepartmentId ? { financeDepartmentId: filters.financeDepartmentId } : {}),
     status: filters.status, settlement: filters.settlement,
     ...(filters.debtStatus ? { debtStatus: filters.debtStatus } : {}),
     ...(filters.creditorUnit ? { creditorUnit: filters.creditorUnit } : {}),
     ...(filters.anomaly ? { anomaly: filters.anomaly } : {}),
     ...(filters.search ? { search: filters.search } : {}),
-  });
+  }), categoryFilters: normalizeCategoryFilters(filters.categoryFilters) };
   const saved = snapshot.all ? null : snapshot.readDepartmentIds;
   const readDepartmentIds = saved === null
     ? current.readDepartmentIds
@@ -540,6 +571,58 @@ export async function resolveReceivablesExportScope(tx: QueryTx, principal: Prin
   const cutoffAt = new Date(snapshot.cutoffAt);
   if (Number.isNaN(cutoffAt.valueOf())) throw Object.assign(new Error("导出范围快照无效"), { statusCode: 409, code: "RECEIVABLES_EXPORT_SNAPSHOT_INVALID" });
   return { ...current, readDepartmentIds, cutoffAt };
+}
+
+const categoryDictionary: Partial<Record<ReceivablesExportCategoryId, string>> = {
+  creditorUnit: "unit", customerType: "client_attr", workNature: "work_nature", sector: "sector", projectStatus: "project_status", settlementMethod: "final_method",
+  debtStatus: "debt_status", communicationMethod: "comm_method", counterpartyFeedback: "feedback", latestProgress: "progress_note", nextPlan: "next_plan",
+};
+
+export async function previewReceivablesExport(principal: Principal, filters: ReceivablesFiltersInput, categoryFilters: ReceivablesExportCategoryFilters = {}) {
+  return prisma.$transaction(async (tx) => {
+    const access = await resolveReceivablesAccess(principal, tx);
+    requireReceivables(access, "export", filters.financeDepartmentId);
+    const scope = { ...await resolveQueryScope(tx, access, filters), categoryFilters: normalizeCategoryFilters(categoryFilters) };
+    const cte = filteredCte(scope);
+    const [summary] = await tx.$queryRaw<Array<{ row_count: number; counts: Record<string, number> }>>(Prisma.sql`${cte}
+      SELECT COUNT(*)::int AS row_count, jsonb_build_object(
+        'contractNo', COUNT(f.contract_no)::int, 'financeDepartmentName', COUNT(f.finance_department_name)::int, 'projectName', COUNT(f.project_name)::int,
+        'customerName', COUNT(f.customer_name)::int, 'customerType', COUNT(f.customer_type)::int, 'creditorUnit', COUNT(f.creditor_unit)::int,
+        'workNature', COUNT(f.work_nature)::int, 'sector', COUNT(f.sector)::int, 'projectStatus', COUNT(f.project_status)::int,
+        'settlementMethod', COUNT(f.settlement_method)::int, 'contractAmount', COUNT(f.contract_amount)::int, 'finalAmount', COUNT(f.final_amount)::int,
+        'invoicedAmount', COUNT(f.invoiced_amount)::int, 'receivedAmount', COUNT(f.received_amount)::int, 'writeoffAmount', COUNT(f.writeoff_amount)::int,
+        'internalReceivable', COUNT(f.internal_receivable)::int, 'externalReceivable', COUNT(f.external_receivable)::int, 'balance', COUNT(f.balance)::int,
+        'openingChargeDate', COUNT(f.opening_charge_date)::int, 'debtStatus', COUNT(f.debt_status)::int, 'collectionOwner', COUNT(f.collection_owner)::int,
+        'collectionNotes', COUNT(f.collection_notes)::int, 'dunningDate', COUNT(f.dunning_date)::int, 'communicationMethod', COUNT(f.comm_method)::int,
+        'counterpartyFeedback', COUNT(f.feedback)::int, 'latestProgress', COUNT(f.latest_progress)::int, 'nextPlan', COUNT(f.next_plan)::int,
+        'status', COUNT(f.status)::int, 'anomaly', COUNT(f.anomaly)::int, 'updatedAt', COUNT(f.updated_at)::int
+      ) AS counts FROM filtered f`);
+    const actual = await tx.$queryRaw<Array<{ category: ReceivablesExportCategoryId; value: string; label: string }>>(Prisma.sql`${cte}
+      SELECT 'financeDepartment' AS category, f.finance_department_id::text AS value, f.finance_department_name AS label FROM filtered f
+      UNION SELECT 'creditorUnit', f.creditor_unit, f.creditor_unit FROM filtered f WHERE f.creditor_unit IS NOT NULL
+      UNION SELECT 'customerType', f.customer_type, f.customer_type FROM filtered f WHERE f.customer_type IS NOT NULL
+      UNION SELECT 'workNature', f.work_nature, f.work_nature FROM filtered f WHERE f.work_nature IS NOT NULL
+      UNION SELECT 'sector', f.sector, f.sector FROM filtered f WHERE f.sector IS NOT NULL
+      UNION SELECT 'projectStatus', f.project_status, f.project_status FROM filtered f WHERE f.project_status IS NOT NULL
+      UNION SELECT 'settlementMethod', f.settlement_method, f.settlement_method FROM filtered f WHERE f.settlement_method IS NOT NULL
+      UNION SELECT 'debtStatus', f.debt_status, f.debt_status FROM filtered f WHERE f.debt_status IS NOT NULL
+      UNION SELECT 'communicationMethod', f.comm_method, f.comm_method FROM filtered f WHERE f.comm_method IS NOT NULL
+      UNION SELECT 'counterpartyFeedback', f.feedback, f.feedback FROM filtered f WHERE f.feedback IS NOT NULL
+      UNION SELECT 'latestProgress', f.latest_progress, f.latest_progress FROM filtered f WHERE f.latest_progress IS NOT NULL
+      UNION SELECT 'nextPlan', f.next_plan, f.next_plan FROM filtered f WHERE f.next_plan IS NOT NULL
+      UNION SELECT 'status', f.status::text, f.status::text FROM filtered f`);
+    const dictionaries = await tx.receivableDictionaryOption.findMany({ where: { active: true, category: { in: Object.values(categoryDictionary) } }, select: { category: true, value: true } });
+    const options = [...actual];
+    for (const option of dictionaries) {
+      const category = Object.entries(categoryDictionary).find(([, dictionary]) => dictionary === option.category)?.[0] as ReceivablesExportCategoryId | undefined;
+      if (category && !options.some((item) => item.category === category && item.value === option.value)) options.push({ category, value: option.value, label: option.value });
+    }
+    return {
+      rowCount: summary?.row_count ?? 0,
+      categoryOptions: Object.fromEntries(receivablesExportCategoryIds.map((category) => [category, options.filter((item) => item.category === category).sort((a, b) => a.label.localeCompare(b.label)).map(({ value, label }) => ({ value, label }))])),
+      columns: receivablesExportColumns.map(([id, label]) => ({ id, label, nonEmptyCount: Number(summary?.counts?.[id] ?? 0) })),
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 
 export async function authorizeReceivablesExportSnapshotInTransaction(tx: QueryTx, principal: Principal, snapshot: ReceivablesExportScopeSnapshot, filters: NormalizedReceivablesFilters) {

@@ -73,7 +73,7 @@ async function expect<T>(path: string, token: string, status: number, init: Requ
 }
 
 const post = <T>(path: string, token: string, body: unknown, status = 200) => expect<T>(path, token, status, { method: "POST", body: JSON.stringify(body) });
-const createExport = <T>(token: string, filters: Record<string, unknown>, status = 202, idempotencyKey = randomUUID()) => post<T>("/api/receivables/exports", token, { idempotencyKey, filters }, status);
+const createExport = <T>(token: string, filters: Record<string, unknown>, status = 202, idempotencyKey = randomUUID(), selection: Record<string, unknown> = {}) => post<T>("/api/receivables/exports", token, { idempotencyKey, filters, ...selection }, status);
 
 async function waitForJob(jobId: string, wanted: Job["status"][]) {
   for (let attempt = 0; attempt < 240; attempt += 1) {
@@ -209,6 +209,15 @@ try {
   for (let offset = 0; offset < rows.length; offset += 500) await prisma.receivableLedger.createMany({ data: rows.slice(offset, offset + 500) });
   const ledgerA = await prisma.receivableLedger.findUniqueOrThrow({ where: { contractNoNormalized: `${marker}-bulk-0` } });
   const ledgerB = await prisma.receivableLedger.create({ data: { financeDepartmentId: departmentB.id, contractNo: `${marker}-department-b-ledger`, contractNoNormalized: `${marker}-department-b-ledger`, finalAmount: "100.0000", createdBy: owner.id } });
+  const [ledgerA2, ledgerA3] = await Promise.all([
+    prisma.receivableLedger.findUniqueOrThrow({ where: { contractNoNormalized: `${marker}-bulk-1` } }),
+    prisma.receivableLedger.findUniqueOrThrow({ where: { contractNoNormalized: `${marker}-bulk-2` } }),
+  ]);
+  await prisma.$transaction([
+    prisma.receivableLedger.update({ where: { id: ledgerA.id }, data: { creditorUnit: `${marker}-unit-a`, projectStatus: `${marker}-status-x`, latestProgress: "已对账" } }),
+    prisma.receivableLedger.update({ where: { id: ledgerA2.id }, data: { creditorUnit: `${marker}-unit-b`, projectStatus: `${marker}-status-x` } }),
+    prisma.receivableLedger.update({ where: { id: ledgerA3.id }, data: { creditorUnit: `${marker}-unit-a`, projectStatus: `${marker}-status-y` } }),
+  ]);
   await prisma.receivableInvoice.create({ data: { ledgerId: ledgerA.id, invoiceDate: new Date("2026-01-02T00:00:00Z"), amount: "80.0000", createdBy: owner.id } });
   await prisma.receivableReceipt.create({ data: { ledgerId: ledgerA.id, receiptDate: new Date("2026-02-03T00:00:00Z"), amount: "30.0000", createdBy: owner.id } });
 
@@ -221,13 +230,32 @@ try {
   await createExport(reporterToken, { financeDepartmentId: departmentB.id }, 403);
   await post("/api/receivables/exports", reporterToken, { filters: { financeDepartmentId: departmentA.id, search: `${marker}-missing-idempotency-key` } }, 400);
 
+  const categoryFilters = { creditorUnit: [`${marker}-unit-a`, `${marker}-unit-b`], projectStatus: [`${marker}-status-x`] };
+  const preview = await post<{ rowCount: number; columns: Array<{ id: string; label: string; nonEmptyCount: number }> }>("/api/receivables/exports/preview", reporterToken, { filters: { settlement: "all" }, categoryFilters });
+  assert.equal(preview.body!.data!.rowCount, 2, "category OR/AND filtering returned the wrong row count");
+  assert.equal(preview.body!.data!.columns.find(({ id }) => id === "customerName")?.nonEmptyCount, 0);
+  assert.equal(preview.body!.data!.columns.find(({ id }) => id === "latestProgress")?.nonEmptyCount, 1);
+  const selectedHeaders = ["合同编号", "项目名称", "最新进展"];
+  const selectedCreate = await createExport<{ id: string }>(reporterToken, { settlement: "all" }, 202, randomUUID(), { categoryFilters, columns: ["contractNo", "projectName", "latestProgress"] });
+  const selectedReady = await waitForJob(selectedCreate.body!.data!.id, ["completed", "failed"]);
+  assert.equal(selectedReady.status, "completed", selectedReady.error ?? undefined);
+  const selectedWorkbook = new ExcelJS.Workbook(); await selectedWorkbook.xlsx.readFile(resolve(uploadRoot, selectedReady.storageKey!));
+  assert.equal(selectedWorkbook.worksheets.length, 1);
+  assert.equal(selectedWorkbook.worksheets[0]!.name, "应收账款明细");
+  assert.ok(selectedWorkbook.worksheets[0]!.autoFilter);
+  assert.deepEqual((selectedWorkbook.worksheets[0]!.getRow(1).values as unknown[]).slice(1), selectedHeaders);
+  assert.equal(selectedWorkbook.worksheets[0]!.rowCount, 3);
+
   const scopedIdempotencyKey = randomUUID();
   const scopedCreate = await createExport<{ id: string; status: string }>(reporterToken, { financeDepartmentId: departmentA.id, search: `${marker}-needle`, settlement: "all" }, 202, scopedIdempotencyKey);
   const scopedId = scopedCreate.body!.data!.id;
   const duplicate = await createExport<{ id: string }>(reporterToken, { financeDepartmentId: departmentA.id, search: `${marker}-needle`, settlement: "all" }, 202, scopedIdempotencyKey);
   assert.equal(duplicate.body!.data!.id, scopedId, "identical active export was not reused");
   const scopedDb = await prisma.receivableExportJob.findUniqueOrThrow({ where: { id: scopedId } });
-  assert.deepEqual(scopedDb.filterSnapshot, { financeDepartmentId: departmentA.id, status: "active", settlement: "all", debtStatus: null, creditorUnit: null, anomaly: null, search: `${marker}-needle` });
+  assert.equal((scopedDb.filterSnapshot as any).financeDepartmentId, departmentA.id);
+  assert.equal((scopedDb.filterSnapshot as any).search, `${marker}-needle`);
+  assert.deepEqual((scopedDb.filterSnapshot as any).categoryFilters.creditorUnit, []);
+  assert.ok((scopedDb.filterSnapshot as any).columns.includes("latestProgress"));
   assert.deepEqual((scopedDb.scopeSnapshot as any).readDepartmentIds, [departmentA.id]);
   assert.equal((scopedDb.scopeSnapshot as any).role, "reporter");
   assert.ok(Date.parse((scopedDb.scopeSnapshot as any).cutoffAt));

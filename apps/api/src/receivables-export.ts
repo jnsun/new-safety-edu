@@ -11,10 +11,15 @@ import {
   createReceivablesExportSnapshot,
   createReceivablesExportSnapshotInTransaction,
   queryReceivablesExportBatch,
+  previewReceivablesExport,
+  receivablesExportColumnIds,
+  receivablesExportColumns,
   resolveReceivablesExportScope,
   type NormalizedReceivablesFilters,
   type ReceivablesExportScopeSnapshot,
   type ReceivablesFiltersInput,
+  type ReceivablesExportCategoryFilters,
+  type ReceivablesExportColumnId,
 } from "./receivables-query.js";
 
 export type ReceivablesExportEnvironment = {
@@ -129,23 +134,33 @@ async function principalForAccount(accountId: string): Promise<Principal> {
 
 const scopeValue = (value: Prisma.JsonValue) => value as unknown as ReceivablesExportScopeSnapshot;
 const filterValue = (value: Prisma.JsonValue) => value as unknown as NormalizedReceivablesFilters;
+const selectedColumnValue = (value: Prisma.JsonValue) => {
+  const columns = (value as unknown as { columns?: unknown }).columns;
+  return Array.isArray(columns) && columns.every((item) => typeof item === "string" && receivablesExportColumnIds.includes(item as ReceivablesExportColumnId))
+    ? columns as ReceivablesExportColumnId[]
+    : receivablesExportColumnIds;
+};
 const coversScope = (scope: ReceivablesExportScopeSnapshot, currentIds: string[] | null) => scope.all ? currentIds === null : currentIds === null || currentIds.length === scope.readDepartmentIds.length;
 
-export async function createReceivablesExportJob(principal: Principal, filters: ReceivablesFiltersInput, env: ReceivablesExportEnvironment, idempotencyKey: string) {
+export async function createReceivablesExportJob(principal: Principal, filters: ReceivablesFiltersInput, env: ReceivablesExportEnvironment, idempotencyKey: string, categoryFilters: ReceivablesExportCategoryFilters = {}, selectedColumns?: ReceivablesExportColumnId[]) {
+  const columns = selectedColumns ?? receivablesExportColumnIds;
+  if (!columns.length || new Set(columns).size !== columns.length || columns.some((column) => !receivablesExportColumnIds.includes(column))) throw exportError(400, "RECEIVABLES_EXPORT_COLUMNS_INVALID", "请至少选择一个有效导出字段");
+  if (selectedColumns && (await previewReceivablesExport(principal, filters, categoryFilters)).rowCount === 0) throw exportError(400, "RECEIVABLES_EXPORT_EMPTY", "当前条件没有可导出的记录");
   await cleanupExpiredReceivablesExports(env);
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(hashtext(${`receivables-export:${principal.accountId}`}::text))`;
     await lockAuthorizationFacts(tx, principal);
-    const snapshots = await createReceivablesExportSnapshotInTransaction(tx, principal, filters);
+    const snapshots = await createReceivablesExportSnapshotInTransaction(tx, principal, filters, categoryFilters);
+    const filterSnapshot = { ...snapshots.filterSnapshot, columns };
     const scopeSnapshot = { ...snapshots.scopeSnapshot, idempotencyKey } satisfies ReceivablesExportScopeSnapshot;
     const candidates = await tx.receivableExportJob.findMany({ where: { requestedBy: principal.accountId }, orderBy: { createdAt: "desc" } });
     const existing = candidates.find((job) => scopeValue(job.scopeSnapshot).idempotencyKey === idempotencyKey);
     if (existing) {
-      if (!jsonEqual(existing.filterSnapshot, snapshots.filterSnapshot)) throw exportError(409, "RECEIVABLES_EXPORT_IDEMPOTENCY_CONFLICT", "幂等键已用于不同的导出请求");
+      if (!jsonEqual(existing.filterSnapshot, filterSnapshot)) throw exportError(409, "RECEIVABLES_EXPORT_IDEMPOTENCY_CONFLICT", "幂等键已用于不同的导出请求");
       return existing;
     }
-    const job = await tx.receivableExportJob.create({ data: { requestedBy: principal.accountId, scopeSnapshot: scopeSnapshot as unknown as Prisma.InputJsonValue, filterSnapshot: snapshots.filterSnapshot as unknown as Prisma.InputJsonValue, expiresAt: new Date(Date.now() + jobLifetimeMs) } });
-    await tx.auditLog.create({ data: auditData(job, "receivables.export.request", "success", { scope: scopeSnapshot, filters: snapshots.filterSnapshot, idempotencyKey }) });
+    const job = await tx.receivableExportJob.create({ data: { requestedBy: principal.accountId, scopeSnapshot: scopeSnapshot as unknown as Prisma.InputJsonValue, filterSnapshot: filterSnapshot as unknown as Prisma.InputJsonValue, expiresAt: new Date(Date.now() + jobLifetimeMs) } });
+    await tx.auditLog.create({ data: auditData(job, "receivables.export.request", "success", { scope: scopeSnapshot, filters: filterSnapshot, idempotencyKey }) });
     return job;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 }
@@ -170,27 +185,18 @@ async function claimReceivablesExport(jobId: string) {
   });
 }
 
-const columns: Array<{ header: string; key: string; width: number; money?: boolean }> = [
-  { header: "合同编号", key: "contractNo", width: 24 }, { header: "财务归属部门", key: "financeDepartmentName", width: 22 },
-  { header: "项目名称", key: "projectName", width: 28 }, { header: "客户名称", key: "customerName", width: 28 },
-  { header: "客户属性", key: "customerType", width: 16 }, { header: "债权单位", key: "creditorUnit", width: 16 },
-  { header: "工作性质", key: "workNature", width: 18 }, { header: "板块", key: "sector", width: 18 },
-  { header: "项目状态", key: "projectStatus", width: 16 }, { header: "决算方式", key: "settlementMethod", width: 18 },
-  { header: "合同金额", key: "contractAmount", width: 22, money: true }, { header: "决算金额", key: "finalAmount", width: 22, money: true },
-  { header: "开票金额", key: "invoicedAmount", width: 22, money: true }, { header: "到账金额", key: "receivedAmount", width: 22, money: true },
-  { header: "核销金额", key: "writeoffAmount", width: 22, money: true }, { header: "账内应收", key: "internalReceivable", width: 22, money: true },
-  { header: "账外应收", key: "externalReceivable", width: 22, money: true }, { header: "应收余额", key: "balance", width: 22, money: true },
-  { header: "最新挂账时间", key: "openingChargeDate", width: 16 }, { header: "债权状态", key: "debtStatus", width: 16 },
-  { header: "清收责任人", key: "collectionOwner", width: 18 }, { header: "催收备注", key: "collectionNotes", width: 36 },
-  { header: "记录状态", key: "status", width: 14 }, { header: "异常", key: "anomaly", width: 24 }, { header: "更新时间", key: "updatedAt", width: 24 },
-];
+const widths: Partial<Record<ReceivablesExportColumnId, number>> = { contractNo: 24, projectName: 28, customerName: 28, collectionNotes: 36, latestProgress: 30, nextPlan: 30 };
+const moneyColumns = new Set<ReceivablesExportColumnId>(["contractAmount", "finalAmount", "invoicedAmount", "receivedAmount", "writeoffAmount", "internalReceivable", "externalReceivable", "balance"]);
 
 async function writeWorkbook(path: string, principal: Principal, job: ExportJobPayload) {
   const outputHandle = await open(path, "wx", 0o600);
   const initialIdentity = identityOf(await outputHandle.stat());
   const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: outputHandle.createWriteStream(), useStyles: true, useSharedStrings: false });
-  const sheet = workbook.addWorksheet("应收账款台账", { views: [{ state: "frozen", ySplit: 1 }] });
+  const selected = selectedColumnValue(job.filterSnapshot);
+  const columns = selected.map((key) => ({ header: receivablesExportColumns.find(([id]) => id === key)![1], key, width: widths[key] ?? 18, money: moneyColumns.has(key) }));
+  const sheet = workbook.addWorksheet("应收账款明细", { views: [{ state: "frozen", ySplit: 1 }] });
   sheet.columns = columns;
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columns.length } };
   sheet.getRow(1).font = { bold: true };
   for (const column of sheet.columns) if (column.number && columns[column.number - 1]?.money) column.numFmt = "@";
   let afterId: string | null = null;
@@ -198,7 +204,7 @@ async function writeWorkbook(path: string, principal: Principal, job: ExportJobP
   for (;;) {
     const rows = await queryReceivablesExportBatch(principal, scopeValue(job.scopeSnapshot), filterValue(job.filterSnapshot), afterId, 500);
     for (const row of rows) {
-      sheet.addRow({ ...row, openingChargeDate: row.openingChargeDate?.toISOString().slice(0, 10) ?? null, updatedAt: row.updatedAt.toISOString() }).commit();
+      sheet.addRow({ ...row, openingChargeDate: row.openingChargeDate?.toISOString().slice(0, 10) ?? null, dunningDate: row.dunningDate?.toISOString().slice(0, 10) ?? null, updatedAt: row.updatedAt.toISOString() }).commit();
       rowCount += 1;
     }
     if (rows.length < 500) break;
