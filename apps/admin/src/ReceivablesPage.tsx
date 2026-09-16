@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Col, Form, message, Result, Row, Select, Space, Spin, Table, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Col, Form, message, Result, Row, Select, Space, Spin, Table, Tabs, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { api } from "./api";
@@ -183,6 +183,8 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
   const currentAccess = usableReceivablesAccess(access);
   const currentScopeFingerprint = currentAccess ? receivablesScopeFingerprint(currentAccess) : undefined;
   const confirmSetup = useMutation({ mutationFn: () => api<ReceivablesAccess>("/api/receivables/setup/confirm", { method: "POST", body: "{}" }), onSuccess: async () => { message.success("初始配置已确认"); await access.refetch(); }, onError: async (error) => { message.error(error.message); if (receivablesErrorKind(error) === "revoked") { setSetupReviewed(false); if (currentScopeFingerprint) queryClient.removeQueries({ queryKey: receivablesScopeQueryPrefix(accountId, currentScopeFingerprint) }); await access.refetch(); } } });
+  if (location.pathname.startsWith("/receivables/imports")) return <Navigate to="/receivables/data?tab=import" replace />;
+  if (location.pathname.startsWith("/receivables/exports")) return <Navigate to="/receivables/data?tab=export" replace />;
   if (route === "redirect") return <Navigate to="/receivables" replace />;
   if (access.isFetching) return <div className="receivables-state"><Spin tip="正在核验应收账款权限…" /></div>;
   if (access.isError || !currentAccess) return <Result status="error" title="权限核验失败" subTitle="未显示任何财务数据。请重新登录或稍后重试。" extra={<Button onClick={() => void access.refetch()}>重新核验</Button>} />;
@@ -193,13 +195,22 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
     return <div className="receivables-page"><Alert type="warning" showIcon message="待负责人确认初始配置" description={<Space direction="vertical"><Typography.Text>请分别核对财务归属部门与全部 12 类业务字典。确认前不会读取或开放任何财务台账。</Typography.Text><Space><Button type={route === "departments" ? "primary" : "default"} onClick={() => navigate("/receivables/departments")}>核对部门</Button><Button type={route === "dictionaries" ? "primary" : "default"} onClick={() => navigate("/receivables/dictionaries")}>核对字典</Button></Space><Checkbox checked={setupReviewed} onChange={(event) => setSetupReviewed(event.target.checked)}>我已核对部门和业务字典，确认启用后才能进入台账</Checkbox><Button type="primary" disabled={!setupReviewed} loading={confirmSetup.isPending} onClick={() => confirmSetup.mutate()}>确认初始配置</Button></Space>} /><ReceivablesAdmin accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} /></div>;
   }
   const allowed = route === "dashboard" || route === "ledger" ? currentAccess.canReadLedger
-    : route === "imports" ? currentAccess.canImport
-      : route === "exports" ? currentAccess.canExport
+    : route === "data" ? currentAccess.canCreateLedger || currentAccess.canImport || currentAccess.canExport
         : route === "grants" ? currentAccess.canManageAccess
           : currentAccess.canManageConfiguration;
   if (!allowed) return <Result status="403" title="没有此项能力" subTitle="菜单与路由均按服务端返回的最新 capability 开放。" />;
   if (route === "ledger") return <ReceivablesLedger accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} />;
-  if (route === "imports" || route === "exports") return <ReceivablesTransfers accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} />;
+  if (route === "data") {
+    const requested = new URLSearchParams(location.search).get("tab") ?? (currentAccess.canCreateLedger ? "create" : currentAccess.canImport ? "import" : "export");
+    const permitted = { create: currentAccess.canCreateLedger, import: currentAccess.canImport, export: currentAccess.canExport } as const;
+    if (!(requested in permitted) || !permitted[requested as keyof typeof permitted]) return <Result status="403" title="没有此项能力" subTitle="该数据处理标签未向当前账号授权。" />;
+    const items = [
+      ...(currentAccess.canCreateLedger ? [{ key: "create", label: "新增记录", children: <ReceivablesTransfers accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section="create" /> }] : []),
+      ...(currentAccess.canImport ? [{ key: "import", label: "Excel 导入", children: <ReceivablesTransfers accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section="imports" /> }] : []),
+      ...(currentAccess.canExport ? [{ key: "export", label: "Excel 导出", children: <ReceivablesTransfers accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section="exports" /> }] : []),
+    ];
+    return <div className="receivables-page"><Typography.Title level={3}>数据处理</Typography.Title><Tabs activeKey={requested} items={items} onChange={(tab) => navigate(`/receivables/data?tab=${tab}`)} /></div>;
+  }
   if (route === "grants" || route === "departments" || route === "dictionaries") return <ReceivablesAdmin accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} />;
   return <ReceivablesDashboard accountId={accountId} scopeFingerprint={scopeFingerprint} />;
 }

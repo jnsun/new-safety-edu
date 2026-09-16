@@ -19,6 +19,11 @@ button, input, textarea, select { font: inherit; }
   border-right: 1px solid rgba(0, 0, 0, .08);
   backdrop-filter: saturate(180%) blur(24px);
 }
+
+.receivables-cell-one-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receivables-cell-two-line { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.45; white-space: normal; }
+.receivables-resizable-title { position: relative; min-height: 22px; padding-right: 8px; }
+.receivables-resize-handle { position: absolute; top: -12px; right: -8px; width: 10px; height: 46px; cursor: col-resize; touch-action: none; }
 .brand { height: 96px; padding: 24px 22px 18px; display: flex; align-items: center; gap: 12px; color: #1d1d1f; line-height: 1.2; }
 .brand-mark, .login-mark {
   display: grid; place-items: center; flex: 0 0 auto; width: 38px; height: 38px; border-radius: 12px;

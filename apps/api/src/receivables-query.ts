@@ -45,18 +45,21 @@ export type ReceivablesQueryOperation =
 export const receivablesColumnIds = [
   "financeDepartmentName", "contractNo", "projectName", "customerName", "creditorUnit", "debtStatus", "finalAmount",
   "invoicedAmount", "receivedAmount", "internalReceivable", "externalReceivable", "balance", "writeoffAmount",
-  "collectionOwner", "openingChargeDate", "anomaly", "updatedAt",
+  "collectionOwner", "openingChargeDate", "dunningDate", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan", "anomaly", "updatedAt",
 ] as const;
 export type ReceivablesColumnId = typeof receivablesColumnIds[number];
 export type ReceivablesColumnPreference = {
   order: ReceivablesColumnId[];
   visible: ReceivablesColumnId[];
   frozen: ReceivablesColumnId[];
+  widths: Record<ReceivablesColumnId, number>;
 };
+const defaultReceivablesColumnWidths = Object.fromEntries(receivablesColumnIds.map((id) => [id, id === "projectName" || id === "customerName" ? 240 : 150])) as Record<ReceivablesColumnId, number>;
 export const defaultReceivablesColumnPreference: ReceivablesColumnPreference = {
   order: [...receivablesColumnIds],
   visible: [...receivablesColumnIds],
   frozen: ["financeDepartmentName", "contractNo"],
+  widths: defaultReceivablesColumnWidths,
 };
 const receivablesColumnIdSchema = z.enum(receivablesColumnIds);
 const uniqueReceivablesColumnIds = z.array(receivablesColumnIdSchema).max(receivablesColumnIds.length).refine((items) => new Set(items).size === items.length, "列 ID 不得重复");
@@ -64,10 +67,27 @@ export const receivablesColumnPreferenceSchema = z.object({
   order: uniqueReceivablesColumnIds.refine((items) => items.length === receivablesColumnIds.length, "列顺序必须包含全部列"),
   visible: uniqueReceivablesColumnIds.min(1),
   frozen: uniqueReceivablesColumnIds,
+  widths: z.object(Object.fromEntries(receivablesColumnIds.map((id) => [id, z.number().int().min(80).max(id === "projectName" || id === "customerName" ? 600 : 420)]))).strict(),
 }).strict().superRefine((value, context) => {
   if (value.visible.some((id) => !value.order.includes(id))) context.addIssue({ code: "custom", message: "可见列必须包含在列顺序中", path: ["visible"] });
   if (value.frozen.some((id) => !value.visible.includes(id))) context.addIssue({ code: "custom", message: "冻结列必须为可见列", path: ["frozen"] });
-});
+}).transform((value) => value as ReceivablesColumnPreference);
+export function normalizeStoredReceivablesColumnPreference(value: unknown): ReceivablesColumnPreference {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const columnSet = new Set<string>(receivablesColumnIds);
+  const list = (key: "order" | "visible" | "frozen") => Array.isArray(record[key]) ? [...new Set(record[key].filter((id): id is ReceivablesColumnId => typeof id === "string" && columnSet.has(id)))] : [];
+  const order = [...list("order"), ...receivablesColumnIds.filter((id) => !list("order").includes(id))];
+  const visible = list("visible");
+  const effectiveVisible = visible.length ? visible : [...receivablesColumnIds];
+  const frozen = list("frozen").filter((id) => effectiveVisible.includes(id));
+  const rawWidths = record.widths && typeof record.widths === "object" && !Array.isArray(record.widths) ? record.widths as Record<string, unknown> : {};
+  const widths = Object.fromEntries(receivablesColumnIds.map((id) => {
+    const maximum = id === "projectName" || id === "customerName" ? 600 : 420;
+    const width = typeof rawWidths[id] === "number" && Number.isFinite(rawWidths[id]) ? rawWidths[id] : defaultReceivablesColumnWidths[id];
+    return [id, Math.max(80, Math.min(maximum, Math.round(width)))];
+  })) as Record<ReceivablesColumnId, number>;
+  return { order, visible: effectiveVisible, frozen, widths };
+}
 const receivablesColumnPreferenceKey = "receivables.columns.v1";
 export const receivablesReferenceCategories = ["project_status", "final_method", "debt_status", "client_attr", "unit", "work_nature", "sector", "comm_method", "feedback", "progress_note", "next_plan", "attach_category"] as const;
 
@@ -508,8 +528,7 @@ export async function getReceivablesColumnPreference(principal: Principal): Prom
       where: { accountId_key: { accountId: principal.accountId, key: receivablesColumnPreferenceKey } },
       select: { value: true },
     });
-    const parsed = receivablesColumnPreferenceSchema.safeParse(row?.value);
-    return parsed.success ? parsed.data : defaultReceivablesColumnPreference;
+    return row ? normalizeStoredReceivablesColumnPreference(row.value) : defaultReceivablesColumnPreference;
   });
 }
 

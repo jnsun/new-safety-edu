@@ -12,6 +12,7 @@ export type ReceivablesAccess = {
   canManageAccess: boolean;
   canImport: boolean;
   canExport: boolean;
+  canMaintainCollection: boolean;
   canViewAll: boolean;
   canConfirmSetup: boolean;
   canRecover: boolean;
@@ -71,6 +72,11 @@ export type ReceivablesLedgerRow = {
   debtStatus: string | null;
   collectionOwner: string | null;
   collectionNotes: string | null;
+  dunningDate: string | null;
+  communicationMethod: string | null;
+  counterpartyFeedback: string | null;
+  latestProgress: string | null;
+  nextPlan: string | null;
   status: "active" | "voided";
   revision: number;
   createdAt: string;
@@ -124,6 +130,7 @@ export type ReceivablesGrant = {
   canCreate: boolean;
   canExport: boolean;
   canViewAll: boolean;
+  canMaintainCollection: boolean;
   active: boolean;
   revision: number;
   grantedAt: string;
@@ -173,6 +180,11 @@ export type ReceivablesImportData = {
   debtStatus: string | null;
   collectionOwner: string | null;
   collectionNotes: string | null;
+  dunningDate: string | null;
+  communicationMethod: string | null;
+  counterpartyFeedback: string | null;
+  latestProgress: string | null;
+  nextPlan: string | null;
   openingInvoiceAmount: string | null;
   openingInvoiceDate: string | null;
   openingReceiptAmount: string | null;
@@ -238,18 +250,21 @@ export type ReceivablesExportPreview = {
 export const receivablesColumnIds = [
   "financeDepartmentName", "contractNo", "projectName", "customerName", "creditorUnit", "debtStatus", "finalAmount",
   "invoicedAmount", "receivedAmount", "internalReceivable", "externalReceivable", "balance", "writeoffAmount",
-  "collectionOwner", "openingChargeDate", "anomaly", "updatedAt",
+  "collectionOwner", "openingChargeDate", "dunningDate", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan", "anomaly", "updatedAt",
 ] as const;
 export type ReceivablesColumnId = typeof receivablesColumnIds[number];
 export type ReceivablesColumnPreference = {
   order: ReceivablesColumnId[];
   visible: ReceivablesColumnId[];
   frozen: ReceivablesColumnId[];
+  widths: Record<ReceivablesColumnId, number>;
 };
+export const defaultReceivablesColumnWidths = Object.fromEntries(receivablesColumnIds.map((id) => [id, id === "projectName" || id === "customerName" ? 240 : id === "latestProgress" || id === "nextPlan" ? 220 : 150])) as Record<ReceivablesColumnId, number>;
 export const defaultReceivablesColumnPreference: ReceivablesColumnPreference = {
   order: [...receivablesColumnIds],
   visible: [...receivablesColumnIds],
   frozen: ["financeDepartmentName", "contractNo"],
+  widths: defaultReceivablesColumnWidths,
 };
 
 const receivablesColumnIdSet = new Set<string>(receivablesColumnIds);
@@ -258,20 +273,22 @@ const uniqueColumnIds = (value: unknown): value is ReceivablesColumnId[] => Arra
   && value.every((item) => typeof item === "string" && receivablesColumnIdSet.has(item))
   && new Set(value).size === value.length;
 
+const defaultColumnPreference = () => ({ ...defaultReceivablesColumnPreference, order: [...receivablesColumnIds], visible: [...receivablesColumnIds], frozen: [...defaultReceivablesColumnPreference.frozen], widths: { ...defaultReceivablesColumnWidths } });
 export function normalizeReceivablesColumnPreference(value: unknown): ReceivablesColumnPreference {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...defaultReceivablesColumnPreference, order: [...receivablesColumnIds], visible: [...receivablesColumnIds], frozen: [...defaultReceivablesColumnPreference.frozen] };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return defaultColumnPreference();
   const record = value as Record<string, unknown>;
   const order = record.order;
   const visible = record.visible;
   const frozen = record.frozen;
-  const exactKeys = Object.keys(record).sort().join(",") === "frozen,order,visible";
-  if (!exactKeys || !uniqueColumnIds(order) || order.length !== receivablesColumnIds.length || !uniqueColumnIds(visible) || visible.length === 0 || !uniqueColumnIds(frozen)) {
-    return { ...defaultReceivablesColumnPreference, order: [...receivablesColumnIds], visible: [...receivablesColumnIds], frozen: [...defaultReceivablesColumnPreference.frozen] };
+  if (!uniqueColumnIds(order) || order.length !== receivablesColumnIds.length || !uniqueColumnIds(visible) || visible.length === 0 || !uniqueColumnIds(frozen)) {
+    return defaultColumnPreference();
   }
   if (visible.some((id) => !order.includes(id)) || frozen.some((id) => !visible.includes(id))) {
-    return { ...defaultReceivablesColumnPreference, order: [...receivablesColumnIds], visible: [...receivablesColumnIds], frozen: [...defaultReceivablesColumnPreference.frozen] };
+    return defaultColumnPreference();
   }
-  return { order: [...order], visible: [...visible], frozen: [...frozen] };
+  const rawWidths = record.widths && typeof record.widths === "object" && !Array.isArray(record.widths) ? record.widths as Record<string, unknown> : {};
+  const widths = Object.fromEntries(receivablesColumnIds.map((id) => [id, Math.max(80, Math.min(id === "projectName" || id === "customerName" ? 600 : 420, typeof rawWidths[id] === "number" && Number.isFinite(rawWidths[id]) ? rawWidths[id] : defaultReceivablesColumnWidths[id]))])) as Record<ReceivablesColumnId, number>;
+  return { order: [...order], visible: [...visible], frozen: [...frozen], widths };
 }
 
 export const receivablesQueryKey = (accountId: string, ...parts: readonly unknown[]) => ["receivables", accountId, ...parts] as const;
@@ -290,6 +307,7 @@ export function receivablesScopeFingerprint(access: ReceivablesAccess): string {
     canManageAccess: access.canManageAccess,
     canImport: access.canImport,
     canExport: access.canExport,
+    canMaintainCollection: access.canMaintainCollection,
     canViewAll: access.canViewAll,
     canConfirmSetup: access.canConfirmSetup,
     canRecover: access.canRecover,
@@ -314,13 +332,12 @@ export function receivablesPortalMode(access: Pick<ReceivablesAccess, "state" | 
   return access.state !== "ready" && access.canRecover ? "recover" : "hidden";
 }
 
-export type ReceivablesRoute = "dashboard" | "ledger" | "imports" | "exports" | "grants" | "departments" | "dictionaries" | "redirect";
+export type ReceivablesRoute = "dashboard" | "ledger" | "data" | "grants" | "departments" | "dictionaries" | "redirect";
 
 export function resolveReceivablesRoute(pathname: string): ReceivablesRoute {
   if (pathname === "/receivables" || pathname === "/receivables/") return "dashboard";
   if (pathname === "/receivables/ledger" || pathname === "/receivables/ledger/") return "ledger";
-  if (pathname === "/receivables/imports" || pathname === "/receivables/imports/") return "imports";
-  if (pathname === "/receivables/exports" || pathname === "/receivables/exports/") return "exports";
+  if (["/receivables/data", "/receivables/data/", "/receivables/imports", "/receivables/imports/", "/receivables/exports", "/receivables/exports/"].includes(pathname)) return "data";
   if (pathname === "/receivables/access" || pathname === "/receivables/access/") return "grants";
   if (pathname === "/receivables/departments" || pathname === "/receivables/departments/") return "departments";
   if (pathname === "/receivables/dictionaries" || pathname === "/receivables/dictionaries/") return "dictionaries";
@@ -332,8 +349,7 @@ export const receivablesNavigation = (access: ReceivablesAccess) => [
     { path: "/receivables", label: "应收账款看板" },
     { path: "/receivables/ledger", label: "应收账款台账" },
   ] : []),
-  ...(access.canImport ? [{ path: "/receivables/imports", label: "导入批次" }] : []),
-  ...(access.canExport ? [{ path: "/receivables/exports", label: "导出任务" }] : []),
+  ...(access.canCreateLedger || access.canImport || access.canExport ? [{ path: "/receivables/data", label: "数据处理" }] : []),
   ...(access.canManageAccess ? [{ path: "/receivables/access", label: "财务授权" }] : []),
   ...(access.canManageConfiguration ? [
     { path: "/receivables/departments", label: "财务归属部门" },
@@ -353,12 +369,13 @@ export function normalizeReceivablesGrantScopes(role: ReceivablesGrant["role"], 
   }));
 }
 
-export function normalizeReceivablesGrantDraft(role: ReceivablesGrant["role"], draft: { canCreate: boolean; canExport: boolean; canViewAll: boolean; departments: Array<{ departmentId: string; canRead: boolean; canWrite: boolean }> }) {
-  if (role === "admin") return { canCreate: false, canExport: false, canViewAll: false, departments: [] };
+export function normalizeReceivablesGrantDraft(role: ReceivablesGrant["role"], draft: { canCreate: boolean; canExport: boolean; canViewAll: boolean; canMaintainCollection?: boolean; departments: Array<{ departmentId: string; canRead: boolean; canWrite: boolean }> }) {
+  if (role === "admin") return { canCreate: false, canExport: false, canViewAll: false, canMaintainCollection: false, departments: [] };
   return {
     canCreate: role === "reporter" && draft.canCreate,
     canExport: draft.canExport,
     canViewAll: draft.canViewAll,
+    canMaintainCollection: role === "reporter" && !!draft.canMaintainCollection,
     departments: normalizeReceivablesGrantScopes(role, draft.departments),
   };
 }

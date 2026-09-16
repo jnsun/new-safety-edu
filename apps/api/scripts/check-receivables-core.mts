@@ -10,6 +10,8 @@ import {
   reporterCollectionFields,
   reporterPatchFields,
 } from "../src/receivables-core.js";
+import { defaultReceivablesColumnPreference, normalizeReceivablesColumnPreference, receivablesNavigation, resolveReceivablesRoute } from "../../admin/src/receivables-types.js";
+import { normalizeStoredReceivablesColumnPreference } from "../src/receivables-query.js";
 
 assert.equal(normalizeContractNo("  HT-001  "), "HT-001");
 assert.deepEqual(
@@ -71,5 +73,12 @@ assert.doesNotThrow(() => assertLedgerPatchAllowed(
 
 assert.throws(() => assertTransition("voided", "update"), /VOIDED_FACT_IMMUTABLE/);
 assert.doesNotThrow(() => assertTransition("active", "update"));
+
+assert.equal(resolveReceivablesRoute("/receivables/data"), "data");
+assert.equal(receivablesNavigation({ canEnter: true, canReadLedger: true, canCreateLedger: true, canImport: false, canExport: false, canManageAccess: false, canManageConfiguration: false } as never).some((item) => item.path === "/receivables/data"), true);
+assert.equal(normalizeReceivablesColumnPreference({ order: defaultReceivablesColumnPreference.order, visible: defaultReceivablesColumnPreference.visible, frozen: defaultReceivablesColumnPreference.frozen }).widths.projectName, defaultReceivablesColumnPreference.widths.projectName);
+assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, widths: { ...defaultReceivablesColumnPreference.widths, projectName: 99999 } }).widths.projectName, 600);
+assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).order[0], "contractNo");
+assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).widths.projectName, 240);
 
 console.log("RECEIVABLES_CORE_OK");
