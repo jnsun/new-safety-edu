@@ -17,7 +17,7 @@ const references = {
     { category: "work_nature", value: "综合物探", active: true },
     { category: "sector", value: "能源资源勘查开发", active: true },
   ],
-  ledgers: [{ id: "existing-ledger", contractNoNormalized: "HT-EXISTING", revision: 7 }],
+  ledgers: [{ id: "existing-ledger", contractNoNormalized: "HT-EXISTING", revision: 7, financeDepartmentId: "department-active" }],
 } as const;
 
 function workbook(headers: string[], rows: unknown[][]) {
@@ -60,11 +60,24 @@ const workload = parseReceivablesImportWorkbook(workbook(
 ), references);
 assert.deepEqual(codes(workload), []);
 assert.equal(workload.rows[0]?.normalizedData.finalAmount, null, "workload settlement may omit final amount");
+const workloadNullAmounts = parseReceivablesImportWorkbook(workbook(
+  ["财务归属部门", "合同编号", "决算方式", "合同金额", "决算金额"],
+  [["一所", "HT-WORKLOAD-NULL", "工作量", "", ""]],
+), references);
+assert.deepEqual(codes(workloadNullAmounts), [], "workload import may retain both amounts null");
+
+const inactiveHistory = parseReceivablesImportWorkbook(workbook(
+  ["财务归属部门", "合同编号", "项目名称"],
+  [["停用所", "HT-INACTIVE", "历史更正"]],
+), { ...references, ledgers: [{ id: "inactive-ledger", contractNoNormalized: "HT-INACTIVE", revision: 2, financeDepartmentId: "department-inactive" }] });
+assert.deepEqual(codes(inactiveHistory), [], "existing ledger may retain its inactive department during import update");
+assert.deepEqual(inactiveHistory.rows[0]?.allowedDecisions, ["skip", "update"]);
 
 const failures = [
   ["ambiguous alias", workbook(["合同号", "合同编号", "归属部门"], [["A", "B", "一所"]]), "AMBIGUOUS_COLUMN"],
   ["missing contract", workbook(["合同号", "归属部门"], [["", "一所"]]), "CONTRACT_NO_REQUIRED"],
   ["inactive department", workbook(["合同号", "归属部门"], [["A", "停用所"]]), "DEPARTMENT_INACTIVE"],
+  ["non-workload null amounts", workbook(["合同号", "归属部门", "决算方式", "合同金额", "决算金额"], [["A", "一所", "合同金额", "", ""]]), "FINAL_AMOUNT_REQUIRED"],
   ["unknown department", workbook(["合同号", "归属部门"], [["A", "不存在"]]), "DEPARTMENT_NOT_FOUND"],
   ["decimal scale", workbook(["合同号", "归属部门", "合同金额"], [["A", "一所", "1.00001"]]), "AMOUNT_INVALID"],
   ["invalid date", workbook(["合同号", "归属部门", "最新挂账时间"], [["A", "一所", "2026-02-30"]]), "DATE_INVALID"],

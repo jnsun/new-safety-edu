@@ -211,6 +211,8 @@ try {
   const revokeRaceGrant = await createGrant({ accountId: revokeRaceReporter.id, grantedBy: owner.id, role: "reporter", canCreate: true, departmentIds: [departmentA.id] });
   await createGrant({ accountId: readonly.id, grantedBy: owner.id, role: "readonly", departmentIds: [departmentA.id] });
 
+  const inactiveHistory = await prisma.receivableLedger.create({ data: { financeDepartmentId: inactiveDepartment.id, contractNo: `${marker}-inactive-history`, contractNoNormalized: `${marker}-inactive-history`, projectName: "history before", createdBy: owner.id } }); ids.ledgers.push(inactiveHistory.id);
+
   const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterNoCreate, reporterB, revokeRaceReporter, readonly, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
   await startServer();
 
@@ -225,6 +227,19 @@ try {
   assert.equal(autoDb.finalAmount?.toFixed(4), "123.4500", "non-workload create must carry omitted final from supplied contract amount");
   assert.equal(autoDb.projectName, "自动带入项目");
   assert.equal(autoDb.collectionNotes, "初始备注");
+
+  await expectStatus(`/api/receivables/ledgers/${inactiveHistory.id}`, tokens.admin!, 200, { method: "PATCH", body: jsonBody({ revision: 1, reason: "历史字段更正", financeDepartmentId: inactiveDepartment.id, projectName: "history admin" }) });
+  await expectStatus(`/api/receivables/ledgers/${inactiveHistory.id}`, tokens.owner!, 200, { method: "PATCH", body: jsonBody({ revision: 2, reason: "历史字段复核", financeDepartmentId: inactiveDepartment.id, collectionNotes: "history owner" }) });
+  const inactiveHistoryAfter = await prisma.receivableLedger.findUniqueOrThrow({ where: { id: inactiveHistory.id } });
+  assert.deepEqual({ projectName: inactiveHistoryAfter.projectName, collectionNotes: inactiveHistoryAfter.collectionNotes, financeDepartmentId: inactiveHistoryAfter.financeDepartmentId }, { projectName: "history admin", collectionNotes: "history owner", financeDepartmentId: inactiveDepartment.id });
+  await expectError(`/api/receivables/ledgers/${auto.id}`, tokens.owner!, 409, "RECEIVABLES_DEPARTMENT_INACTIVE", { method: "PATCH", body: jsonBody({ revision: 1, reason: "不得迁入停用归属", financeDepartmentId: inactiveDepartment.id }) });
+  const missingNonWorkloadCreate = await request<LedgerResponse>("/api/receivables/ledgers", tokens.admin!, { method: "POST", body: jsonBody({ financeDepartmentId: departmentA.id, contractNo: `${marker}-missing-nonworkload-amounts`, settlementMethod: "固定总价", contractAmount: null, finalAmount: null }) });
+  if (missingNonWorkloadCreate.body.data?.id) ids.ledgers.push(missingNonWorkloadCreate.body.data.id);
+  assert.equal(missingNonWorkloadCreate.response.status, 400, `POST missing non-workload amounts: ${JSON.stringify(missingNonWorkloadCreate.body)}`);
+  assert.equal(missingNonWorkloadCreate.body.error?.code, "RECEIVABLES_FINAL_AMOUNT_REQUIRED");
+  const workloadNullAmounts = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-workload-null-amounts`, settlementMethod: "按工作量结算", contractAmount: null, finalAmount: null });
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: workloadNullAmounts.id } })).finalAmount, null, "workload settlement may retain explicit null amounts");
+  await expectError(`/api/receivables/ledgers/${workloadNullAmounts.id}`, tokens.admin!, 400, "RECEIVABLES_FINAL_AMOUNT_REQUIRED", { method: "PATCH", body: jsonBody({ revision: 1, reason: "不得形成无金额固定总价", settlementMethod: "固定总价", contractAmount: null, finalAmount: null }) });
 
   const explicitNull = await createLedger(tokens.admin!, { financeDepartmentId: departmentA.id, contractNo: `${marker}-explicit-null`, settlementMethod: "固定总价", contractAmount: "9", finalAmount: null });
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: explicitNull.id } })).finalAmount?.toFixed(4), "9.0000", "non-workload explicit null create must carry final from contract amount");

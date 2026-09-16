@@ -11,6 +11,7 @@
 - 真实浏览器角色边界与 390×844 无页面级横向溢出通过；Windows 附件 mode 为 `NOT_PROVABLE`。
 - 验收宿主为 Node.js 24.19.0、PostgreSQL 17.11，尚未在目标 Node.js 22.x、PostgreSQL 16.x 复验。
 - 最终复审的 targeted RED/GREEN 已关闭四项缺口：待确认 owner 私有文件 fail closed、停用归属保留历史读写但禁止新归属、非工作量结算显式空决算按合同金额带入、view-all 跨归属详情能力只读。生产 list/count/dashboard/export SQL builders 未改变，因此本轮未重跑正式 50,000/500,000 capacity；这也不构成新的完整有序 FINAL。
+- FixRound2 又验证：表单 PATCH 重复提交原停用归属可继续更正历史，迁入停用归属仍拒绝；导入可更新同一停用归属的既有合同，但不可新建或改迁；非工作量结算若合同金额和决算金额同时显式为空则创建/更新 fail closed，仅工作量结算例外。本轮 ledger/import checks、真实 HTTP smokes、typecheck/build 与隔离 E2E 通过，仍不改变 `PARTIAL` 或切换禁令。
 - 因上述首败续跑、Windows 附件 mode 和目标运行时漂移，当前证据不满足本手册第 1、2 步准入条件；不得执行生产切换、重定向、部署或回退演练。
 
 ## 操作原则

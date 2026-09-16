@@ -13,7 +13,7 @@ import { writeCriticalAudit } from "./transaction-audit.js";
 export type ReceivablesImportReference = {
   departments: readonly { id: string; name: string; code: string | null; active: boolean }[];
   dictionaryOptions: readonly { category: string; value: string; active: boolean }[];
-  ledgers: readonly { id: string; contractNoNormalized: string; revision: number }[];
+  ledgers: readonly { id: string; contractNoNormalized: string; revision: number; financeDepartmentId: string }[];
 };
 
 export type ReceivablesImportIssue = {
@@ -207,6 +207,7 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     const contractNo = normalizeContractNo(raw.contractNo ?? "");
     normalizedData.contractNo = contractNo || null;
     if (!contractNo) rowErrors.push(issue("CONTRACT_NO_REQUIRED", "合同编号不能为空", { rowNumber, field: "contractNo" }));
+    const target = contractNo ? ledgerByContract.get(contractNo) : undefined;
 
     const departmentName = raw.financeDepartmentId?.trim() ?? "";
     const departmentCandidates = departmentByName.get(departmentName) ?? [];
@@ -214,7 +215,7 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     normalizedData.financeDepartmentId = department?.id ?? null;
     if (departmentCandidates.length > 1) rowErrors.push(issue("DEPARTMENT_AMBIGUOUS", "财务归属部门名称或编码映射不唯一", { rowNumber, field: "financeDepartmentId" }));
     else if (!department) rowErrors.push(issue("DEPARTMENT_NOT_FOUND", "财务归属部门不存在", { rowNumber, field: "financeDepartmentId" }));
-    else if (!department.active) rowErrors.push(issue("DEPARTMENT_INACTIVE", "财务归属部门已停用", { rowNumber, field: "financeDepartmentId" }));
+    else if (!department.active && target?.financeDepartmentId !== department.id) rowErrors.push(issue("DEPARTMENT_INACTIVE", "财务归属部门已停用", { rowNumber, field: "financeDepartmentId" }));
 
     for (const [field, category] of Object.entries(dictionaryCategories) as Array<[ReceivablesImportField, string]>) {
       const value = normalizedData[field];
@@ -223,13 +224,16 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     if (!normalizedData.finalAmount && normalizedData.contractAmount && !["工作量", "按工作量结算"].includes(normalizedData.settlementMethod ?? "")) {
       normalizedData.finalAmount = normalizedData.contractAmount;
     }
+    const amountFieldsPresent = ["settlementMethod", "contractAmount", "finalAmount"].some((field) => normalizedData.presentFields.includes(field));
+    if ((!target || amountFieldsPresent) && normalizedData.contractAmount === null && normalizedData.finalAmount === null && !["工作量", "按工作量结算"].includes(normalizedData.settlementMethod ?? "")) {
+      rowErrors.push(issue("FINAL_AMOUNT_REQUIRED", "非工作量结算必须提供合同金额或决算金额", { rowNumber, field: "finalAmount" }));
+    }
     if (normalizedData.openingInvoiceAmount && new Prisma.Decimal(normalizedData.openingInvoiceAmount).gt(0) && !normalizedData.openingInvoiceDate) {
       rowErrors.push(issue("OPENING_INVOICE_DATE_REQUIRED", "期初开票金额大于零时必须提供开票日期", { rowNumber, field: "openingInvoiceDate" }));
     }
     if (normalizedData.openingReceiptAmount && new Prisma.Decimal(normalizedData.openingReceiptAmount).gt(0) && !normalizedData.openingReceiptDate) {
       rowErrors.push(issue("OPENING_RECEIPT_DATE_REQUIRED", "期初到账金额大于零时必须提供到账日期", { rowNumber, field: "openingReceiptDate" }));
     }
-    const target = contractNo ? ledgerByContract.get(contractNo) : undefined;
     const openingTotals = [normalizedData.openingInvoiceAmount, normalizedData.openingReceiptAmount].some((amount) => amount !== null && new Prisma.Decimal(amount).gt(0));
     const rowWarnings = target && openingTotals ? [issue("EXISTING_OPENING_TOTALS_SKIP_ONLY", "已有合同含非零期初开票或到账金额，只能跳过", { rowNumber })] : [];
     rows.push({ rowNumber, normalizedData, errors: rowErrors, ledgerId: target?.id ?? null, targetRevision: target?.revision ?? null, allowedDecisions: target ? openingTotals ? ["skip"] : ["skip", "update"] : ["create"], warnings: rowWarnings });
@@ -275,7 +279,7 @@ async function references(db: Tx | typeof prisma): Promise<ReceivablesImportRefe
   const [departments, dictionaryOptions, ledgers] = await Promise.all([
     db.receivableDepartment.findMany({ select: { id: true, name: true, code: true, active: true } }),
     db.receivableDictionaryOption.findMany({ select: { category: true, value: true, active: true } }),
-    db.receivableLedger.findMany({ select: { id: true, contractNoNormalized: true, revision: true } }),
+    db.receivableLedger.findMany({ select: { id: true, contractNoNormalized: true, revision: true, financeDepartmentId: true } }),
   ]);
   return { departments, dictionaryOptions, ledgers };
 }
@@ -469,17 +473,18 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
         const row = reparsed.rows[index]!;
         if (stableJson(item.normalizedData) !== stableJson(row.normalizedData) || item.ledgerId !== row.ledgerId || item.targetRevision !== row.targetRevision) throw conflict("IMPORT_PREVIEW_STALE", "导入预览已失效");
       }
-      const lockedTargets = new Map((await tx.receivableLedger.findMany({ where: { id: { in: targets } }, select: { id: true, contractNoNormalized: true, revision: true, status: true } })).map((ledger) => [ledger.id, ledger]));
+      const lockedTargets = new Map((await tx.receivableLedger.findMany({ where: { id: { in: targets } }, select: { id: true, contractNoNormalized: true, revision: true, status: true, financeDepartmentId: true } })).map((ledger) => [ledger.id, ledger]));
       for (const item of batch.items.filter((candidate) => candidate.ledgerId)) {
         const target = lockedTargets.get(item.ledgerId!);
         if (!target || target.status !== "active" || target.revision !== item.targetRevision || target.contractNoNormalized !== item.contractNoNormalized) throw conflict("IMPORT_TARGET_CHANGED", "目标台账已变化");
       }
       for (const item of batch.items) {
         const data = item.normalizedData as unknown as ReceivablesImportData;
-        const department = await tx.receivableDepartment.findFirst({ where: { id: data.financeDepartmentId!, active: true }, select: { id: true } });
-        if (!department) throw conflict("IMPORT_PREVIEW_STALE", "财务归属部门已变化");
         const decision = item.ledgerId ? choice.get(item.rowNumber)! : "create";
         if (decision === "skip") { await tx.receivableImportItem.update({ where: { id: item.id }, data: { decision, result: "skipped", appliedRevision: item.targetRevision } }); continue; }
+        const department = await tx.receivableDepartment.findUnique({ where: { id: data.financeDepartmentId! }, select: { id: true, active: true } });
+        const target = item.ledgerId ? lockedTargets.get(item.ledgerId) : undefined;
+        if (!department || !department.active && target?.financeDepartmentId !== department.id) throw conflict("IMPORT_PREVIEW_STALE", "财务归属部门已变化");
         let ledger;
         let ledgerBefore: Prisma.InputJsonObject | null = null;
         if (!item.ledgerId) {

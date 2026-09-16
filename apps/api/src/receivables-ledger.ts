@@ -106,6 +106,10 @@ function normalizeFields(input: LedgerFields, current?: LedgerRow): Prisma.Recei
     const contractAmount = input.contractAmount === undefined ? current?.contractAmount : data.contractAmount;
     if (settlementMethod !== workloadSettlement && contractAmount !== null && contractAmount !== undefined) data.finalAmount = contractAmount;
   }
+  const effectiveSettlementMethod = input.settlementMethod === undefined ? current?.settlementMethod ?? null : data.settlementMethod;
+  if (input.contractAmount === null && input.finalAmount === null && effectiveSettlementMethod !== workloadSettlement) {
+    throw httpError(400, "RECEIVABLES_FINAL_AMOUNT_REQUIRED", "非工作量结算必须提供合同金额或决算金额");
+  }
   return data;
 }
 
@@ -124,9 +128,9 @@ async function lockLedgerAuthority(tx: LedgerTx, principal: Principal) {
   return resolveReceivablesAccess(principal, tx);
 }
 
-async function lockActiveDepartment(tx: LedgerTx, id: string) {
+async function lockActiveDepartment(tx: LedgerTx, id: string, currentId?: string) {
   const [department] = await tx.$queryRaw<Array<{ id: string; active: boolean }>>`SELECT id, active FROM receivable_departments WHERE id = ${id}::uuid FOR UPDATE`;
-  if (!department?.active) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "财务归属部门不存在或已停用");
+  if (!department || !department.active && currentId !== id) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "财务归属部门不存在或已停用");
 }
 
 function writeScope(access: ReceivablesAccess) {
@@ -191,9 +195,13 @@ async function updateLedger(context: ReceivablesLedgerContext, operation: Extrac
     return await prisma.$transaction(async (tx) => {
       const access = await lockLedgerAuthority(tx, context.principal);
       requireReceivables(access, "write");
-      if (operation.type === "patch" && operation.input.financeDepartmentId !== undefined) await lockActiveDepartment(tx, operation.input.financeDepartmentId);
+      const candidate = operation.type === "patch" && operation.input.financeDepartmentId !== undefined
+        ? await tx.receivableLedger.findFirst({ where: { id: operation.id, ...writeScope(access) }, select: { financeDepartmentId: true } })
+        : null;
+      if (operation.type === "patch" && operation.input.financeDepartmentId !== undefined) await lockActiveDepartment(tx, operation.input.financeDepartmentId, candidate?.financeDepartmentId);
       const before = await findWritableLedger(tx, access, operation.id);
       if (!before) throw notFound();
+      if (candidate && before.financeDepartmentId !== candidate.financeDepartmentId) throw revisionConflict();
       assertActive(before, operation.type);
       const fields = operation.type === "patch"
         ? Object.fromEntries(Object.entries(operation.input).filter(([field]) => field !== "revision" && field !== "reason"))

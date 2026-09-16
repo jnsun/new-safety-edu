@@ -145,6 +145,7 @@ try {
   const readonlyGrant = await prisma.receivableAccessGrant.create({ data: { accountId: readonly.id, grantedBy: owner.id, role: "readonly", departments: { create: { financeDepartmentId: department.id, canRead: true } } } });
   const viewAllGrant = await prisma.receivableAccessGrant.create({ data: { accountId: viewAll.id, grantedBy: owner.id, role: "readonly", canViewAll: true } }); ids.grants.push(readonlyGrant.id, viewAllGrant.id);
   const existing = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-existing`, contractNoNormalized: `${marker}-existing`, projectName: "before", collectionNotes: "preserve", contractAmount: "5.0000", finalAmount: "5.0000", createdBy: owner.id } });
+  const inactiveExisting = await prisma.receivableLedger.create({ data: { financeDepartmentId: inactive.id, contractNo: `${marker}-inactive-existing`, contractNoNormalized: `${marker}-inactive-existing`, projectName: "inactive before", createdBy: owner.id } });
   const skipped = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-skipped`, contractNoNormalized: `${marker}-skipped`, projectName: "unchanged", createdBy: owner.id } });
   const openingExisting = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-opening-existing`, contractNoNormalized: `${marker}-opening-existing`, projectName: "opening-before", createdBy: owner.id } });
   const [bearer, adminBearer, reporterBearer, readonlyBearer, viewAllBearer, recoveryBearer] = await Promise.all([token(owner.id), token(admin.id), token(reporter.id), token(readonly.id), token(viewAll.id), token(recovery.id)]);
@@ -158,10 +159,19 @@ try {
 
   const bad = await preview(bearer, await workbook([[department.name, "", "bad"], [inactive.name, `${marker}-bad`, "bad"]]));
   assert.equal(bad.response.status, 201); assert.ok(bad.body.data.errors.length >= 2);
+  assert.ok(bad.body.data.errors.some((error: any) => error.code === "DEPARTMENT_INACTIVE"), "new inactive-department assignment must remain blocked");
   const ledgersBeforeBadApply = await prisma.receivableLedger.count({ where: { contractNoNormalized: { startsWith: marker } } });
   const badApply = await post(`/api/receivables/imports/${bad.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [] });
   assert.equal(badApply.response.status, 422); assert.equal(badApply.body.error?.code, "IMPORT_HAS_BLOCKING_ERRORS");
   assert.equal(await prisma.receivableLedger.count({ where: { contractNoNormalized: { startsWith: marker } } }), ledgersBeforeBadApply, "failed batch wrote business facts");
+
+  const inactiveHistoryPreview = await preview(adminBearer, await customWorkbook(["归属部门", "合同编号", "项目名称"], [[inactive.name, inactiveExisting.contractNo, "inactive after"]]));
+  assert.equal(inactiveHistoryPreview.response.status, 201, JSON.stringify(inactiveHistoryPreview.body));
+  assert.deepEqual(inactiveHistoryPreview.body.data.errors, [], "same-department inactive history must be updateable");
+  const inactiveHistoryApply = await post(`/api/receivables/imports/${inactiveHistoryPreview.body.data.batchId}/apply`, adminBearer, { revision: inactiveHistoryPreview.body.data.revision, decisions: [{ rowNumber: 2, decision: "update" }] });
+  assert.equal(inactiveHistoryApply.response.status, 200, JSON.stringify(inactiveHistoryApply.body));
+  const inactiveExistingAfter = await prisma.receivableLedger.findUniqueOrThrow({ where: { id: inactiveExisting.id } });
+  assert.deepEqual({ projectName: inactiveExistingAfter.projectName, financeDepartmentId: inactiveExistingAfter.financeDepartmentId }, { projectName: "inactive after", financeDepartmentId: inactive.id });
 
   const valid = await preview(adminBearer, await workbook([
     [department.name, `${marker}-new`, "new", "合同金额", "100.0000", "", "20.0000", "2026-09-01", "3.0000", "2026-09-02"],

@@ -158,4 +158,6 @@
 - 本次运行环境实际为 Node.js 24.19.0、PostgreSQL 17.11，与目标 Node.js 22/PostgreSQL 16 不同；目标运行时复验仍缺失。
 - 最终复审又修复四处授权/金额语义缺口：待确认 owner 的财务私有文件访问现同时要求 `canReadLedger`；停用财务归属保留既有台账的历史读写，仅创建/导入的新归属选择继续排除；非工作量结算显式 `finalAmount:null` 在创建和更新时均按合同金额带入；view-all 报账员查看非写入归属时详情及附件能力收敛为只读。上述修复由真实 HTTP 文件访问、查询、金额、附件和台账 smoke 的逐项 RED/GREEN 覆盖。
 - 本轮未重跑正式 50,000/500,000 capacity：生产 list row/count、dashboard totals、export batch 的 SQL builders 未改变，仅删除查询范围对停用部门的二次过滤。该轮是复审后的 targeted 验证，不构成一套新的无中断 FINAL。
+- FixRound2 继续关闭停用归属的历史分支：普通 PATCH 携带未变化的停用 `financeDepartmentId` 时，负责人和财务管理员仍可更正其他历史字段；仅将台账迁入停用归属继续返回冲突。导入按合同号命中且目标台账本就属于同一停用归属时允许历史字段更新，新建或改迁至停用归属仍为阻断错误。
+- 非工作量结算同时显式提交空合同金额和空决算金额时，创建与更新均以 `RECEIVABLES_FINAL_AMOUNT_REQUIRED` fail closed；仅工作量结算允许两者为空，非空合同金额自动带入决算金额的既有规则保持。导入的新建或金额变更行执行相同约束。FixRound2 的 ledger/import checks、真实 HTTP smokes、全仓 typecheck/build 与隔离 E2E 通过，但仍只是 targeted 复审证据。
 - 因 Windows 附件 mode `NOT_PROVABLE`、目标运行时漂移，以及有序 FINAL 曾在金额 smoke 首败后续跑，本规格总体保持 `PARTIAL`，不得标记完整 FINAL PASS、生产就绪、部署完成或切换获批。
