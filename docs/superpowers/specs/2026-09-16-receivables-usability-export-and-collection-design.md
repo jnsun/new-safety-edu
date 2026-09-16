@@ -344,3 +344,14 @@ revision 不匹配返回 409，不自动覆盖他人修改。附件仍使用现�
 8. 专项、全量和目标运行时发布门。
 
 每一步复用现有模块边界，避免为了本轮需求提前建设通用框架。
+
+## 14. 实施验收记录（2026-09-16）
+
+状态：`PARTIAL / READY FOR TARGET-RUNTIME VALIDATION`
+
+- 功能提交依次为 `09dd2b5`（催收字段与权限）、`b641b79`（字典事务性改名）、`7552dba`（分类预览与单工作表导出）和 `d1b4424`（数据处理页、列宽与关闭路径）。
+- 本机 Node.js 24.19.0 下，`pnpm check:receivables-core`、全仓 `pnpm typecheck`、`pnpm --filter @safety/admin build` 和 Impeccable UI 机械检查均通过；管理端构建仅保留既有的大包体提示。
+- 开发规模容量检查已在名称受保护的隔离库完成：401 份台账、4,010 条明细，查询、导出与清理断言通过且零残留。该结果不是正式 50,000/500,000 容量门。
+- 集成验收按计划从 `pnpm db:validate` 开始，并在首项因当前终端缺少 `DATABASE_URL`（Prisma `P1012`）立即停止；没有跳过失败继续执行，也没有把此前定向检查记作完整集成 PASS。
+- 当前主机可见运行时为 Node.js 24.19.0、PostgreSQL 17；未发现可用的 Node.js 22、PostgreSQL 16 或本轮专用隔离数据库连接。因此桌面/窄屏浏览器数据流验收和一次干净连续的目标运行时 FINAL 尚未执行。
+- 唯一下一步：在 Node.js 22 + PostgreSQL 16 的全新隔离数据库环境中，为本提交设置专用 `DATABASE_URL`，从计划 Task 5 Step 1 重新开始，并在任何首错处停止。
