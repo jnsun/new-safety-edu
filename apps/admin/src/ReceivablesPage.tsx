@@ -7,8 +7,11 @@ import { ReceivablesLedger } from "./ReceivablesLedger";
 import {
   formatReceivablesMoney,
   receivablesQueryKey,
+  receivablesScopedQueryKey,
+  receivablesScopeFingerprint,
   resolveReceivablesRoute,
   usableReceivablesAccess,
+  usableReceivablesData,
   type ReceivablesAccess,
   type ReceivablesDashboardResponse,
   type ReceivablesFilters,
@@ -36,7 +39,7 @@ function queryString(filters: Record<string, string | undefined>) {
   return query.toString();
 }
 
-function ReceivablesDashboard({ accountId }: { accountId: string }) {
+function ReceivablesDashboard({ accountId, scopeFingerprint }: { accountId: string; scopeFingerprint: string }) {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<{
     status: NonNullable<ReceivablesFilters["status"]>;
@@ -48,19 +51,20 @@ function ReceivablesDashboard({ accountId }: { accountId: string }) {
     return `/api/receivables/dashboard${search ? `?${search}` : ""}`;
   }, [filters]);
   const dashboard = useQuery({
-    queryKey: receivablesQueryKey(accountId, "dashboard", filters),
+    queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "dashboard", filters),
     queryFn: () => api<ReceivablesDashboardResponse>(requestPath),
     retry: false,
   });
-  const amountCards = dashboard.data ? [
-    ["台账数量", String(dashboard.data.amounts.activeLedgerCount)],
-    ["决算金额", formatReceivablesMoney(dashboard.data.amounts.finalAmount)],
-    ["开票金额", formatReceivablesMoney(dashboard.data.amounts.invoicedAmount)],
-    ["到账金额", formatReceivablesMoney(dashboard.data.amounts.receivedAmount)],
-    ["账内应收", formatReceivablesMoney(dashboard.data.amounts.internalReceivable)],
-    ["账外应收", formatReceivablesMoney(dashboard.data.amounts.externalReceivable)],
-    ["应收余额", formatReceivablesMoney(dashboard.data.amounts.balance)],
-    ["核销金额", formatReceivablesMoney(dashboard.data.amounts.writeoffAmount)],
+  const currentDashboard = usableReceivablesData(dashboard);
+  const amountCards = currentDashboard ? [
+    ["台账数量", String(currentDashboard.amounts.activeLedgerCount)],
+    ["决算金额", formatReceivablesMoney(currentDashboard.amounts.finalAmount)],
+    ["开票金额", formatReceivablesMoney(currentDashboard.amounts.invoicedAmount)],
+    ["到账金额", formatReceivablesMoney(currentDashboard.amounts.receivedAmount)],
+    ["账内应收", formatReceivablesMoney(currentDashboard.amounts.internalReceivable)],
+    ["账外应收", formatReceivablesMoney(currentDashboard.amounts.externalReceivable)],
+    ["应收余额", formatReceivablesMoney(currentDashboard.amounts.balance)],
+    ["核销金额", formatReceivablesMoney(currentDashboard.amounts.writeoffAmount)],
   ] as const : [];
 
   return (
@@ -105,9 +109,9 @@ function ReceivablesDashboard({ accountId }: { accountId: string }) {
           </Form.Item>
         </Form>
       </Card>
-      {dashboard.isLoading && <div className="receivables-state"><Spin tip="正在加载应收账款看板…" /></div>}
+      {dashboard.isFetching && <div className="receivables-state"><Spin tip="正在加载应收账款看板…" /></div>}
       {dashboard.isError && <Alert type="error" showIcon message="看板加载失败" description="未显示任何财务数据，请检查网络或权限后重试。" action={<Button onClick={() => void dashboard.refetch()}>重试</Button>} />}
-      {dashboard.data && (
+      {currentDashboard && (
         <>
           <Row gutter={[16, 16]}>
             {amountCards.map(([label, value]) => (
@@ -127,7 +131,7 @@ function ReceivablesDashboard({ accountId }: { accountId: string }) {
                   size="small"
                   pagination={false}
                   locale={{ emptyText: "当前筛选下没有状态分组" }}
-                  dataSource={dashboard.data.statuses}
+                  dataSource={currentDashboard.statuses}
                   columns={[{ title: "状态", dataIndex: "value", render: (value: string | null) => value === "active" ? "有效" : value === "voided" ? "已作废" : "未设置" }, { title: "数量", dataIndex: "count", align: "right" }]}
                 />
               </Card>
@@ -139,7 +143,7 @@ function ReceivablesDashboard({ accountId }: { accountId: string }) {
                   size="small"
                   pagination={false}
                   locale={{ emptyText: "当前筛选下没有待核对事项" }}
-                  dataSource={dashboard.data.anomalies}
+                  dataSource={currentDashboard.anomalies}
                   columns={[{ title: "事项", dataIndex: "value", render: (value: keyof typeof anomalyLabels | null) => value ? anomalyLabels[value] : "无异常" }, { title: "数量", dataIndex: "count", align: "right" }]}
                 />
               </Card>
@@ -172,5 +176,6 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
   if (access.isFetching) return <div className="receivables-state"><Spin tip="正在核验应收账款权限…" /></div>;
   if (access.isError || !currentAccess) return <Result status="error" title="权限核验失败" subTitle="未显示任何财务数据。请重新登录或稍后重试。" extra={<Button onClick={() => void access.refetch()}>重新核验</Button>} />;
   if (!currentAccess.canEnter || !currentAccess.canReadLedger) return <AccessState access={currentAccess} />;
-  return route === "ledger" ? <ReceivablesLedger accountId={accountId} /> : <ReceivablesDashboard accountId={accountId} />;
+  const scopeFingerprint = receivablesScopeFingerprint(currentAccess);
+  return route === "ledger" ? <ReceivablesLedger accountId={accountId} scopeFingerprint={scopeFingerprint} /> : <ReceivablesDashboard accountId={accountId} scopeFingerprint={scopeFingerprint} />;
 }

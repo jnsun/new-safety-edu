@@ -148,8 +148,36 @@ export function normalizeReceivablesColumnPreference(value: unknown): Receivable
 
 export const receivablesQueryKey = (accountId: string, ...parts: readonly unknown[]) => ["receivables", accountId, ...parts] as const;
 
-export function usableReceivablesAccess<T>(query: { data: T | undefined; isFetching: boolean; isError: boolean }): T | undefined {
+export function receivablesScopeFingerprint(access: ReceivablesAccess): string {
+  return JSON.stringify({
+    state: access.state,
+    role: access.role,
+    canEnter: access.canEnter,
+    canReadLedger: access.canReadLedger,
+    canWriteLedger: access.canWriteLedger,
+    canManageAll: access.canManageAll,
+    canCreateLedger: access.canCreateLedger,
+    canManageMoney: access.canManageMoney,
+    canManageConfiguration: access.canManageConfiguration,
+    canManageAccess: access.canManageAccess,
+    canImport: access.canImport,
+    canExport: access.canExport,
+    canViewAll: access.canViewAll,
+    canConfirmSetup: access.canConfirmSetup,
+    canRecover: access.canRecover,
+    readDepartmentIds: [...access.readDepartmentIds].sort(),
+    writeDepartmentIds: [...access.writeDepartmentIds].sort(),
+  });
+}
+
+export const receivablesScopedQueryKey = (accountId: string, scopeFingerprint: string, ...parts: readonly unknown[]) => receivablesQueryKey(accountId, "scope", scopeFingerprint, ...parts);
+
+export function usableReceivablesData<T>(query: { data: T | undefined; isFetching: boolean; isError: boolean }): T | undefined {
   return query.isFetching || query.isError ? undefined : query.data;
+}
+
+export function usableReceivablesAccess<T>(query: { data: T | undefined; isFetching: boolean; isError: boolean }): T | undefined {
+  return usableReceivablesData(query);
 }
 
 export function receivablesPortalMode(access: Pick<ReceivablesAccess, "state" | "canEnter" | "canRecover">): "enabled" | "recover" | "hidden" {

@@ -10,6 +10,8 @@ import {
   formatReceivablesMoney,
   normalizeReceivablesColumnPreference,
   receivablesQueryKey,
+  receivablesScopedQueryKey,
+  usableReceivablesData,
   type ReceivablesColumnId,
   type ReceivablesColumnPreference,
   type ReceivablesLedgerDetail,
@@ -87,7 +89,7 @@ function ColumnSettings({ value, onChange, onSave, saving }: { value: Receivable
   );
 }
 
-export function ReceivablesLedger({ accountId }: { accountId: string }) {
+export function ReceivablesLedger({ accountId, scopeFingerprint }: { accountId: string; scopeFingerprint: string }) {
   const queryClient = useQueryClient();
   const [state, setState] = useState<ListState>({ page: 1, pageSize: 50, status: "active", settlement: "unsettled", financeDepartmentId: undefined, debtStatus: undefined, creditorUnit: undefined, anomaly: undefined, search: undefined, sort: "updatedAt", order: "desc" });
   const [search, setSearch] = useState("");
@@ -96,7 +98,8 @@ export function ReceivablesLedger({ accountId }: { accountId: string }) {
   const [preference, setPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference);
   const [draftPreference, setDraftPreference] = useState<ReceivablesColumnPreference>(defaultReceivablesColumnPreference);
   const requestPath = useMemo(() => listPath(state), [state]);
-  const ledgers = useQuery({ queryKey: receivablesQueryKey(accountId, "ledgers", state), queryFn: () => api<ReceivablesLedgerListResponse>(requestPath), retry: false });
+  const ledgers = useQuery({ queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledgers", state), queryFn: () => api<ReceivablesLedgerListResponse>(requestPath), retry: false });
+  const currentLedgers = usableReceivablesData(ledgers);
   const preferenceQuery = useQuery({ queryKey: receivablesQueryKey(accountId, "preferences", "columns"), queryFn: async () => normalizeReceivablesColumnPreference(await api<unknown>("/api/receivables/preferences/columns")), retry: false });
   useEffect(() => {
     if (!preferenceQuery.data) return;
@@ -114,11 +117,12 @@ export function ReceivablesLedger({ accountId }: { accountId: string }) {
     onError: (error) => message.error(`列设置保存失败：${(error as Error).message}`),
   });
   const detail = useQuery({
-    queryKey: receivablesQueryKey(accountId, "ledger", selectedId),
+    queryKey: receivablesScopedQueryKey(accountId, scopeFingerprint, "ledger", selectedId),
     queryFn: () => api<ReceivablesLedgerDetail>(`/api/receivables/ledgers/${selectedId}`),
     enabled: !!selectedId,
     retry: false,
   });
+  const currentDetail = usableReceivablesData(detail);
 
   const sortProperty = (id: ReceivablesColumnId) => state.sort === id ? { sortOrder: state.order === "asc" ? "ascend" as const : "descend" as const } : {};
   const moneyColumn = (id: ReceivablesColumnId): TableColumnType<ReceivablesLedgerRow> => ({
@@ -168,8 +172,8 @@ export function ReceivablesLedger({ accountId }: { accountId: string }) {
           </Form.Item>
           <Form.Item label="结清状态"><Select aria-label="结清状态" value={state.settlement} style={{ width: 124 }} options={[{ value: "unsettled", label: "未结" }, { value: "settled", label: "已结清" }, { value: "all", label: "全部" }]} onChange={(settlement) => setState((current) => ({ ...current, page: 1, settlement }))} /></Form.Item>
           <Form.Item label="记录状态"><Select aria-label="记录状态" value={state.status} style={{ width: 124 }} options={[{ value: "active", label: "有效" }, { value: "voided", label: "已作废" }, { value: "all", label: "全部" }]} onChange={(status) => setState((current) => ({ ...current, page: 1, status }))} /></Form.Item>
-          <Form.Item label="归属部门"><Select allowClear aria-label="财务归属部门" value={state.financeDepartmentId ?? null} style={{ width: 180 }} placeholder="全部部门" options={(ledgers.data?.facets.departments ?? []).map((item) => ({ value: item.value!, label: item.name }))} onChange={(financeDepartmentId) => setState((current) => ({ ...current, page: 1, financeDepartmentId }))} /></Form.Item>
-          <Form.Item label="债权状态"><Select allowClear aria-label="债权状态" value={state.debtStatus ?? null} style={{ width: 150 }} placeholder="全部状态" options={(ledgers.data?.facets.debtStatuses ?? []).filter((item) => item.value).map((item) => ({ value: item.value!, label: item.value! }))} onChange={(debtStatus) => setState((current) => ({ ...current, page: 1, debtStatus }))} /></Form.Item>
+          <Form.Item label="归属部门"><Select allowClear aria-label="财务归属部门" value={state.financeDepartmentId ?? null} style={{ width: 180 }} placeholder="全部部门" options={(currentLedgers?.facets.departments ?? []).map((item) => ({ value: item.value!, label: item.name }))} onChange={(financeDepartmentId) => setState((current) => ({ ...current, page: 1, financeDepartmentId }))} /></Form.Item>
+          <Form.Item label="债权状态"><Select allowClear aria-label="债权状态" value={state.debtStatus ?? null} style={{ width: 150 }} placeholder="全部状态" options={(currentLedgers?.facets.debtStatuses ?? []).filter((item) => item.value).map((item) => ({ value: item.value!, label: item.value! }))} onChange={(debtStatus) => setState((current) => ({ ...current, page: 1, debtStatus }))} /></Form.Item>
           <Form.Item label="待核对"><Select allowClear aria-label="待核对事项" value={state.anomaly ?? null} style={{ width: 160 }} placeholder="全部事项" options={Object.entries(anomalyLabels).map(([value, label]) => ({ value, label }))} onChange={(anomaly) => setState((current) => ({ ...current, page: 1, anomaly }))} /></Form.Item>
         </Form>
       </Card>
@@ -177,12 +181,12 @@ export function ReceivablesLedger({ accountId }: { accountId: string }) {
       <div className="receivables-table-region" role="region" aria-label="应收账款宽表" tabIndex={0}>
         <Table<ReceivablesLedgerRow>
           rowKey="id"
-          loading={ledgers.isLoading}
-          dataSource={ledgers.data?.rows ?? []}
+          loading={ledgers.isFetching}
+          dataSource={currentLedgers?.rows ?? []}
           columns={columns}
           scroll={{ x: "max-content" }}
-          locale={{ emptyText: ledgers.isLoading ? "正在加载台账…" : "当前筛选下没有台账记录" }}
-          pagination={{ current: ledgers.data?.page ?? state.page, pageSize: ledgers.data?.pageSize ?? state.pageSize, total: ledgers.data?.total ?? 0, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], showTotal: (total) => `共 ${total} 条` }}
+          locale={{ emptyText: ledgers.isFetching ? "正在加载台账…" : "当前筛选下没有台账记录" }}
+          pagination={{ current: currentLedgers?.page ?? state.page, pageSize: currentLedgers?.pageSize ?? state.pageSize, total: currentLedgers?.total ?? 0, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], showTotal: (total) => `共 ${total} 条` }}
           onChange={onTableChange}
         />
       </div>
@@ -190,25 +194,25 @@ export function ReceivablesLedger({ accountId }: { accountId: string }) {
         <ColumnSettings value={draftPreference} onChange={setDraftPreference} onSave={() => savePreference.mutate()} saving={savePreference.isPending} />
       </Modal>
       <Drawer title="台账详情" width={720} open={!!selectedId} onClose={() => setSelectedId(null)} destroyOnClose>
-        {detail.isLoading && <Typography.Text type="secondary">正在加载详情…</Typography.Text>}
+        {detail.isFetching && <Typography.Text type="secondary">正在加载详情…</Typography.Text>}
         {detail.isError && <Alert type="error" showIcon message="详情加载失败" description="记录可能已不存在或当前账号已失去读取权限。" />}
-        {detail.data && (
+        {currentDetail && (
           <Space direction="vertical" size="large" className="receivables-detail">
             <Descriptions bordered size="small" column={2} items={[
-              { key: "contract", label: "合同编号", children: detail.data.ledger.contractNo },
-              { key: "department", label: "财务归属部门", children: detail.data.ledger.financeDepartmentName },
-              { key: "project", label: "项目名称", children: plain(detail.data.ledger.projectName) },
-              { key: "customer", label: "客户名称", children: plain(detail.data.ledger.customerName) },
-              { key: "final", label: "决算金额", children: formatReceivablesMoney(detail.data.ledger.finalAmount) },
-              { key: "invoice", label: "开票金额", children: formatReceivablesMoney(detail.data.ledger.invoicedAmount) },
-              { key: "receipt", label: "到账金额", children: formatReceivablesMoney(detail.data.ledger.receivedAmount) },
-              { key: "balance", label: "应收余额", children: formatReceivablesMoney(detail.data.ledger.balance) },
-              { key: "owner", label: "清收责任人", children: plain(detail.data.ledger.collectionOwner) },
-              { key: "notes", label: "催收备注", children: plain(detail.data.ledger.collectionNotes), span: 2 },
+              { key: "contract", label: "合同编号", children: currentDetail.ledger.contractNo },
+              { key: "department", label: "财务归属部门", children: currentDetail.ledger.financeDepartmentName },
+              { key: "project", label: "项目名称", children: plain(currentDetail.ledger.projectName) },
+              { key: "customer", label: "客户名称", children: plain(currentDetail.ledger.customerName) },
+              { key: "final", label: "决算金额", children: formatReceivablesMoney(currentDetail.ledger.finalAmount) },
+              { key: "invoice", label: "开票金额", children: formatReceivablesMoney(currentDetail.ledger.invoicedAmount) },
+              { key: "receipt", label: "到账金额", children: formatReceivablesMoney(currentDetail.ledger.receivedAmount) },
+              { key: "balance", label: "应收余额", children: formatReceivablesMoney(currentDetail.ledger.balance) },
+              { key: "owner", label: "清收责任人", children: plain(currentDetail.ledger.collectionOwner) },
+              { key: "notes", label: "催收备注", children: plain(currentDetail.ledger.collectionNotes), span: 2 },
             ]} />
-            <Card size="small" title="开票明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无开票明细" }} dataSource={detail.data.invoices} columns={[{ title: "日期", dataIndex: "invoiceDate", render: formatReceivablesDate }, { title: "发票号", dataIndex: "invoiceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
-            <Card size="small" title="回款明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无回款明细" }} dataSource={detail.data.receipts} columns={[{ title: "日期", dataIndex: "receiptDate", render: formatReceivablesDate }, { title: "凭证号", dataIndex: "referenceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
-            <Card size="small" title="附件"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无附件" }} dataSource={detail.data.attachments} columns={[{ title: "文件名", dataIndex: ["file", "originalName"] }, { title: "分类", dataIndex: "category" }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
+            <Card size="small" title="开票明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无开票明细" }} dataSource={currentDetail.invoices} columns={[{ title: "日期", dataIndex: "invoiceDate", render: formatReceivablesDate }, { title: "发票号", dataIndex: "invoiceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
+            <Card size="small" title="回款明细"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无回款明细" }} dataSource={currentDetail.receipts} columns={[{ title: "日期", dataIndex: "receiptDate", render: formatReceivablesDate }, { title: "凭证号", dataIndex: "referenceNo", render: plain }, { title: "金额", dataIndex: "amount", align: "right", render: formatReceivablesMoney }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
+            <Card size="small" title="附件"><Table rowKey="id" size="small" pagination={false} locale={{ emptyText: "暂无附件" }} dataSource={currentDetail.attachments} columns={[{ title: "文件名", dataIndex: ["file", "originalName"] }, { title: "分类", dataIndex: "category" }, { title: "状态", dataIndex: "status", render: (value) => value === "active" ? "有效" : "已作废" }]} /></Card>
           </Space>
         )}
       </Drawer>
