@@ -33,6 +33,7 @@ type AccessResponse = {
   canCreateLedger: boolean;
   canExport: boolean;
   canViewAll: boolean;
+  canManageConfiguration: boolean;
   canConfirmSetup: boolean;
   canRecover: boolean;
   readDepartmentIds: string[];
@@ -248,7 +249,11 @@ try {
   const pendingOwner = await access(tokens.owner!);
   assert.equal(pendingOwner.body.data?.role, "owner");
   assert.equal(pendingOwner.body.data?.canConfirmSetup, true);
+  assert.equal(pendingOwner.body.data?.canManageConfiguration, true);
   assert.equal(pendingOwner.body.data?.canEnter, false);
+  assert.equal((await request("/api/receivables/departments", tokens.owner!)).status, 200, "pending owner must be able to review finance departments");
+  assert.equal((await request("/api/receivables/dictionary-options", tokens.owner!)).status, 200, "pending owner must be able to review seeded dictionaries");
+  assert.equal((await request("/api/receivables/ledgers", tokens.owner!)).status, 403, "pending owner must not read ledger data before confirmation");
   assert.equal((await access(tokens.financeAdmin!)).body.data?.canEnter, false);
   assert.equal((await request("/api/receivables/setup/confirm", tokens.companyAdmin!, { method: "POST", body: "{}" })).status, 403);
   assert.equal((await request("/api/receivables/setup/confirm", tokens.financeAdmin!, { method: "POST", body: "{}" })).status, 403);

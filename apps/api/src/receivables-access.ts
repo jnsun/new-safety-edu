@@ -100,7 +100,7 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
 
   if (!activeIdentity) return denied;
   if (facts.isBoundOrgLeader && state === "pending_confirmation") {
-    return { ...denied, role: "owner", canConfirmSetup: true };
+    return { ...denied, role: "owner", canManageConfiguration: true, canConfirmSetup: true };
   }
   if (state !== "ready") return denied;
 

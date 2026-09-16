@@ -6,7 +6,7 @@ import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import { administerReceivables } from "../receivables-admin.js";
 import { requireReceivables, resolveReceivablesAccess } from "../receivables-access.js";
-import { getReceivablesColumnPreference, queryReceivables, receivablesColumnPreferenceSchema, saveReceivablesColumnPreference } from "../receivables-query.js";
+import { getReceivablesColumnPreference, getReceivablesReferenceData, queryReceivables, receivablesColumnPreferenceSchema, saveReceivablesColumnPreference } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
 import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
@@ -98,6 +98,7 @@ const attachmentVoidInput = z.object({ ledgerRevision: z.number().int().positive
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() }).strict();
 const importApplyInput = z.object({ revision: z.number().int().positive(), decisions: z.array(z.object({ rowNumber: z.number().int().min(2), decision: z.enum(["skip", "update"]) }).strict()).max(200_000) }).strict();
 const importRollbackInput = z.object({ revision: z.number().int().positive(), reason: reasonInput }).strict();
+const grantCandidateInput = z.object({ search: z.string().trim().min(2).max(80) }).strict();
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
 const lockReceivablesSetup = (tx: Prisma.TransactionClient) => tx.$queryRaw`SELECT 'locked'::text AS locked FROM pg_advisory_xact_lock(${setupLockKey})`;
@@ -174,6 +175,7 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.put("/api/receivables/preferences/columns", { preHandler: deps.authenticate }, async (request) => ({
     data: await saveReceivablesColumnPreference(request.principal as Principal, receivablesColumnPreferenceSchema.parse(request.body)),
   }));
+  app.get("/api/receivables/reference-data", { preHandler: deps.authenticate }, async (request) => ({ data: await getReceivablesReferenceData(request.principal as Principal) }));
   app.get("/api/receivables/exports", { preHandler: deps.authenticate }, async (request) => ({
     data: await listReceivablesExports(request.principal as Principal, receivablesExportListInput.parse(request.query), exportEnvironment),
   }));
@@ -264,6 +266,10 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.patch("/api/receivables/ledgers/:id/writeoff", { preHandler: deps.authenticate }, async (request) => ({ data: await writeReceivablesMoney(ledgerContext(request), { type: "writeoff.patch", ledgerId: idParams.parse(request.params).id, input: writeoffInput.parse(request.body) }) }));
 
   app.get("/api/receivables/grants", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "grant.list" }) }));
+  app.get("/api/receivables/grant-candidates", { preHandler: deps.authenticate }, async (request) => {
+    const { search } = grantCandidateInput.parse(request.query);
+    return { data: await administerReceivables(adminContext(request), { type: "candidate.list", search }) };
+  });
   app.post("/api/receivables/grants", { preHandler: deps.authenticate }, async (request, reply) => {
     const data = await administerReceivables(adminContext(request), { type: "grant.create", input: grantCreateInput.parse(request.body) });
     return reply.code(201).send({ data });

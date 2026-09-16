@@ -54,6 +54,7 @@ export const receivablesColumnPreferenceSchema = z.object({
   if (value.frozen.some((id) => !value.visible.includes(id))) context.addIssue({ code: "custom", message: "冻结列必须为可见列", path: ["frozen"] });
 });
 const receivablesColumnPreferenceKey = "receivables.columns.v1";
+export const receivablesReferenceCategories = ["project_status", "final_method", "debt_status", "client_attr", "unit", "work_nature", "sector", "comm_method", "feedback", "progress_note", "next_plan", "attach_category"] as const;
 
 export type NormalizedReceivablesFilters = {
   financeDepartmentId: string | null;
@@ -349,7 +350,7 @@ async function dashboard(tx: QueryTx, scope: QueryScope) {
   return { amounts: dashboardAmounts, statuses, anomalies };
 }
 
-async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: QueryScope, id: string) {
+async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: QueryScope, id: string, accountId: string) {
   const row = await tx.receivableLedger.findFirst({
     where: { id, ...(scope.readDepartmentIds === null ? {} : { financeDepartmentId: { in: scope.readDepartmentIds } }) },
     select: {
@@ -375,7 +376,13 @@ async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: Query
     },
     invoices: invoices.map((invoice) => ({ ...invoice, amount: money(invoice.amount)! })),
     receipts: receipts.map((receipt) => ({ ...receipt, amount: money(receipt.amount)! })),
-    attachments,
+    attachments: attachments.map((attachment) => ({
+      ...attachment,
+      capabilities: {
+        canDownload: attachment.status === "active",
+        canVoid: ledger.status === "active" && attachment.status === "active" && (access.canManageAll || access.role === "reporter" && attachment.uploadedBy === accountId),
+      },
+    })),
     revisions,
     capabilities: {
       ...access,
@@ -383,6 +390,33 @@ async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: Query
       writeDepartmentIds: scope.capabilityWriteDepartmentIds,
     },
   };
+}
+
+export async function getReceivablesReferenceData(principal: Principal) {
+  return prisma.$transaction(async (tx) => {
+    const access = await resolveReceivablesAccess(principal, tx);
+    requireReceivables(access, "enter");
+    const unrestrictedRead = access.canManageAll || access.canViewAll;
+    const departmentIds = [...new Set([...access.readDepartmentIds, ...access.writeDepartmentIds])];
+    const [departments, options] = await Promise.all([
+      tx.receivableDepartment.findMany({
+        where: { active: true, ...(unrestrictedRead ? {} : { id: { in: departmentIds } }) },
+        select: { id: true, name: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
+      }),
+      tx.receivableDictionaryOption.findMany({
+        where: { active: true, category: { in: [...receivablesReferenceCategories] } },
+        select: { id: true, category: true, value: true }, orderBy: [{ category: "asc" }, { sortOrder: "asc" }, { value: "asc" }, { id: "asc" }],
+      }),
+    ]);
+    return {
+      departments: departments.map((department) => ({
+        ...department,
+        canRead: unrestrictedRead || access.readDepartmentIds.includes(department.id),
+        canWrite: access.canManageAll || access.writeDepartmentIds.includes(department.id),
+      })),
+      dictionaries: Object.fromEntries(receivablesReferenceCategories.map((category) => [category, options.filter((option) => option.category === category).map(({ id, value }) => ({ id, value }))])),
+    };
+  });
 }
 
 export async function queryReceivables(principal: Principal, operation: ReceivablesQueryOperation) {
@@ -393,7 +427,7 @@ export async function queryReceivables(principal: Principal, operation: Receivab
     const scope = await resolveQueryScope(tx, access, input);
     if (operation.type === "ledger.list") return listLedgers(tx, scope, operation.input);
     if (operation.type === "dashboard") return dashboard(tx, scope);
-    return ledgerDetail(tx, access, scope, operation.id);
+    return ledgerDetail(tx, access, scope, operation.id, principal.accountId);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 

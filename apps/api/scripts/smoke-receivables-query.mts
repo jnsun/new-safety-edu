@@ -20,7 +20,7 @@ const jwtSecret = "receivables-query-smoke-jwt-secret";
 const ids = {
   accounts: [] as string[], people: [] as string[], organizations: [] as string[], roleAssignments: [] as string[],
   sessions: [] as string[], departments: [] as string[], grants: [] as string[], ledgers: [] as string[],
-  invoices: [] as string[], receipts: [] as string[], attachments: [] as string[], files: [] as string[], revisions: [] as string[],
+  invoices: [] as string[], receipts: [] as string[], attachments: [] as string[], files: [] as string[], revisions: [] as string[], dictionaries: [] as string[],
 };
 let server: ChildProcess | null = null;
 let serverOutput = "";
@@ -41,10 +41,15 @@ type DetailResponse = {
   ledger: Row & { writeoffAmount: string };
   invoices: Array<{ id: string; status: "active" | "voided"; amount: string }>;
   receipts: Array<{ id: string; status: "active" | "voided"; amount: string }>;
-  attachments: Array<{ id: string; status: "active" | "voided"; file: { id: string; originalName: string } }>;
+  attachments: Array<{ id: string; status: "active" | "voided"; capabilities: { canDownload: boolean; canVoid: boolean }; file: { id: string; originalName: string } }>;
   revisions: Array<{ id: string; reason: string }>;
   capabilities: { role: string | null; canViewAll: boolean; canManageMoney: boolean; readDepartmentIds: string[]; writeDepartmentIds: string[] };
 };
+type ReferenceDataResponse = {
+  departments: Array<{ id: string; name: string; canRead: boolean; canWrite: boolean }>;
+  dictionaries: Record<string, Array<{ id: string; value: string }>>;
+};
+const referenceCategories = ["project_status", "final_method", "debt_status", "client_attr", "unit", "work_nature", "sector", "comm_method", "feedback", "progress_note", "next_plan", "attach_category"];
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 const fixed = (value: Prisma.Decimal | null) => value === null ? null : value.toFixed(4);
@@ -167,6 +172,7 @@ async function cleanup() {
   await prisma.receivableSetting.deleteMany({ where: { financeOrganizationId: { in: ids.organizations } } });
   await prisma.receivableGrantDepartment.deleteMany({ where: { grantId: { in: ids.grants } } });
   await prisma.receivableAccessGrant.deleteMany({ where: { id: { in: ids.grants } } });
+  await prisma.receivableDictionaryOption.deleteMany({ where: { id: { in: ids.dictionaries } } });
   await prisma.receivableDepartment.deleteMany({ where: { id: { in: ids.departments } } });
   await prisma.refreshSession.deleteMany({ where: { id: { in: ids.sessions } } });
   await prisma.roleAssignment.deleteMany({ where: { id: { in: ids.roleAssignments } } });
@@ -190,6 +196,11 @@ try {
   const departmentA = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-a` } }); ids.departments.push(departmentA.id);
   const departmentB = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-b` } }); ids.departments.push(departmentB.id);
   const inactiveDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-inactive`, active: false } }); ids.departments.push(inactiveDepartment.id);
+  for (const category of referenceCategories) {
+    const option = await prisma.receivableDictionaryOption.create({ data: { category, value: `${marker}-${category}` } });
+    ids.dictionaries.push(option.id);
+  }
+  const inactiveOption = await prisma.receivableDictionaryOption.create({ data: { category: "project_status", value: `${marker}-inactive-option`, active: false } }); ids.dictionaries.push(inactiveOption.id);
   await createGrant({ accountId: admin.id, grantedBy: owner.id, role: "admin" });
   await createGrant({ accountId: reporterA.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentA.id, inactiveDepartment.id] });
   const reporterBGrant = await createGrant({ accountId: reporterB.id, grantedBy: owner.id, role: "reporter", departmentIds: [departmentB.id] });
@@ -217,6 +228,17 @@ try {
 
   const tokens = Object.fromEntries(await Promise.all(Object.entries({ owner, admin, reporterA, reporterB, readonlyScoped, readonlyAll, companyAdmin }).map(async ([name, account]) => [name, await bearer(account.id)]))) as Record<string, string>;
   await startServer();
+
+  const ownerReferences = (await expectStatus<ReferenceDataResponse>("/api/receivables/reference-data", tokens.owner!, 200)).data!;
+  assert.deepEqual(Object.keys(ownerReferences.dictionaries).sort(), [...referenceCategories].sort());
+  assert.ok(Object.values(ownerReferences.dictionaries).every((options) => options.every((option) => option.value !== inactiveOption.value)), "reference dictionaries must exclude inactive options");
+  assert.deepEqual(ownerReferences.departments.filter(({ id }) => [departmentA.id, departmentB.id, inactiveDepartment.id].includes(id)).map(({ id, canRead, canWrite }) => ({ id, canRead, canWrite })), [departmentA, departmentB].sort((left, right) => left.name.localeCompare(right.name)).map(({ id }) => ({ id, canRead: true, canWrite: true })));
+  assert.ok(!ownerReferences.departments.some(({ id }) => id === inactiveDepartment.id), "reference departments must exclude inactive rows");
+  const reporterReferences = (await expectStatus<ReferenceDataResponse>("/api/receivables/reference-data", tokens.reporterA!, 200)).data!;
+  assert.deepEqual(reporterReferences.departments, [{ id: departmentA.id, name: departmentA.name, canRead: true, canWrite: true }]);
+  const readonlyReferences = (await expectStatus<ReferenceDataResponse>("/api/receivables/reference-data", tokens.readonlyScoped!, 200)).data!;
+  assert.deepEqual(readonlyReferences.departments, [{ id: departmentA.id, name: departmentA.name, canRead: true, canWrite: false }]);
+  await expectStatus("/api/receivables/reference-data", tokens.companyAdmin!, 403);
 
   const preferencePath = "/api/receivables/preferences/columns";
   const columnOrder = [
@@ -343,6 +365,10 @@ try {
   assert.deepEqual(detail.invoices.map(({ status }) => status).sort(), ["active", "voided"]);
   assert.deepEqual(detail.receipts.map(({ status }) => status).sort(), ["active", "voided"]);
   assert.deepEqual(detail.attachments.map(({ status }) => status).sort(), ["active", "voided"]);
+  assert.deepEqual(detail.attachments.map(({ status, capabilities }) => ({ status, capabilities })).sort((left, right) => left.status.localeCompare(right.status)), [
+    { status: "active", capabilities: { canDownload: true, canVoid: false } },
+    { status: "voided", capabilities: { canDownload: false, canVoid: false } },
+  ]);
   assert.equal(detail.revisions[0]?.reason, "fixture correction");
   assert.deepEqual({ role: detail.capabilities.role, canViewAll: detail.capabilities.canViewAll, canManageMoney: detail.capabilities.canManageMoney }, { role: "reporter", canViewAll: false, canManageMoney: false });
   assert.deepEqual(detail.capabilities.readDepartmentIds, [departmentA.id]);
@@ -356,6 +382,8 @@ try {
   assert.equal(readonlyDetail.capabilities.role, "readonly");
   assert.equal(readonlyDetail.capabilities.canViewAll, true);
   assert.equal(readonlyDetail.attachments.length, 2);
+  assert.ok(readonlyDetail.attachments.every((attachment) => attachment.capabilities.canVoid === false));
+  assert.equal(readonlyDetail.attachments.find((attachment) => attachment.status === "voided")?.capabilities.canDownload, false);
   assert.equal(readonlyDetail.revisions.length, 1);
 
   await prisma.receivableAccessGrant.update({ where: { id: reporterBGrant.id }, data: { active: false, revokedAt: new Date(), revokedBy: owner.id, revokeReason: "smoke revocation" } });

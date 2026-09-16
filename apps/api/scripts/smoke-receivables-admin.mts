@@ -31,6 +31,7 @@ type GrantResponse = { id: string; accountId: string; role: "admin" | "reporter"
 type DepartmentResponse = { id: string; name: string; code: string | null; sortOrder: number; active: boolean; revision: number };
 type DictionaryResponse = { id: string; category: string; value: string; sortOrder: number; active: boolean; revision: number };
 type PreviewResponse = { impactCount: number; token: string; expiresAt: string };
+type CandidateResponse = { accountId: string; name: string; username: string | null; hasActiveGrant: boolean };
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
@@ -165,6 +166,7 @@ async function cleanup() {
   await prisma.receivableDepartment.deleteMany({ where: { id: { in: ids.departments } } });
   await prisma.refreshSession.deleteMany({ where: { id: { in: ids.sessions } } });
   await prisma.roleAssignment.deleteMany({ where: { id: { in: ids.roleAssignments } } });
+  await prisma.organizationMembership.deleteMany({ where: { personId: { in: ids.people } } });
   await prisma.account.deleteMany({ where: { id: { in: ids.accounts } } });
   await prisma.person.deleteMany({ where: { id: { in: ids.people } } });
   await prisma.organization.deleteMany({ where: { id: { in: ids.organizations } } });
@@ -185,6 +187,8 @@ try {
   ids.organizations.push(company.id);
   const financeOrganization = await prisma.organization.create({ data: { name: `${marker}-finance-org`, type: "department", parentId: company.id } });
   ids.organizations.push(financeOrganization.id);
+  const crossOrganization = await prisma.organization.create({ data: { name: `${marker}-cross-org`, type: "business_entity", parentId: company.id } });
+  ids.organizations.push(crossOrganization.id);
   const owner = await createIdentity({ label: "owner", role: "org_leader", scopeType: "organization", scopeId: financeOrganization.id });
   const replacementOwner = await createIdentity({ label: "replacement-owner" });
   const financeAdmin = await createIdentity({ label: "finance-admin" });
@@ -193,6 +197,9 @@ try {
   const companyAdmin = await createIdentity({ label: "company-admin", role: "company_admin", scopeType: "company" });
   const inactiveAccount = await createIdentity({ label: "inactive-account", accountStatus: "disabled" });
   const inactivePerson = await createIdentity({ label: "inactive-person", personStatus: "disabled" });
+  const pendingAccount = await createIdentity({ label: "pending-account", accountStatus: "pending" });
+  const crossOrganizationCandidate = await createIdentity({ label: "cross-candidate" });
+  await prisma.organizationMembership.create({ data: { personId: crossOrganizationCandidate.personId!, organizationId: crossOrganization.id, primary: true } });
   const inactiveAfterGrant = await createIdentity({ label: "inactive-after-grant" });
   await prisma.receivableSetting.create({ data: { id: 1, financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.id } });
 
@@ -206,6 +213,16 @@ try {
   const adminGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ accountId: financeAdmin.id, role: "admin", canCreate: false, canExport: false, canViewAll: false, departments: [], reason: "appoint finance admin" }) })).data!;
   ids.grants.push(adminGrant.id);
   assert.equal((await expectStatus<AccessResponse>("/api/receivables/access", tokens.financeAdmin!, 200)).data?.role, "admin");
+
+  const candidates = (await expectStatus<CandidateResponse[]>(`/api/receivables/grant-candidates?search=${encodeURIComponent(marker)}`, tokens.owner!, 200)).data!;
+  assert.ok(candidates.length <= 50, "candidate search must be capped at 50");
+  assert.deepEqual(Object.keys(candidates[0] ?? {}).sort(), ["accountId", "hasActiveGrant", "name", "username"]);
+  assert.ok(candidates.some((candidate) => candidate.accountId === crossOrganizationCandidate.id), "owner must see active candidates outside the finance organization scope");
+  assert.equal(candidates.find((candidate) => candidate.accountId === financeAdmin.id)?.hasActiveGrant, true);
+  assert.ok(!candidates.some((candidate) => [inactiveAccount.id, inactivePerson.id, pendingAccount.id].includes(candidate.accountId)), "inactive/pending account or person must be excluded");
+  await expectStatus("/api/receivables/grant-candidates?search=x", tokens.owner!, 400);
+  await expectStatus(`/api/receivables/grant-candidates?search=${"x".repeat(81)}`, tokens.owner!, 400);
+  await expectStatus(`/api/receivables/grant-candidates?search=${encodeURIComponent(marker)}`, tokens.financeAdmin!, 403);
 
   for (const actor of [tokens.financeAdmin!, tokens.reporter!, tokens.readonly!, tokens.companyAdmin!]) {
     await expectStatus("/api/receivables/grants", actor, 403, { method: "POST", body: JSON.stringify({ accountId: reporter.id, role: "reporter", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "forbidden grant" }) });

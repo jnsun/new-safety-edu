@@ -13,6 +13,7 @@ type MigrationInput =
   | { mode: "apply"; targetId: string; token: string; reason: string; confirm: true };
 
 export type ReceivablesAdminOperation =
+  | { type: "candidate.list"; search: string }
   | { type: "grant.list" }
   | { type: "grant.create"; input: GrantFields & { accountId: string; reason: string } }
   | { type: "grant.update"; id: string; input: (GrantFields & { revision: number; reason: string }) | { revision: number; revoke: true; reason: string } }
@@ -51,7 +52,8 @@ const dictionarySelect = { id: true, category: true, value: true, sortOrder: tru
 type GrantRow = Prisma.ReceivableAccessGrantGetPayload<{ select: typeof grantSelect }>;
 type DepartmentRow = Prisma.ReceivableDepartmentGetPayload<{ select: typeof departmentSelect }>;
 type DictionaryRow = Prisma.ReceivableDictionaryOptionGetPayload<{ select: typeof dictionarySelect }>;
-export type ReceivablesAdminResult = GrantRow | GrantRow[] | DepartmentRow | DepartmentRow[] | DictionaryRow | DictionaryRow[] | { impactCount: number } | { impactCount: number; token: string; expiresAt: string };
+type CandidateRow = { accountId: string; name: string; username: string | null; hasActiveGrant: boolean };
+export type ReceivablesAdminResult = CandidateRow[] | GrantRow | GrantRow[] | DepartmentRow | DepartmentRow[] | DictionaryRow | DictionaryRow[] | { impactCount: number } | { impactCount: number; token: string; expiresAt: string };
 
 const migrationTokenPayload = z.object({
   version: z.literal(2),
@@ -373,6 +375,18 @@ async function migrateDictionary(context: ReceivablesAdminContext, sourceId: str
 
 export async function administerReceivables(context: ReceivablesAdminContext, operation: ReceivablesAdminOperation): Promise<ReceivablesAdminResult> {
   switch (operation.type) {
+    case "candidate.list": {
+      await requireAction(context, "manageAccess");
+      const accounts = await prisma.account.findMany({
+        where: {
+          status: "active", person: { status: "active" },
+          OR: [{ username: { contains: operation.search, mode: "insensitive" } }, { person: { name: { contains: operation.search, mode: "insensitive" } } }],
+        },
+        select: { id: true, username: true, person: { select: { name: true } }, receivableGrants: { where: { active: true, revokedAt: null }, select: { id: true }, take: 1 } },
+        orderBy: [{ person: { name: "asc" } }, { id: "asc" }], take: 50,
+      });
+      return accounts.map((account) => ({ accountId: account.id, name: account.person!.name, username: account.username, hasActiveGrant: account.receivableGrants.length > 0 }));
+    }
     case "grant.list":
       await requireAction(context, "manageAccess");
       return prisma.receivableAccessGrant.findMany({ select: grantSelect, orderBy: [{ active: "desc" }, { grantedAt: "desc" }] });
