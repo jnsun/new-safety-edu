@@ -91,10 +91,6 @@ button, input, textarea, select { font: inherit; }
 .login-card .ant-btn-primary { height: 48px; margin-top: 4px; }
 .center { min-height: 100vh; display: grid; place-items: center; color: #6e6e73; }
 .signature-preview { max-width: 180px; max-height: 72px; object-fit: contain; }
-.portal-heading { margin: 8px 0 30px; }
-.portal-heading h2 { margin: 7px 0 8px !important; font-size: clamp(32px, 3vw, 44px) !important; letter-spacing: -.04em; }
-.portal-heading .ant-typography { margin-bottom: 0; }
-.portal-eyebrow { color: #0066cc; font-weight: 600; }
 .module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
 .module-card { min-height: 210px; padding: 26px; display: flex; flex-direction: column; align-items: flex-start; text-align: left; color: #1d1d1f; border: 1px solid rgba(0, 0, 0, .07); border-radius: 24px; background: rgba(255, 255, 255, .94); box-shadow: 0 12px 38px rgba(0, 0, 0, .05); cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; }
 .module-card:hover { transform: translateY(-3px); box-shadow: 0 20px 46px rgba(0, 0, 0, .09); }

@@ -2607,38 +2607,27 @@ const platformModules = [
 function PlatformPortal() {
   const navigate = useNavigate();
   return (
-    <>
-      <div className="portal-heading">
-        <Typography.Text className="portal-eyebrow">
-          物化院有限公司
-        </Typography.Text>
-        <Typography.Title level={2}>安全生产管理平台</Typography.Title>
-        <Typography.Paragraph type="secondary">
-          请选择需要进入的业务模块
-        </Typography.Paragraph>
-      </div>
-      <div className="module-grid">
-        {platformModules.map((item) => (
-          <button
-            type="button"
-            className={`module-card module-${item.tone}${item.path ? "" : " module-planned"}`}
-            key={item.title}
-            onClick={() =>
-              item.path
-                ? navigate(item.path)
-                : message.info(`${item.title}暂定为后续模块，功能尚未启用`)
-            }
-          >
-            <span className="module-icon">{item.icon}</span>
-            <span className="module-title">{item.title}</span>
-            <span className="module-description">{item.description}</span>
-            <span className="module-enter">
-              {item.path ? "进入模块 ›" : "待规划"}
-            </span>
-          </button>
-        ))}
-      </div>
-    </>
+    <div className="module-grid">
+      {platformModules.map((item) => (
+        <button
+          type="button"
+          className={`module-card module-${item.tone}${item.path ? "" : " module-planned"}`}
+          key={item.title}
+          onClick={() =>
+            item.path
+              ? navigate(item.path)
+              : message.info(`${item.title}暂定为后续模块，功能尚未启用`)
+          }
+        >
+          <span className="module-icon">{item.icon}</span>
+          <span className="module-title">{item.title}</span>
+          <span className="module-description">{item.description}</span>
+          <span className="module-enter">
+            {item.path ? "进入模块 ›" : "待规划"}
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
