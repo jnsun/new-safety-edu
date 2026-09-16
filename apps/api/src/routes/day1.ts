@@ -25,6 +25,7 @@ import { writeCriticalAudit } from "../transaction-audit.js";
 import { assertMembershipTransition } from "../project-membership.js";
 import { changeRequestKey } from "../request-policy.js";
 import { prepareBulkPrimaryOrganizationAssignment } from "../person-bulk-organization-policy.js";
+import { previewBulkPersonDisable } from "../person-bulk-lifecycle-policy.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -494,6 +495,35 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
       const updated = await tx.person.findUniqueOrThrow({ where: { id }, select: personSafeSelect }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "person.status_change", objectType: "person", objectId: id, reason: input.reason, metadata: { status } }); return updated;
     });
     return { data: maskPerson(person) };
+  });
+
+  async function bulkDisablePreview(principal: Principal, personIds: string[]) {
+    const visible = await prisma.person.findMany({
+      where: { AND: [{ id: { in: [...new Set(personIds)] } }, await personWhere(principal)] },
+      select: { id: true, status: true, organizations: { where: { active: true }, select: { organizationId: true } } },
+    });
+    const manageable = visible.filter((person) => canManagePersonStatus(principal, person.organizations.map((item) => item.organizationId)));
+    return previewBulkPersonDisable({ personIds, persons: manageable });
+  }
+
+  app.post("/api/persons/batch-status-preview", manager, async (request) => {
+    const principal = principalOf(request);
+    const { personIds } = z.object({ personIds: z.array(z.string().uuid()).min(1).max(500) }).parse(request.body);
+    return { data: await bulkDisablePreview(principal, personIds) };
+  });
+
+  app.post("/api/persons/batch-disable", manager, async (request) => {
+    const principal = principalOf(request);
+    const input = z.object({ personIds: z.array(z.string().uuid()).min(1).max(500), reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    const preview = await bulkDisablePreview(principal, input.personIds);
+    const eligibleIds = preview.filter((item) => item.eligible).map((item) => item.personId);
+    if (eligibleIds.length) await prisma.$transaction(async (tx) => {
+      for (const personId of eligibleIds) {
+        await disablePerson(tx, { personId, actorId: principal.accountId, reason: input.reason });
+        await writeCriticalAudit(tx, { actorId: principal.accountId, action: "person.batch_disable", objectType: "person", objectId: personId, reason: input.reason });
+      }
+    });
+    return { data: { disabled: eligibleIds.length, results: preview } };
   });
 
   app.patch("/api/projects/:id", manager, async (request) => {

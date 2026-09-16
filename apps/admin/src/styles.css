@@ -184,3 +184,82 @@ button, input, textarea, select { font: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .login-flip-inner { transition: none; }
 }
+.people-filter-card {
+  border-radius: 16px;
+}
+
+.person-detail-page {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.danger-zone {
+  border-color: #ffd6d6;
+  background: #fffafa;
+}
+
+.master-workbench {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: 620px;
+  overflow: hidden;
+  border: 1px solid #e8ebf0;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.master-directory {
+  padding: 16px;
+  border-right: 1px solid #e8ebf0;
+  background: #fafbfc;
+}
+
+.master-directory-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.master-directory-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #1f2937;
+  text-align: left;
+  cursor: pointer;
+}
+
+.master-directory-item span {
+  color: #7a8492;
+  font-size: 12px;
+}
+
+.master-directory-item:hover,
+.master-directory-item.is-active {
+  border-color: #cfe2ff;
+  background: #edf5ff;
+}
+
+.master-detail {
+  min-width: 0;
+  padding: 18px;
+}
+
+@media (max-width: 900px) {
+  .master-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .master-directory {
+    border-right: 0;
+    border-bottom: 1px solid #e8ebf0;
+  }
+
+  .master-directory-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
