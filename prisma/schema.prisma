@@ -77,6 +77,7 @@ enum FileKind {
 enum CoursewareType {
   rich_text
   single_html
+  structured
 }
 
 enum PublishStatus {
@@ -922,20 +923,23 @@ model Courseware {
 }
 
 model CoursewareVersion {
-  id            String                 @id @default(uuid()) @db.Uuid
-  coursewareId  String                 @map("courseware_id") @db.Uuid
-  courseware    Courseware             @relation(fields: [coursewareId], references: [id])
-  version       Int
-  status        PublishStatus          @default(draft)
-  richText      String?                @map("rich_text")
-  fileId        String?                @map("file_id") @db.Uuid
-  file          PrivateFile?           @relation(fields: [fileId], references: [id])
-  contentHash   String                 @map("content_hash") @db.VarChar(64)
-  publishedAt   DateTime?              @map("published_at")
-  templateItems TrainingTemplateItem[]
-  progress      LearningProgress[]
-  createdAt     DateTime               @default(now()) @map("created_at")
-  updatedAt     DateTime               @updatedAt @map("updated_at")
+  id                String                 @id @default(uuid()) @db.Uuid
+  coursewareId      String                 @map("courseware_id") @db.Uuid
+  courseware        Courseware             @relation(fields: [coursewareId], references: [id])
+  version           Int
+  status            PublishStatus          @default(draft)
+  richText          String?                @map("rich_text")
+  structuredContent Json?                  @map("structured_content")
+  schemaVersion     Int?                    @map("schema_version")
+  estimatedMinutes Int?                    @map("estimated_minutes")
+  fileId            String?                @map("file_id") @db.Uuid
+  file              PrivateFile?           @relation(fields: [fileId], references: [id])
+  contentHash       String                 @map("content_hash") @db.VarChar(64)
+  publishedAt       DateTime?              @map("published_at")
+  templateItems     TrainingTemplateItem[]
+  progress          LearningProgress[]
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
 
   @@unique([coursewareId, version])
   @@map("courseware_versions")

@@ -1,4 +1,5 @@
 import { z } from "zod";
+export * from "./courseware.js";
 
 export const roleNames = ["company_admin", "org_leader", "org_admin", "field_reporter", "project_admin", "learner"] as const;
 export const assignableRoleNames = ["company_admin", "org_leader", "org_admin", "field_reporter", "project_admin"] as const;
