@@ -86,6 +86,14 @@ enum PublishStatus {
   retired
 }
 
+enum CoursewareImportStatus {
+  previewed
+  confirming
+  confirmed
+  failed
+  expired
+}
+
 enum TrainingType {
   three_level
   project_induction
@@ -304,6 +312,7 @@ model Account {
   receivableImportBatchesApplied         ReceivableImportBatch[]      @relation("ReceivableImportAppliedBy")
   receivableImportBatchesRolledBack      ReceivableImportBatch[]      @relation("ReceivableImportRolledBackBy")
   receivableExportJobs                   ReceivableExportJob[]
+  coursewareImportSessions               CoursewareImportSession[]
   createdAt                              DateTime                     @default(now()) @map("created_at")
   updatedAt                              DateTime                     @updatedAt @map("updated_at")
 
@@ -556,6 +565,7 @@ model PrivateFile {
   requestAttachments         ChangeRequestAttachment[]
   receivableAttachments      ReceivableAttachment[]           @relation("ReceivableAttachmentFile")
   receivableImportBatches    ReceivableImportBatch[]          @relation("ReceivableImportOriginalFile")
+  coursewareImportSources    CoursewareImportSession[]
   createdAt                  DateTime                         @default(now()) @map("created_at")
   updatedAt                  DateTime                         @updatedAt @map("updated_at")
 
@@ -912,6 +922,7 @@ model PhoneVerificationCode {
 
 model Courseware {
   id        String              @id @default(uuid()) @db.Uuid
+  code      String?             @unique @db.VarChar(120)
   title     String              @db.VarChar(180)
   type      CoursewareType
   scopeType ScopeType           @map("scope_type")
@@ -940,11 +951,42 @@ model CoursewareVersion {
   templateItems     TrainingTemplateItem[]
   progress          LearningProgress[]
   assets            CoursewareVersionAsset[]
+  importSessionId   String?                @map("import_session_id") @db.Uuid
+  importSession     CoursewareImportSession? @relation(fields: [importSessionId], references: [id], onDelete: Restrict)
+  importCourseCode  String?                @map("import_course_code") @db.VarChar(120)
   createdAt         DateTime               @default(now()) @map("created_at")
   updatedAt         DateTime               @updatedAt @map("updated_at")
 
   @@unique([coursewareId, version])
+  @@unique([importSessionId, importCourseCode])
   @@map("courseware_versions")
+}
+
+model CoursewareImportSession {
+  id                String                   @id @default(uuid()) @db.Uuid
+  sourceFileId      String?                  @map("source_file_id") @db.Uuid
+  sourceFile        PrivateFile?             @relation(fields: [sourceFileId], references: [id], onDelete: Restrict)
+  originalFilename String                   @map("original_filename") @db.VarChar(240)
+  sourceHash        String                   @map("source_hash") @db.Char(64)
+  templateVersion   Int                      @map("template_version")
+  parsedResult      Json                     @map("parsed_result")
+  previewResult     Json                     @map("preview_result")
+  confirmationKey  String                   @unique @map("confirmation_key") @db.Char(64)
+  status            CoursewareImportStatus   @default(previewed)
+  createdBy         String                   @map("created_by") @db.Uuid
+  creator           Account                  @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  expiresAt         DateTime                 @map("expires_at")
+  confirmedAt       DateTime?                @map("confirmed_at")
+  confirmResult     Json?                    @map("confirm_result")
+  versions          CoursewareVersion[]
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+
+  @@unique([id, sourceHash])
+  @@index([createdBy, status, expiresAt])
+  @@index([sourceHash, createdAt])
+  @@index([sourceFileId])
+  @@map("courseware_import_sessions")
 }
 
 model CoursewareVersionAsset {
