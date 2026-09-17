@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   filterReceivablesDepartments,
   groupReceivablesDictionaryOptions,
@@ -49,5 +50,13 @@ assert.deepEqual(groupReceivablesImportIssues([
   { code: "DEPARTMENT_NOT_FOUND", message: "财务归属部门不存在", count: 2, rows: [2, 3], columns: [] },
   { code: "UNKNOWN_COLUMN", message: "未知列将被忽略", count: 1, rows: [], columns: ["旧列"] },
 ]);
+
+const ledgerSource = readFileSync(new URL("../src/ReceivablesLedger.tsx", import.meta.url), "utf8");
+const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+assert.match(ledgerSource, /className: "receivables-resizable-header"/, "resize handles are anchored to the table header cell");
+assert.match(ledgerSource, /pointercancel/, "column resizing cleans up cancelled pointer gestures");
+assert.doesNotMatch(styles, /\.receivables-filter-grid \.ant-input-group \.ant-input[^\{]*\{[^}]*height:/s, "the inner search input must not be forced to the wrapper height");
+assert.match(styles, /\.receivables-filter-grid \.ant-input-affix-wrapper > \.ant-input\s*\{[^}]*height:\s*auto/s, "the inner search input stays inside its affix wrapper");
+assert.match(styles, /\.receivables-resizable-header\s*\{[^}]*position:\s*relative/s, "the resize hit target uses the real header boundary");
 
 console.log("RECEIVABLES_ADMIN_UI_OK");
