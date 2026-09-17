@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Prisma, type CoursewareType } from "@prisma/client";
+import type { StructuredCoursewareDocument } from "@safety/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Principal } from "../auth.js";
@@ -8,7 +9,11 @@ import { prisma } from "../db.js";
 import {
   canEditCoursewareVersion,
   hashStructuredCourseware,
-  normalizeStructuredCourseware
+  normalizeStructuredCourseware,
+  retryCoursewareVersionCreate,
+  structuredAssetSyncPlan,
+  structuredCoursewareAssetIds,
+  validateStructuredCoursewareAssets
 } from "../structured-courseware.js";
 import { assertCoursewareFile, assertScope } from "./day2.js";
 
@@ -37,42 +42,83 @@ const contentRequired = (): never => {
   throw Object.assign(new Error("课件内容不完整"), { statusCode: 400, code: "CONTENT_REQUIRED" });
 };
 
-async function versionFields(type: CoursewareType, input: z.infer<typeof contentSchema>, principal: Principal) {
+type VersionFields = {
+  richText: string | null;
+  fileId: string | null;
+  structuredContent: Prisma.InputJsonValue | typeof Prisma.DbNull;
+  schemaVersion: number | null;
+  estimatedMinutes: number | null;
+  contentHash: string;
+};
+
+async function versionFields(type: CoursewareType, input: z.infer<typeof contentSchema>, principal: Principal): Promise<{ fields: VersionFields; document: StructuredCoursewareDocument | null }> {
   if (type === "rich_text") {
     const richText = input.richText;
     if (!richText) return contentRequired();
-    return {
+    return { fields: {
       richText,
       fileId: null,
       structuredContent: Prisma.DbNull,
       schemaVersion: null,
       estimatedMinutes: null,
       contentHash: createHash("sha256").update(richText).digest("hex")
-    };
+    }, document: null };
   }
   if (type === "single_html") {
     const fileId = input.fileId;
     if (!fileId) return contentRequired();
     await assertCoursewareFile(principal, fileId);
-    return {
+    return { fields: {
       richText: null,
       fileId,
       structuredContent: Prisma.DbNull,
       schemaVersion: null,
       estimatedMinutes: null,
       contentHash: createHash("sha256").update(fileId).digest("hex")
-    };
+    }, document: null };
   }
   if (input.structuredContent === undefined) contentRequired();
   const document = normalizeStructuredCourseware(input.structuredContent);
-  return {
+  return { fields: {
     richText: null,
     fileId: null,
     structuredContent: document as unknown as Prisma.InputJsonValue,
     schemaVersion: document.schemaVersion,
     estimatedMinutes: document.estimatedMinutes,
     contentHash: hashStructuredCourseware(document)
-  };
+  }, document };
+}
+
+type Scope = { scopeType: string; scopeId: string | null };
+
+async function validatedStructuredAssetIds(tx: Prisma.TransactionClient, document: StructuredCoursewareDocument | null, principal: Principal, scope: Scope) {
+  if (!document) return [];
+  const ids = structuredCoursewareAssetIds(document);
+  if (!ids.length) return ids;
+  const files = await tx.privateFile.findMany({
+    where: { id: { in: ids } },
+    select: {
+      id: true,
+      kind: true,
+      mimeType: true,
+      uploadedBy: true,
+      coursewareVersionAssets: { select: { coursewareVersion: { select: { courseware: { select: { scopeType: true, scopeId: true } } } } } }
+    }
+  });
+  return validateStructuredCoursewareAssets(document, files.map((file) => ({
+    id: file.id,
+    kind: file.kind,
+    mimeType: file.mimeType,
+    uploadedBy: file.uploadedBy,
+    scopes: file.coursewareVersionAssets.map(({ coursewareVersion }) => coursewareVersion.courseware)
+  })), principal.accountId, scope);
+}
+
+async function syncStructuredAssets(tx: Prisma.TransactionClient, coursewareVersionId: string, desiredIds: string[]) {
+  const current = await tx.coursewareVersionAsset.findMany({ where: { coursewareVersionId }, select: { fileId: true } });
+  const plan = structuredAssetSyncPlan(current.map(({ fileId }) => fileId), desiredIds);
+  if (plan.remove.length) await tx.coursewareVersionAsset.deleteMany({ where: { coursewareVersionId, fileId: { in: plan.remove } } });
+  if (plan.add.length) await tx.coursewareVersionAsset.createMany({ data: plan.add.map((fileId) => ({ coursewareVersionId, fileId })), skipDuplicates: true });
 }
 
 export async function registerCoursewareAuthoringRoutes(app: FastifyInstance, deps: Deps) {
@@ -82,16 +128,21 @@ export async function registerCoursewareAuthoringRoutes(app: FastifyInstance, de
     const principal = principalOf(request);
     const input = createSchema.parse(request.body);
     await assertScope(principal, input.scopeType, input.scopeId);
-    const fields = await versionFields(input.type, input, principal);
-    const courseware = await prisma.courseware.create({
-      data: {
-        title: input.title,
-        type: input.type,
-        scopeType: input.scopeType,
-        scopeId: input.scopeId ?? null,
-        versions: { create: { version: 1, ...fields } }
-      },
-      include: { versions: true }
+    const prepared = await versionFields(input.type, input, principal);
+    const scope = { scopeType: input.scopeType, scopeId: input.scopeId ?? null };
+    const courseware = await prisma.$transaction(async (tx) => {
+      const assetIds = await validatedStructuredAssetIds(tx, prepared.document, principal, scope);
+      const created = await tx.courseware.create({
+        data: {
+          title: input.title,
+          type: input.type,
+          ...scope,
+          versions: { create: { version: 1, ...prepared.fields } }
+        },
+        include: { versions: true }
+      });
+      await syncStructuredAssets(tx, created.versions[0]!.id, assetIds);
+      return created;
     });
     audit(principal.accountId, "courseware.create", "courseware", courseware.id);
     return reply.code(201).send({ data: courseware });
@@ -100,12 +151,17 @@ export async function registerCoursewareAuthoringRoutes(app: FastifyInstance, de
   app.post("/api/coursewares/:id/versions", manager, async (request, reply) => {
     const principal = principalOf(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const courseware = await prisma.courseware.findUniqueOrThrow({ where: { id }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
+    const courseware = await prisma.courseware.findUniqueOrThrow({ where: { id } });
     await assertScope(principal, courseware.scopeType, courseware.scopeId);
-    const fields = await versionFields(courseware.type, contentSchema.parse(request.body), principal);
-    const version = await prisma.coursewareVersion.create({
-      data: { coursewareId: id, version: (courseware.versions[0]?.version ?? 0) + 1, ...fields }
-    });
+    const prepared = await versionFields(courseware.type, contentSchema.parse(request.body), principal);
+    const scope = { scopeType: courseware.scopeType, scopeId: courseware.scopeId };
+    const version = await retryCoursewareVersionCreate(() => prisma.$transaction(async (tx) => {
+      const assetIds = await validatedStructuredAssetIds(tx, prepared.document, principal, scope);
+      const latest = await tx.coursewareVersion.findFirst({ where: { coursewareId: id }, select: { version: true }, orderBy: { version: "desc" } });
+      const created = await tx.coursewareVersion.create({ data: { coursewareId: id, version: (latest?.version ?? 0) + 1, ...prepared.fields } });
+      await syncStructuredAssets(tx, created.id, assetIds);
+      return created;
+    }));
     audit(principal.accountId, "courseware.version_create", "courseware_version", version.id);
     return reply.code(201).send({ data: version });
   });
@@ -116,10 +172,12 @@ export async function registerCoursewareAuthoringRoutes(app: FastifyInstance, de
     const version = await prisma.coursewareVersion.findUniqueOrThrow({ where: { id }, include: { courseware: true } });
     await assertScope(principal, version.courseware.scopeType, version.courseware.scopeId);
     if (!canEditCoursewareVersion(version)) throw Object.assign(new Error("已发布或归档的课件版本不可修改"), { statusCode: 409, code: "COURSEWARE_VERSION_IMMUTABLE" });
-    const fields = await versionFields(version.courseware.type, contentSchema.parse(request.body), principal);
+    const prepared = await versionFields(version.courseware.type, contentSchema.parse(request.body), principal);
     const updated = await prisma.$transaction(async (tx) => {
-      const changed = await tx.coursewareVersion.updateMany({ where: { id, status: "draft" }, data: fields });
+      const assetIds = await validatedStructuredAssetIds(tx, prepared.document, principal, { scopeType: version.courseware.scopeType, scopeId: version.courseware.scopeId });
+      const changed = await tx.coursewareVersion.updateMany({ where: { id, status: "draft" }, data: prepared.fields });
       if (!changed.count) throw Object.assign(new Error("课件版本已不再是草稿"), { statusCode: 409, code: "COURSEWARE_VERSION_IMMUTABLE" });
+      await syncStructuredAssets(tx, id, assetIds);
       return tx.coursewareVersion.findUniqueOrThrow({ where: { id } });
     });
     audit(principal.accountId, "courseware.draft_update", "courseware_version", id);

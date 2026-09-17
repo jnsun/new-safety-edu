@@ -25,6 +25,7 @@ export async function readablePrivateFile(principal: Principal, id: string) {
     monthlyReportAttachments: { select: { report: { select: { projectId: true, reportingOrganizationId: true } } } },
     requestAttachments: { select: { changeRequest: { select: { accountId: true, personId: true, projectId: true, payload: true } } } },
     versions: { select: { courseware: { select: { scopeType: true, scopeId: true } }, progress: { select: { assignment: { select: { personId: true } } } } } },
+    coursewareVersionAssets: { select: { coursewareVersion: { select: { courseware: { select: { scopeType: true, scopeId: true } }, progress: { select: { assignment: { select: { personId: true } } } } } } } },
     receivableAttachments: { select: { status: true, ledger: { select: { financeDepartmentId: true } } } },
     receivableImportBatches: { select: { id: true } },
   } });
@@ -43,13 +44,16 @@ export async function readablePrivateFile(principal: Principal, id: string) {
   const attachedCertificates = file.certificateAttachments.flatMap((row) => row.personCertificate ? [{ personId: row.personCertificate.personId, organizationIds: organizationIds(row.personCertificate.person), projectIds: projectIds(row.personCertificate.person) }] : []);
   const facts: PrivateFileFacts = {
     uploadedBy: file.uploadedBy,
-    linked: !!(file.personPhotos.length || file.signatures.length || directCertificates.length || attachedCertificates.length || file.organizationQualifications.length || file.certificateAttachments.length || file.monthlyReportAttachments.length || file.versions.length || trainingAttachments.length || requestAttachments.length || file.receivableAttachments.length || file.receivableImportBatches.length),
+    linked: !!(file.personPhotos.length || file.signatures.length || directCertificates.length || attachedCertificates.length || file.organizationQualifications.length || file.certificateAttachments.length || file.monthlyReportAttachments.length || file.versions.length || file.coursewareVersionAssets.length || trainingAttachments.length || requestAttachments.length || file.receivableAttachments.length || file.receivableImportBatches.length),
     photos: file.personPhotos.map((row) => ({ personId: row.id, organizationIds: organizationIds(row), projectIds: projectIds(row) })),
     signatures: file.signatures.map((row) => ({ personId: row.personId, organizationIds: organizationIds(row.person), projectId: row.assignment.batch.projectId })),
     personCertificates: [...directCertificates, ...attachedCertificates],
     organizationQualifications: [...file.organizationQualifications, ...file.certificateAttachments.flatMap((row) => row.organizationQualification ? [{ organizationId: row.organizationQualification.organizationId }] : [])],
     monthlyReports: file.monthlyReportAttachments.map(({ report }) => ({ projectId: report.projectId, organizationId: report.reportingOrganizationId })),
-    coursewares: file.versions.map((row) => ({ scopeType: row.courseware.scopeType, scopeId: row.courseware.scopeId, personIds: row.progress.map(({ assignment }) => assignment.personId) })),
+    coursewares: [
+      ...file.versions.map((row) => ({ scopeType: row.courseware.scopeType, scopeId: row.courseware.scopeId, personIds: row.progress.map(({ assignment }) => assignment.personId) })),
+      ...file.coursewareVersionAssets.map(({ coursewareVersion: row }) => ({ scopeType: row.courseware.scopeType, scopeId: row.courseware.scopeId, personIds: row.progress.map(({ assignment }) => assignment.personId) }))
+    ],
     trainingAttachments,
     requestAttachments,
     receivableAttachments: file.receivableAttachments.map(({ status, ledger }) => ({ financeDepartmentId: ledger.financeDepartmentId, status })),

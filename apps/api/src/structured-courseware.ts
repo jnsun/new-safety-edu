@@ -36,3 +36,68 @@ export function serializeStructuredCoursewareForLearner(input: unknown, resumeSt
     resumeState
   };
 }
+
+type CoursewareScope = { scopeType: string; scopeId: string | null };
+type StructuredAssetRecord = {
+  id: string;
+  kind: string;
+  mimeType: string;
+  uploadedBy: string;
+  scopes: CoursewareScope[];
+};
+
+const structuredImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+export function structuredCoursewareAssetIds(document: StructuredCoursewareDocument) {
+  return [...new Set(document.units.flatMap((unit) => unit.blocks.flatMap((block) =>
+    block.type === "knowledge" && block.imageFileId ? [block.imageFileId] : []
+  )))];
+}
+
+export function validateStructuredCoursewareAssets(
+  document: StructuredCoursewareDocument,
+  files: StructuredAssetRecord[],
+  accountId: string,
+  scope: CoursewareScope
+) {
+  const ids = structuredCoursewareAssetIds(document);
+  const byId = new Map(files.map((file) => [file.id, file]));
+  for (const id of ids) {
+    const file = byId.get(id);
+    if (!file) throw Object.assign(new Error("结构化课件图片不存在"), { statusCode: 400, code: "COURSEWARE_ASSET_NOT_FOUND" });
+    if (file.kind !== "attachment" || !structuredImageMimeTypes.has(file.mimeType)) {
+      throw Object.assign(new Error("结构化课件图片只支持附件类型的 JPEG、PNG 或 WebP"), { statusCode: 400, code: "COURSEWARE_ASSET_INVALID" });
+    }
+    const sameScope = file.scopes.some((candidate) => candidate.scopeType === scope.scopeType && candidate.scopeId === scope.scopeId);
+    if (file.uploadedBy !== accountId && !sameScope) {
+      throw Object.assign(new Error("无权在当前课件范围使用该图片"), { statusCode: 403, code: "COURSEWARE_ASSET_FORBIDDEN" });
+    }
+  }
+  return ids;
+}
+
+export function structuredAssetSyncPlan(currentIds: string[], desiredIds: string[]) {
+  const current = new Set(currentIds);
+  const desired = new Set(desiredIds);
+  return {
+    add: [...desired].filter((id) => !current.has(id)),
+    remove: [...current].filter((id) => !desired.has(id))
+  };
+}
+
+function isCoursewareVersionUniqueConflict(error: unknown) {
+  if (!error || typeof error !== "object" || (error as { code?: unknown }).code !== "P2002") return false;
+  const target = (error as { meta?: { target?: unknown } }).meta?.target;
+  const fields = (Array.isArray(target) ? target : [target]).map(String).join("_").toLowerCase();
+  return (fields.includes("courseware_id") || fields.includes("coursewareid")) && fields.includes("version");
+}
+
+export async function retryCoursewareVersionCreate<T>(attempt: () => Promise<T>, maxAttempts = 5): Promise<T> {
+  for (let number = 1; number <= maxAttempts; number += 1) {
+    try { return await attempt(); }
+    catch (error) {
+      if (!isCoursewareVersionUniqueConflict(error) || number === maxAttempts) throw error;
+    }
+  }
+  throw new Error("unreachable");
+}

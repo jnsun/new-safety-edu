@@ -546,6 +546,7 @@ model PrivateFile {
   uploadedBy                 String                           @map("uploaded_by") @db.Uuid
   personPhotos               Person[]                         @relation("PersonPhoto")
   versions                   CoursewareVersion[]
+  coursewareVersionAssets    CoursewareVersionAsset[]
   signatures                 Signature[]
   personCertificates         PersonCertificate[]
   organizationQualifications OrganizationQualification[]
@@ -938,11 +939,24 @@ model CoursewareVersion {
   publishedAt       DateTime?              @map("published_at")
   templateItems     TrainingTemplateItem[]
   progress          LearningProgress[]
+  assets            CoursewareVersionAsset[]
   createdAt         DateTime               @default(now()) @map("created_at")
   updatedAt         DateTime               @updatedAt @map("updated_at")
 
   @@unique([coursewareId, version])
   @@map("courseware_versions")
+}
+
+model CoursewareVersionAsset {
+  coursewareVersionId String            @map("courseware_version_id") @db.Uuid
+  coursewareVersion   CoursewareVersion @relation(fields: [coursewareVersionId], references: [id], onDelete: Cascade)
+  fileId              String            @map("file_id") @db.Uuid
+  file                PrivateFile       @relation(fields: [fileId], references: [id], onDelete: Restrict)
+  createdAt           DateTime          @default(now()) @map("created_at")
+
+  @@id([coursewareVersionId, fileId])
+  @@index([fileId])
+  @@map("courseware_version_assets")
 }
 
 model CoursewarePublishGrant {
