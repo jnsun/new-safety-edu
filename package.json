@@ -11,6 +11,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm --filter @safety/contracts build && pnpm -r typecheck",
     "check:miniprogram": "node scripts/check-miniprogram-production.mjs",
+    "check:miniprogram-training-flow": "node scripts/check-miniprogram-training-flow.mjs",
     "check:admin-api": "tsx scripts/check-admin-api.mts",
     "check:people-bulk-management": "tsx scripts/check-people-bulk-management.mts",
     "check:workspace-state": "pnpm --filter @safety/admin exec tsx scripts/check-workspace-state.mts",
