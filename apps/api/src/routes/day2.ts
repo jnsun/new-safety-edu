@@ -17,6 +17,7 @@ import { canPublishCourseware } from "../courseware-publish-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 import { decorateTodoPriority, sortTodoAssignments } from "../training-todo-priority.js";
 import { completionEvidenceError, latestLearningProgress, resumeUpdateData } from "../learning-progress-policy.js";
+import { serializeStructuredCoursewareForLearner } from "../structured-courseware.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -28,7 +29,7 @@ export const resumeSchema = z.object({
   progressPercent: z.number().int().min(0).max(100)
 });
 
-async function assertScope(principal: Principal, scopeType: ScopeType, scopeId?: string | null) {
+export async function assertScope(principal: Principal, scopeType: ScopeType, scopeId?: string | null) {
   if (scopeType === "company") {
     if (scopeId || !isCompanyAdmin(principal)) forbidden();
   } else if (scopeType === "organization") {
@@ -38,7 +39,7 @@ async function assertScope(principal: Principal, scopeType: ScopeType, scopeId?:
   } else forbidden();
 }
 
-async function assertCoursewareFile(principal: Principal, fileId: string) {
+export async function assertCoursewareFile(principal: Principal, fileId: string) {
   const file = await prisma.privateFile.findFirst({ where: { id: fileId, kind: "courseware", uploadedBy: principal.accountId }, select: { id: true } });
   if (!file) forbidden("HTML 课件文件无效");
 }
@@ -195,30 +196,6 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   });
 
   app.get("/api/coursewares", manager, async (request) => ({ data: await prisma.courseware.findMany({ where: await visibleScope(principalOf(request)), include: { versions: { orderBy: { version: "desc" } } }, orderBy: { createdAt: "desc" } }) }));
-  app.post("/api/coursewares", manager, async (request, reply) => {
-    const principal = principalOf(request);
-    const input = scopeSchema.extend({ title: z.string().trim().min(2).max(180), type: z.enum(["rich_text", "single_html"]), richText: z.string().min(1).optional(), fileId: z.string().uuid().optional() }).parse(request.body);
-    await assertScope(principal, input.scopeType, input.scopeId);
-    if (input.type === "rich_text" ? !input.richText : !input.fileId) throw Object.assign(new Error("课件内容不完整"), { statusCode: 400, code: "CONTENT_REQUIRED" });
-    if (input.fileId) await assertCoursewareFile(principal, input.fileId);
-    const content = input.richText ?? input.fileId!;
-    const courseware = await prisma.courseware.create({ data: { title: input.title, type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null,
-      versions: { create: { version: 1, richText: input.richText ?? null, fileId: input.fileId ?? null, contentHash: createHash("sha256").update(content).digest("hex") } } }, include: { versions: true } });
-    audit(principal.accountId, "courseware.create", "courseware", courseware.id);
-    return reply.code(201).send({ data: courseware });
-  });
-  app.post("/api/coursewares/:id/versions", manager, async (request, reply) => {
-    const principal = principalOf(request); const { id } = idParam.parse(request.params);
-    const courseware = await prisma.courseware.findUniqueOrThrow({ where: { id }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
-    await assertScope(principal, courseware.scopeType, courseware.scopeId);
-    const input = z.object({ richText: z.string().min(1).optional(), fileId: z.string().uuid().optional() }).parse(request.body);
-    const content = input.richText ?? input.fileId;
-    if (!content || (courseware.type === "rich_text" ? !input.richText : !input.fileId)) throw Object.assign(new Error("课件内容不完整"), { statusCode: 400, code: "CONTENT_REQUIRED" });
-    if (input.fileId) await assertCoursewareFile(principal, input.fileId);
-    const version = await prisma.coursewareVersion.create({ data: { coursewareId: id, version: (courseware.versions[0]?.version ?? 0) + 1, richText: input.richText ?? null, fileId: input.fileId ?? null, contentHash: createHash("sha256").update(content).digest("hex") } });
-    audit(principal.accountId, "courseware.version_create", "courseware_version", version.id);
-    return reply.code(201).send({ data: version });
-  });
   app.post("/api/courseware-versions/:id/publish", manager, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
     const version = await prisma.coursewareVersion.findUniqueOrThrow({ where: { id }, include: { courseware: true } });
@@ -407,6 +384,12 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     if (assignment.status === "pending_learning") await prisma.$executeRaw`UPDATE training_assignments SET status = 'learning'::"AssignmentStatus", updated_at = now() WHERE id = ${id}::uuid AND status = 'pending_learning'::"AssignmentStatus"`;
     const version = progress.coursewareVersion;
     if (version.courseware.type === "rich_text") return { data: { title: version.courseware.title, type: version.courseware.type, richText: version.richText, resumeState: progress.resumeState, reachedEndAt: progress.reachedEndAt } };
+    if (version.courseware.type === "structured") return { data: {
+      title: version.courseware.title,
+      type: version.courseware.type,
+      ...serializeStructuredCoursewareForLearner(version.structuredContent, progress.resumeState),
+      reachedEndAt: progress.reachedEndAt
+    } };
     const token = await new SignJWT({ assignmentId: id, versionId, accountId: principal.accountId }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("5m").sign(new TextEncoder().encode(deps.env.UPLOAD_SIGNING_SECRET));
     return { data: { title: version.courseware.title, type: version.courseware.type, viewerUrl: `${deps.env.PUBLIC_BASE_URL}/api/courseware-viewer?token=${encodeURIComponent(token)}`, resumeState: progress.resumeState, reachedEndAt: progress.reachedEndAt } };
   });
