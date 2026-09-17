@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import { administerReceivables } from "../receivables-admin.js";
-import { requireReceivables, resolveReceivablesAccess } from "../receivables-access.js";
+import { assertReceivablesFinanceOrganization, receivablesFinanceOrganizationName, requireReceivables, resolveReceivablesAccess, selectReceivablesFinanceOrganization } from "../receivables-access.js";
 import { getReceivablesColumnPreference, getReceivablesReferenceData, previewReceivablesExport, queryReceivables, receivablesColumnPreferenceSchema, receivablesExportCategoryIds, receivablesExportColumnIds, saveReceivablesColumnPreference } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
@@ -139,7 +139,12 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
       await lockReceivablesSetup(tx);
       const access = await resolveReceivablesAccess(principal, tx);
       requireReceivables(access, "confirmSetup");
-      const setting = await tx.receivableSetting.findUniqueOrThrow({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
+      let setting = await tx.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
+      if (!setting) {
+        const organization = selectReceivablesFinanceOrganization(await tx.organization.findMany({ where: { name: receivablesFinanceOrganizationName, type: "department" }, select: { id: true, type: true }, take: 2 }));
+        assertReceivablesFinanceOrganization(organization);
+        setting = await tx.receivableSetting.create({ data: { id: 1, financeOrganizationId: organization.id }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
+      }
       const confirmedAt = new Date();
       await tx.receivableSetting.update({ where: { id: 1 }, data: { configurationConfirmedAt: confirmedAt, configurationConfirmedBy: principal.accountId } });
       await writeCriticalAudit(tx, {

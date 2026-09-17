@@ -38,9 +38,9 @@ const migrationStateChanged = () => httpError(409, "RECEIVABLES_MIGRATION_STATE_
 const auditMetadata = (before: unknown, after: unknown, impactCount: number) => JSON.parse(JSON.stringify({ before, after, impactCount })) as Prisma.InputJsonValue;
 
 export function assertReceivablesGrantManagement(actorRole: "owner" | "admin" | ReceivableGrantRole | null, existingRole: ReceivableGrantRole | null, requestedRole: ReceivableGrantRole | null): void {
-  if (actorRole === "owner") return;
+  if (actorRole === "owner" && existingRole !== "reporter" && existingRole !== "readonly" && requestedRole !== "reporter" && requestedRole !== "readonly") return;
   if (actorRole === "admin" && existingRole !== "admin" && requestedRole !== "admin") return;
-  throw httpError(403, "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", "财务管理员只能管理填报人和只读人员授权");
+  throw httpError(403, "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", "负责人只管理财务管理员，财务管理员管理报账员和只读授权");
 }
 
 async function runMigrationApply<T>(apply: () => Promise<T>) {

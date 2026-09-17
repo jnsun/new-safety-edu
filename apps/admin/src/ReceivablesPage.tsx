@@ -186,6 +186,17 @@ function AccessState({ access }: { access: ReceivablesAccess }) {
   return <Result status="403" title="无法进入应收账款管理" subTitle="财务权限未授予或已被撤销，请联系应收账款负责人。" />;
 }
 
+function ReceivablesSetup({ access }: { access: ReceivablesAccess }) {
+  const navigate = useNavigate();
+  if (access.state === "pending_owner") {
+    return <Result status="warning" title="请先任命财务资产部负责人" subTitle="负责人激活账号后，才能核对配置并正式启用应收账款模块。" extra={<Button type="primary" onClick={() => navigate("/organization")}>前往组织与职责</Button>} />;
+  }
+  if (access.state === "pending_confirmation") {
+    return <Result status="info" title="等待财务资产部负责人确认" subTitle="负责人确认财务归属部门和业务字典后，财务资产部成员将自动获得只读入口。" />;
+  }
+  return <Result status="warning" title="未找到唯一的财务资产部" subTitle="请在组织与职责中确认存在一个名称为“财务资产部”的部门。" extra={<Button type="primary" onClick={() => navigate("/organization")}>前往组织与职责</Button>} />;
+}
+
 export function ReceivablesPage({ accountId }: { accountId: string }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -203,9 +214,12 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
   if (access.isError || !currentAccess) return <Result status="error" title="权限核验失败" subTitle="未显示任何财务数据。请重新登录或稍后重试。" extra={<Button onClick={() => void access.refetch()}>重新核验</Button>} />;
   const scopeFingerprint = currentScopeFingerprint!;
   if (!currentAccess.canEnter) {
-    if (currentAccess.state !== "pending_confirmation" || !currentAccess.canManageConfiguration || !currentAccess.canConfirmSetup) return <AccessState access={currentAccess} />;
-    if (route !== "departments" && route !== "dictionaries") return <Navigate to="/receivables/departments" replace />;
-    return <div className="receivables-page"><Alert type="warning" showIcon message="待负责人确认初始配置" description={<Space direction="vertical"><Typography.Text>请分别核对财务归属部门与全部 12 类业务字典。确认前不会读取或开放任何财务台账。</Typography.Text><Space><Button type={route === "departments" ? "primary" : "default"} onClick={() => navigate("/receivables/departments")}>核对部门</Button><Button type={route === "dictionaries" ? "primary" : "default"} onClick={() => navigate("/receivables/dictionaries")}>核对字典</Button></Space><Checkbox checked={setupReviewed} onChange={(event) => setSetupReviewed(event.target.checked)}>我已核对部门和业务字典，确认启用后才能进入台账</Checkbox><Button type="primary" disabled={!setupReviewed} loading={confirmSetup.isPending} onClick={() => confirmSetup.mutate()}>确认初始配置</Button></Space>} /><ReceivablesAdmin accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} /></div>;
+    if (currentAccess.state === "pending_confirmation" && currentAccess.canManageConfiguration && currentAccess.canConfirmSetup) {
+      if (route !== "departments" && route !== "dictionaries") return <Navigate to="/receivables/departments" replace />;
+      return <div className="receivables-page"><Alert type="warning" showIcon message="待负责人确认初始配置" description={<Space direction="vertical"><Typography.Text>请分别核对财务归属部门与全部 12 类业务字典。确认前不会读取或开放任何财务台账。</Typography.Text><Space><Button type={route === "departments" ? "primary" : "default"} onClick={() => navigate("/receivables/departments")}>核对部门</Button><Button type={route === "dictionaries" ? "primary" : "default"} onClick={() => navigate("/receivables/dictionaries")}>核对字典</Button></Space><Checkbox checked={setupReviewed} onChange={(event) => setSetupReviewed(event.target.checked)}>我已核对部门和业务字典，确认启用后才能进入台账</Checkbox><Button type="primary" disabled={!setupReviewed} loading={confirmSetup.isPending} onClick={() => confirmSetup.mutate()}>确认初始配置</Button></Space>} /><ReceivablesAdmin accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} /></div>;
+    }
+    if (currentAccess.canRecover) return <ReceivablesSetup access={currentAccess} />;
+    return <AccessState access={currentAccess} />;
   }
   const allowed = route === "dashboard" || route === "ledger" ? currentAccess.canReadLedger
     : route === "data" ? currentAccess.canCreateLedger || currentAccess.canImport || currentAccess.canExport

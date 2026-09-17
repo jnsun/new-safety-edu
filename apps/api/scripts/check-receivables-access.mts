@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { decideReceivablesAccess, requireReceivables, selectSingleReceivablesGrant } from "../src/receivables-access.js";
+import { assertReceivablesFinanceOrganization, decideReceivablesAccess, requireReceivables, selectReceivablesFinanceOrganization, selectSingleReceivablesGrant } from "../src/receivables-access.js";
 import { assertReceivablesGrantManagement } from "../src/receivables-admin.js";
 import { receivableSettingBinding, selectFinanceOrganizationId } from "../../../prisma/receivables-defaults.js";
 
@@ -8,17 +8,37 @@ assert.throws(() => selectFinanceOrganizationId([]), /财务资产部必须且�
 assert.throws(() => selectFinanceOrganizationId([{ id: "a" }, { id: "b" }]), /财务资产部必须且只能存在一个/);
 assert.deepEqual(receivableSettingBinding("finance-org", "finance-org"), { financeOrganizationId: "finance-org" });
 assert.deepEqual(receivableSettingBinding("old-org", "finance-org"), { financeOrganizationId: "finance-org", configurationConfirmedAt: null, configurationConfirmedBy: null });
+assert.doesNotThrow(() => assertReceivablesFinanceOrganization({ type: "department" }));
+assert.throws(() => assertReceivablesFinanceOrganization(null), { code: "RECEIVABLES_FINANCE_ORGANIZATION_INVALID", statusCode: 409 });
+assert.throws(() => assertReceivablesFinanceOrganization({ type: "business_entity" }), { code: "RECEIVABLES_FINANCE_ORGANIZATION_INVALID", statusCode: 409 });
+assert.equal(selectReceivablesFinanceOrganization([{ id: "finance", type: "department" }])?.id, "finance");
+assert.equal(selectReceivablesFinanceOrganization([]), null);
+assert.equal(selectReceivablesFinanceOrganization([{ id: "a", type: "department" }, { id: "b", type: "department" }]), null);
 
 const unconfiguredAdmin = decideReceivablesAccess({
   accountActive: true,
   personActive: true,
+  isCompanyAdmin: true,
   configured: false,
   grant: null,
 });
 assert.equal(unconfiguredAdmin.state, "unconfigured");
-assert.equal(unconfiguredAdmin.canRecover, false);
-assert.equal(decideReceivablesAccess({ accountActive: true, personActive: false, configured: false }).canRecover, false);
+assert.equal(unconfiguredAdmin.canRecover, true);
+assert.equal(decideReceivablesAccess({ accountActive: true, personActive: false, isCompanyAdmin: true, configured: false }).canRecover, false);
 assert.equal(unconfiguredAdmin.canEnter, false);
+
+const pendingOwnerCompanyAdmin = decideReceivablesAccess({
+  accountActive: true,
+  personActive: true,
+  isCompanyAdmin: true,
+  configured: true,
+  configurationConfirmed: false,
+  hasBoundOrgLeader: false,
+  grant: null,
+});
+assert.equal(pendingOwnerCompanyAdmin.state, "pending_owner");
+assert.equal(pendingOwnerCompanyAdmin.canRecover, true);
+assert.equal(pendingOwnerCompanyAdmin.canEnter, false);
 
 const pendingOwner = decideReceivablesAccess({
   accountActive: true,
@@ -35,9 +55,15 @@ assert.equal(pendingOwner.canEnter, false);
 
 const owner = decideReceivablesAccess({ accountActive: true, personActive: true, isBoundOrgLeader: true, grant: null });
 assert.equal(owner.role, "owner");
-assert.equal(owner.canManageAll, true);
+assert.equal(owner.canEnter, true);
+assert.equal(owner.canReadLedger, true);
+assert.equal(owner.canWriteLedger, false);
+assert.equal(owner.canManageAll, false);
 assert.equal(owner.canViewAll, true);
-assert.equal(owner.canMaintainCollection, true);
+assert.equal(owner.canManageAccess, true);
+assert.equal(owner.canManageConfiguration, true);
+assert.equal(owner.canManageMoney, false);
+assert.equal(owner.canMaintainCollection, false);
 
 const configuredAdmin = decideReceivablesAccess({ accountActive: true, personActive: true, configured: true, grant: null });
 assert.equal(configuredAdmin.canReadLedger, false);
@@ -71,7 +97,11 @@ const financeAdmin = decideReceivablesAccess({
 assert.equal(financeAdmin.role, "admin");
 assert.equal(financeAdmin.canManageAll, true);
 assert.equal(financeAdmin.canManageAccess, true);
+assert.doesNotThrow(() => assertReceivablesGrantManagement("owner", null, "admin"));
+assert.doesNotThrow(() => assertReceivablesGrantManagement("owner", "admin", null));
+assert.throws(() => assertReceivablesGrantManagement("owner", null, "reporter"), { code: "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", statusCode: 403 });
 assert.doesNotThrow(() => assertReceivablesGrantManagement("admin", null, "reporter"));
+assert.doesNotThrow(() => assertReceivablesGrantManagement("admin", null, "readonly"));
 assert.doesNotThrow(() => assertReceivablesGrantManagement("admin", "readonly", "reporter"));
 assert.throws(() => assertReceivablesGrantManagement("admin", null, "admin"), { code: "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", statusCode: 403 });
 assert.throws(() => assertReceivablesGrantManagement("admin", "admin", null), { code: "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", statusCode: 403 });

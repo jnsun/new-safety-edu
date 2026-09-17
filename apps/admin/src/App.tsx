@@ -64,7 +64,8 @@ import { receivablesNavigation, receivablesPageTitle, receivablesPortalMode, usa
 import { personMatchesSearch } from "./person-search";
 import { platformConditionalModule } from "./platform-access";
 import { masterDataSelectedKey, peopleOrganizationNav } from "./people-organization/navigation";
-import { filterPeopleRows, peopleInOrganization, readPeopleListState, writePeopleListState, type PeopleView } from "./people-organization/people-list";
+import { filterPeopleRows, peopleInOrganization, primaryOrganizationName, readPeopleListState, writePeopleListState, type PeopleView } from "./people-organization/people-list";
+import { principalRoleSummary } from "./principal-display";
 import { SplitWorkspace } from "./people-organization/SplitWorkspace";
 import { groupOrganizations, readWorkspaceSelection, writeWorkspaceSelection } from "./people-organization/workspace-state";
 import { filterReviewRows, type ReviewScope } from "./people-organization/review-list";
@@ -111,6 +112,8 @@ type Principal = {
   accountId: string;
   personId: string | null;
   mustChangePassword: boolean;
+  displayName: string;
+  primaryOrganization: { id: string; name: string } | null;
   roles: Array<{ role: string; scopeType: string; scopeId: string | null }>;
 };
 type OrganizationRolePerson = {
@@ -1326,6 +1329,13 @@ function People({ principal }: { principal: Principal }) {
           {value}
         </Button>
       ),
+    },
+    {
+      title: "所在部门",
+      render: (_: unknown, row: Person) =>
+        primaryOrganizationName(row) ?? (
+          <Typography.Text type="secondary">未设置</Typography.Text>
+        ),
     },
     { title: "类型", dataIndex: "type", render: (v: string) => labels[v] ?? v },
     { title: "手机号", dataIndex: "phone", render: (v: string) => v },
@@ -2640,10 +2650,10 @@ function PlatformPortal({ accountId }: { accountId: string }) {
   const access = useReceivablesAccess(accountId);
   const currentAccess = usableReceivablesAccess(access);
   const portalMode = currentAccess ? receivablesPortalMode(currentAccess) : "hidden";
-  const conditionalModule = platformConditionalModule(portalMode === "enabled" || portalMode === "confirm");
+  const conditionalModule = platformConditionalModule(portalMode !== "hidden");
   const modules = [...platformModules, conditionalModule === "receivables" ? {
-      title: "应收账款管理",
-      description: "合同应收、开票回款与催收台账",
+      title: portalMode === "recover" ? "应收账款待启用" : "应收账款管理",
+      description: portalMode === "recover" ? "设置财务资产部负责人后完成首次启用" : "合同应收、开票回款与催收台账",
       path: portalMode === "confirm" ? "/receivables/departments" : "/receivables",
       icon: <AccountBookOutlined />,
       tone: "slate",
@@ -2735,12 +2745,13 @@ function Shell({ principal }: { principal: Principal }) {
         <Layout>
           <Layout.Header className="topbar">
             <span className="topbar-title">{inReceivables ? receivablesPageTitle(location.pathname) : workspaceTitle}</span>
-            <Space>
-              {!inReceivables && <Tag>
-                {principal.roles
-                  .map((r) => labels[r.role] ?? r.role)
-                  .join(" / ") || "无角色"}
-              </Tag>}
+            <Space className="topbar-actions">
+              <div className="topbar-identity" aria-label="当前登录人员">
+                <span className="topbar-person-name">{principal.displayName}</span>
+                <span className="topbar-person-meta">
+                  {principal.primaryOrganization?.name ?? "未设置部门"} · {principalRoleSummary(principal.roles, labels)}
+                </span>
+              </div>
               <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
               {wechatWeb.data?.enabled && <Typography.Text type="secondary">更换微信请退出后使用新微信扫码，并通过已登记手机号验证。</Typography.Text>}
               <Button

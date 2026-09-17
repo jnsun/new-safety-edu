@@ -8,7 +8,7 @@ type Section = "grants" | "departments" | "dictionaries";
 type MigrationPreview = { sourceId: string; targetId: string; impactCount: number; token: string; expiresAt: string };
 type AdminRow = ReceivablesGrant | ReceivablesDepartment | ReceivablesDictionaryOption;
 
-const roleLabels = { admin: "财务管理员", reporter: "财务填报人", readonly: "只读人员" } as const;
+const roleLabels = { admin: "财务管理员", reporter: "报账员", readonly: "只读人员" } as const;
 
 export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section }: { accountId: string; scopeFingerprint: string; access: ReceivablesAccess; section: Section }) {
   const qc = useQueryClient();
@@ -115,7 +115,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
 
   if (!allowed) return <Alert type="error" showIcon message="当前账号没有此项管理权限" />;
   const title = section === "grants" ? "账号与权限" : section === "departments" ? "财务归属部门" : "业务字典";
-  const roleOptions = Object.entries(roleLabels).filter(([role]) => access.role === "owner" || role !== "admin").map(([value, label]) => ({ value, label }));
+  const roleOptions = Object.entries(roleLabels).filter(([role]) => access.role === "owner" ? role === "admin" : role !== "admin").map(([value, label]) => ({ value, label }));
   const changeGrantRole = (role: ReceivablesGrant["role"]) => {
     const currentScopes = (form.getFieldValue("departmentScopes") as Array<{ departmentId: string; canRead: boolean; canWrite: boolean }> | undefined) ?? [];
     const selectedIds = (form.getFieldValue("departmentIds") as string[] | undefined) ?? [];
@@ -164,11 +164,12 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
   const closeMigration = () => { setMigration(undefined); setMigrationConflict(undefined); migrationForm.resetFields(); };
   const openDeactivate = (row: AdminRow) => { setDeactivateTarget(row); setDeactivateReason(""); setDeactivateReconfirm(false); setConflict(undefined); };
   const rowActions = (row: AdminRow) => {
-    const lockedAdminGrant = section === "grants" && access.role === "admin" && (row as ReceivablesGrant).role === "admin";
-    const lockedTitle = lockedAdminGrant ? "只有财务资产部负责人可以管理财务管理员" : undefined;
+    const grantRole = section === "grants" ? (row as ReceivablesGrant).role : null;
+    const lockedGrant = section === "grants" && (access.role === "owner" ? grantRole !== "admin" : grantRole === "admin");
+    const lockedTitle = lockedGrant ? access.role === "owner" ? "报账员和只读授权由财务管理员管理" : "只有财务资产部负责人可以管理财务管理员" : undefined;
     return <Space wrap size={6}>
-      <Button size="small" title={lockedTitle} disabled={!row.active || lockedAdminGrant} onClick={() => openEditor(row)}>编辑</Button>
-      <Button size="small" danger title={lockedTitle} disabled={!row.active || lockedAdminGrant} onClick={() => openDeactivate(row)}>{section === "grants" ? "撤销" : "停用"}</Button>
+      <Button size="small" title={lockedTitle} disabled={!row.active || lockedGrant} onClick={() => openEditor(row)}>编辑</Button>
+      <Button size="small" danger title={lockedTitle} disabled={!row.active || lockedGrant} onClick={() => openDeactivate(row)}>{section === "grants" ? "撤销" : "停用"}</Button>
       {section !== "grants" && !row.active && access.canManageAccess && <Select aria-label="迁移目标" placeholder="迁移到…" className="receivables-migration-select" options={activeTargets.filter((item) => item.id !== row.id && (section !== "dictionaries" || (item as ReceivablesDictionaryOption).category === (row as ReceivablesDictionaryOption).category)).map((item) => ({ value: item.id, label: "name" in item ? item.name : item.value }))} onChange={(targetId) => void previewMigration(row.id, targetId)} />}
     </Space>;
   };
@@ -177,7 +178,6 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     <div className="receivables-compact-toolbar"><Typography.Text type="secondary">配置与授权变更均记录原因、修订号和审计信息。</Typography.Text><Button type="primary" onClick={() => openEditor()}>{createLabel}</Button></div>
     {rows.isFetching && <Card loading />}
     {rows.isError && <Alert type="error" showIcon message="数据加载失败，已隐藏缓存内容" action={<Button onClick={() => void rows.refetch()}>重试</Button>} />}
-
     {currentRows && section === "grants" && <Table size="small" rowKey="id" dataSource={currentRows as ReceivablesGrant[]} pagination={{ pageSize: 20, hideOnSinglePage: true }} scroll={{ x: 760 }} locale={{ emptyText: "暂无财务授权" }} columns={[
       { title: "账号", dataIndex: "accountId", ellipsis: true },
       { title: "角色", width: 120, render: (_: unknown, row: ReceivablesGrant) => <Tag>{roleLabels[row.role]}</Tag> },
