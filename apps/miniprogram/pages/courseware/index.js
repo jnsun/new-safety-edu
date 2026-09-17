@@ -3,18 +3,20 @@ const api = require('../../utils/api')
 const remainingText = (percent) => percent >= 100 ? '已阅读至末尾' : (percent ? `约剩 ${100 - percent}%` : '全部内容待阅读')
 
 Page({
-  data: { assignmentId: '', versionId: '', content: null, progressPercent: 0, remainingText: '全部内容待阅读', atEnd: false, htmlNavigationSucceeded: false, reachingEnd: false, loading: true, busy: false, error: '', syncWarning: '' },
+  data: { assignmentId: '', versionId: '', content: null, progressPercent: 0, remainingText: '全部内容待阅读', structuredResumeBlockKey: '', atEnd: false, htmlNavigationSucceeded: false, reachingEnd: false, loading: true, busy: false, error: '', syncWarning: '' },
   async onLoad(options) {
     this.setData({ assignmentId: options.assignmentId, versionId: options.versionId })
     try {
       const content = await api.request(`/api/assignments/${options.assignmentId}/coursewares/${options.versionId}`)
-      const saved = content.type === 'rich_text' && content.resumeState?.blockKey === 'rich-text' ? content.resumeState.progressPercent : 0
+      const hasCompatibleResume = content.type === 'structured' || (content.type === 'rich_text' && content.resumeState?.blockKey === 'rich-text')
+      const saved = hasCompatibleResume ? content.resumeState?.progressPercent : 0
       const resumePercent = Number.isInteger(saved) && saved >= 0 && saved <= 100 ? saved : 0
       const atEnd = !!content.reachedEndAt
       const progressPercent = atEnd ? 100 : Math.min(resumePercent, 99)
       this._savedPercent = progressPercent
       this._queuedPercent = progressPercent
-      this.setData({ content, progressPercent, remainingText: remainingText(progressPercent), atEnd })
+      const structuredResumeBlockKey = content.type === 'structured' && typeof content.resumeState?.blockKey === 'string' ? content.resumeState.blockKey : ''
+      this.setData({ content, progressPercent, remainingText: remainingText(progressPercent), structuredResumeBlockKey, atEnd })
       if (content.type === 'rich_text' && progressPercent && !atEnd) wx.nextTick(() => this.restorePosition(Math.min(progressPercent, 95)))
     } catch (error) {
       this.setData({ error: error.message })
@@ -54,16 +56,16 @@ Page({
     this.queueResumeSave(100, true)
     this.recordReachedEnd()
   },
-  queueResumeSave(progressPercent, immediate = false) {
+  queueResumeSave(progressPercent, immediate = false, blockKey = 'rich-text') {
     clearTimeout(this._saveTimer)
     this._queuedPercent = progressPercent
-    if (immediate) return this.persistResume(progressPercent)
-    this._saveTimer = setTimeout(() => this.persistResume(progressPercent), 300)
+    if (immediate) return this.persistResume(progressPercent, blockKey)
+    this._saveTimer = setTimeout(() => this.persistResume(progressPercent, blockKey), 300)
   },
-  persistResume(progressPercent) {
+  persistResume(progressPercent, blockKey = 'rich-text') {
     this._saveChain = (this._saveChain || Promise.resolve()).then(async () => {
       try {
-        await api.request(`/api/assignments/${this.data.assignmentId}/coursewares/${this.data.versionId}/resume`, 'PATCH', { blockKey: 'rich-text', progressPercent })
+        await api.request(`/api/assignments/${this.data.assignmentId}/coursewares/${this.data.versionId}/resume`, 'PATCH', { blockKey, progressPercent })
         this._savedPercent = Math.max(this._savedPercent ?? 0, progressPercent)
         if (!this._destroyed) this.setData({ syncWarning: '' })
       } catch (_error) {
@@ -88,6 +90,14 @@ Page({
   attestRichTextComplete() {
     if (this.data.content?.type !== 'rich_text') return
     return this.recordReachedEnd()
+  },
+  async onStructuredBlockReached({ detail }) {
+    if (!detail?.confirmed || !detail.blockKey || !Number.isInteger(detail.progressPercent)) return
+    const progressPercent = Math.max(this.data.progressPercent, Math.min(detail.progressPercent, 100))
+    this._currentBlockKey = detail.blockKey
+    this.setData({ progressPercent, remainingText: remainingText(progressPercent) })
+    await this.persistResume(progressPercent, detail.blockKey)
+    if (detail.isLast && detail.confirmed) await this.recordReachedEnd()
   },
   recordReachedEnd() {
     if (this.data.atEnd || this._reachedEndPending) return this._reachedEndPending
@@ -124,5 +134,6 @@ Page({
     clearTimeout(this._progressTimer)
     clearTimeout(this._saveTimer)
     if (this.data.content?.type === 'rich_text' && this.data.progressPercent > (this._savedPercent ?? 0)) this.persistResume(this.data.progressPercent)
+    if (this.data.content?.type === 'structured' && this._currentBlockKey && this.data.progressPercent > (this._savedPercent ?? 0)) this.persistResume(this.data.progressPercent, this._currentBlockKey)
   }
 })

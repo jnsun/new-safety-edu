@@ -13,8 +13,9 @@
     <view class="reader-heading">
       <text class="course-title">{{content.title}}</text>
       <text wx:if="{{content.type === 'rich_text'}}" class="resume-copy">图文课件 · 单元进度 {{progressPercent}}% · {{remainingText}}</text>
+      <text wx:elif="{{content.type === 'structured'}}" class="resume-copy">互动图文课件 · 预计 {{content.estimatedMinutes}} 分钟 · 学习进度 {{progressPercent}}%</text>
       <text wx:else class="resume-copy">HTML 交互课件 · 在受控页面中阅读，页内位置不会同步。</text>
-      <view wx:if="{{content.type === 'rich_text'}}" class="progress" aria-label="单元进度 {{progressPercent}}%">
+      <view wx:if="{{content.type === 'rich_text' || content.type === 'structured'}}" class="progress" aria-label="单元进度 {{progressPercent}}%">
         <view class="progress-bar" style="width: {{progressPercent}}%"></view>
       </view>
     </view>
@@ -26,6 +27,8 @@
         <text wx:else class="attestation-success">已记录本人阅读至末尾。</text>
       </view>
     </view>
+
+    <courseware-blocks wx:elif="{{content.type === 'structured'}}" units="{{content.units}}" resume-block-key="{{structuredResumeBlockKey}}" bind:block-reached="onStructuredBlockReached"></courseware-blocks>
 
     <view wx:else class="html-panel">
       <text class="section-title">打开受控课件</text>
@@ -39,6 +42,8 @@
       <text class="section-title">完成本次学习</text>
       <text wx:if="{{content.type === 'rich_text' && !atEnd}}" class="section-copy">请阅读至内容末尾并点击“本人确认已阅读至末尾”。</text>
       <text wx:elif="{{content.type === 'rich_text'}}" class="section-copy success-copy">已到达课件末尾，可以完成本次学习。</text>
+      <text wx:elif="{{content.type === 'structured' && !atEnd}}" class="section-copy">请依次学习内容，并在最后一项点击“本人确认已阅读至末尾”。</text>
+      <text wx:elif="{{content.type === 'structured'}}" class="section-copy success-copy">已记录到达课件末尾，可以完成本次学习。</text>
       <text wx:elif="{{!htmlNavigationSucceeded}}" class="section-copy">请先打开 HTML 课件并完成互动内容。</text>
       <text wx:elif="{{!atEnd}}" class="section-copy">返回后点击“本人确认已完成全部互动内容”。</text>
       <text wx:else class="section-copy success-copy">本人完成确认已记录，可以完成本次学习。</text>

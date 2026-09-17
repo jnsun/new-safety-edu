@@ -16,6 +16,7 @@
 .sync-warning { display: block; margin-top: 18rpx; color: var(--warning); font-size: 28rpx; line-height: 1.5; }
 .success-copy { color: var(--success); }
 .action-error { margin-top: 18rpx; }
+courseware-blocks { display: block; margin-bottom: 24rpx; }
 
 @media (min-width: 700px) {
   .courseware-page { padding-left: 48rpx; padding-right: 48rpx; }
