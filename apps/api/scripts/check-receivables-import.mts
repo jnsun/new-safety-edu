@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { classifyReceivablesImportDatabaseError, classifyReceivablesImportFileError, inspectReceivablesImportWorkbook, parseReceivablesImportWorkbook, receivablesImportBatchParseOptions, receivablesImportBatchTransactionOptions } from "../src/receivables-import.js";
+import { classifyReceivablesImportDatabaseError, classifyReceivablesImportFileError, inspectReceivablesImportWorkbook, parseReceivablesImportWorkbook, receivablesImportBatchParseOptions, receivablesImportBatchTransactionOptions, receivablesImportNeedsOpeningBalanceDate } from "../src/receivables-import.js";
 
 const references = {
   departments: [
@@ -12,6 +12,7 @@ const references = {
     { category: "final_method", value: "工作量", active: true },
     { category: "unit", value: "物化院", active: true },
     { category: "project_status", value: "完工", active: true },
+    { category: "project_status", value: "取消或作废", active: true },
     { category: "debt_status", value: "正常", active: true },
     { category: "client_attr", value: "内部单位", active: true },
     { category: "work_nature", value: "综合物探", active: true },
@@ -103,8 +104,20 @@ assert.ok(!legacy.warnings.some(({ code }) => code === "UNKNOWN_COLUMN"), "known
 assert.ok(!legacy.rows[0]?.normalizedData.presentFields.some((field) => ["internalReceivable", "externalReceivable", "balance"].includes(field)), "derived values must not become imported facts");
 
 const legacyWithoutBalanceDate = parseReceivablesImportWorkbook(legacyWorkbook, references);
-assert.ok(codes(legacyWithoutBalanceDate).includes("OPENING_BALANCE_DATE_REQUIRED"), "legacy opening totals need one explicit batch date");
+assert.deepEqual(codes(legacyWithoutBalanceDate), [], "missing opening balance date must not block preview");
+assert.equal(legacyWithoutBalanceDate.warnings.filter(({ code }) => code === "OPENING_BALANCE_DATE_PENDING").length, 1, "missing opening balance date is summarized once");
+assert.equal(legacyWithoutBalanceDate.rows[0]?.normalizedData.openingInvoiceDate, null);
+assert.equal(legacyWithoutBalanceDate.rows[0]?.normalizedData.openingReceiptDate, null);
+assert.equal(receivablesImportNeedsOpeningBalanceDate(legacyWithoutBalanceDate.rows), true, "final apply must require the deferred date");
+assert.equal(receivablesImportNeedsOpeningBalanceDate(legacy.rows), false, "a preview carrying explicit dates can be applied directly");
 assert.ok(codes(parseReceivablesImportWorkbook(legacyWorkbook, references, { openingBalanceDate: "2026-02-30" })).includes("DATE_INVALID"), "the shared opening balance date must be a real calendar date");
+
+const cancelled = parseReceivablesImportWorkbook(workbook(
+  ["合同编号", "归属部门", "项目状态", "合同金额"],
+  [["CANCELLED-001", "一所", "作废", "1"]],
+), references);
+assert.deepEqual(codes(cancelled), []);
+assert.equal(cancelled.rows[0]?.normalizedData.projectStatus, "取消或作废", "legacy 作废 status maps to the active canonical option");
 
 const customHeaders = workbook(
   ["所属经营实体", "旧合同编号", "项目简称", "旧决算金额", "无关备注"],
@@ -137,11 +150,18 @@ const failures = [
   ["invalid date", workbook(["合同号", "归属部门", "最新挂账时间"], [["A", "一所", "2026-02-30"]]), "DATE_INVALID"],
   ["invalid dunning date", workbook(["合同号", "归属部门", "最新催收时间"], [["A", "一所", "2026-02-30"]]), "DATE_INVALID"],
   ["dictionary", workbook(["合同号", "归属部门", "债权单位"], [["A", "一所", "未知单位"]]), "DICTIONARY_VALUE_INVALID"],
-  ["invoice date", workbook(["合同号", "归属部门", "开票金额"], [["A", "一所", "1"]]), "OPENING_INVOICE_DATE_REQUIRED"],
-  ["receipt date", workbook(["合同号", "归属部门", "到账金额"], [["A", "一所", "1"]]), "OPENING_RECEIPT_DATE_REQUIRED"],
 ] as const;
 for (const [label, fixture, expected] of failures) {
   assert.ok(codes(parseReceivablesImportWorkbook(fixture, references)).includes(expected), label);
+}
+
+for (const fixture of [
+  workbook(["合同号", "归属部门", "合同金额", "开票金额"], [["A", "一所", "1", "1"]]),
+  workbook(["合同号", "归属部门", "合同金额", "到账金额"], [["A", "一所", "1", "1"]]),
+]) {
+  const pending = parseReceivablesImportWorkbook(fixture, references);
+  assert.deepEqual(codes(pending), [], "opening totals without a date may reach preview");
+  assert.equal(pending.warnings.filter(({ code }) => code === "OPENING_BALANCE_DATE_PENDING").length, 1);
 }
 
 const duplicate = parseReceivablesImportWorkbook(workbook(

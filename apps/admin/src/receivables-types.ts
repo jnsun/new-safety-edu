@@ -538,9 +538,15 @@ export function normalizeReceivablesGrantDraft(role: ReceivablesGrant["role"], d
   };
 }
 
-type ImportPreviewGuard = { errors: readonly unknown[]; rows: readonly { rowNumber: number; ledgerId: string | null }[] };
+type ImportPreviewGuard = { errors: readonly unknown[]; rows: readonly { rowNumber: number; ledgerId: string | null; normalizedData?: Pick<ReceivablesImportData, "openingInvoiceAmount" | "openingInvoiceDate" | "openingReceiptAmount" | "openingReceiptDate"> }[] };
 type ImportDecisions = Record<number, "skip" | "update">;
 const unresolvedDuplicate = (preview: ImportPreviewGuard, decisions: ImportDecisions) => preview.rows.some((row) => row.ledgerId && !decisions[row.rowNumber]);
+const hasPositiveImportAmount = (value: string | null | undefined) => !!value && !/^0+(?:\.0+)?$/.test(value);
+
+export const receivablesImportNeedsOpeningBalanceDate = (preview: ImportPreviewGuard) => preview.rows.some(({ ledgerId, normalizedData }) => !ledgerId && !!normalizedData && (
+  hasPositiveImportAmount(normalizedData.openingInvoiceAmount) && !normalizedData.openingInvoiceDate
+  || hasPositiveImportAmount(normalizedData.openingReceiptAmount) && !normalizedData.openingReceiptDate
+));
 
 export function receivablesImportStage(preview: ImportPreviewGuard | undefined, decisions: ImportDecisions, confirmed: boolean): "upload" | "blocking_errors" | "duplicate_decisions" | "impact_preview" | "confirm_apply" {
   if (!preview) return "upload";

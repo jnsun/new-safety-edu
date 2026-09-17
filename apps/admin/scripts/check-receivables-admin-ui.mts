@@ -4,10 +4,14 @@ import {
   filterReceivablesDepartments,
   groupReceivablesDictionaryOptions,
   groupReceivablesImportIssues,
+  receivablesImportNeedsOpeningBalanceDate,
   receivablesPageTitle,
   receivablesReferenceCategoryLabels,
   updateReceivablesSelectedScopes,
 } from "../src/receivables-types.js";
+
+assert.equal(receivablesImportNeedsOpeningBalanceDate({ errors: [], rows: [{ rowNumber: 2, ledgerId: null, normalizedData: { openingInvoiceAmount: "1.0000", openingInvoiceDate: null, openingReceiptAmount: null, openingReceiptDate: null } }] }), true);
+assert.equal(receivablesImportNeedsOpeningBalanceDate({ errors: [], rows: [{ rowNumber: 2, ledgerId: null, normalizedData: { openingInvoiceAmount: "1.0000", openingInvoiceDate: "2026-09-17", openingReceiptAmount: null, openingReceiptDate: null } }] }), false);
 
 assert.equal(receivablesPageTitle("/receivables/access"), "账号与权限");
 assert.equal(receivablesPageTitle("/receivables/data"), "数据处理");
@@ -54,6 +58,7 @@ assert.deepEqual(groupReceivablesImportIssues([
 const ledgerSource = readFileSync(new URL("../src/ReceivablesLedger.tsx", import.meta.url), "utf8");
 const adminSource = readFileSync(new URL("../src/ReceivablesAdmin.tsx", import.meta.url), "utf8");
 const pageSource = readFileSync(new URL("../src/ReceivablesPage.tsx", import.meta.url), "utf8");
+const transfersSource = readFileSync(new URL("../src/ReceivablesTransfers.tsx", import.meta.url), "utf8");
 const mainSource = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
 const adminPackage = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -81,5 +86,7 @@ assert.doesNotMatch(adminSource, /scroll=\{\{\s*x:\s*760\s*\}\}/, "grant table d
 assert.doesNotMatch(adminSource, /fixed:\s*["']right["']/, "grant actions are not pinned into a forced overflow table");
 assert.match(adminSource, /receivables-grant-cards/, "narrow screens use grant cards instead of a horizontal table");
 assert.doesNotMatch(pageSource, /defaultReceivablesDashboardPreference\.find\([^\n]+\)!/, "optional cards have a real catalog fallback size");
+assert.match(transfersSource, /openingBalanceDate:\s*openingBalanceDate\s*\|\|\s*undefined/, "final apply sends the date selected after preview");
+assert.match(transfersSource, /最终应用前填写/, "the preview explains when the pending date is required");
 
 console.log("RECEIVABLES_ADMIN_UI_OK");

@@ -100,7 +100,7 @@ const writeoffInput = z.object({ ledgerRevision: z.number().int().positive(), re
 const attachmentFields = z.object({ ledgerRevision: z.coerce.number().int().positive(), category: z.string().trim().min(1).max(120).default("general") }).strict();
 const attachmentVoidInput = z.object({ ledgerRevision: z.number().int().positive(), revision: z.number().int().positive(), reason: reasonInput }).strict();
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() }).strict();
-const importApplyInput = z.object({ revision: z.number().int().positive(), decisions: z.array(z.object({ rowNumber: z.number().int().min(2), decision: z.enum(["skip", "update"]) }).strict()).max(200_000) }).strict();
+const importApplyInput = z.object({ revision: z.number().int().positive(), openingBalanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), decisions: z.array(z.object({ rowNumber: z.number().int().min(2), decision: z.enum(["skip", "update"]) }).strict()).max(200_000) }).strict();
 const importRollbackInput = z.object({ revision: z.number().int().positive(), reason: reasonInput }).strict();
 const columnMappingsField = z.string().max(20_000).optional().transform((value, ctx): ReceivablesImportColumnMappings => {
   if (!value) return {};
@@ -228,7 +228,7 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   });
   app.post("/api/receivables/imports/:id/apply", { preHandler: deps.authenticate }, async (request) => {
     const input = importApplyInput.parse(request.body);
-    return { data: await applyReceivablesImport(adminContext(request), idParams.parse(request.params).id, { revision: input.revision, rows: input.decisions }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads" }) };
+    return { data: await applyReceivablesImport(adminContext(request), idParams.parse(request.params).id, { revision: input.revision, rows: input.decisions }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads", openingBalanceDate: input.openingBalanceDate }) };
   });
   app.post("/api/receivables/imports/:id/rollback", { preHandler: deps.authenticate }, async (request) => ({ data: await rollbackReceivablesImport(adminContext(request), idParams.parse(request.params).id, importRollbackInput.parse(request.body)) }));
   app.post("/api/receivables/ledgers", { preHandler: deps.authenticate }, async (request, reply) => {

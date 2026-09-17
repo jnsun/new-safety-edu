@@ -132,6 +132,9 @@ const textLimits: Partial<Record<keyof ReceivablesImportData, number>> = {
 
 const amountFields = ["contractAmount", "finalAmount", "openingInvoiceAmount", "openingReceiptAmount"] as const;
 const dateFields = ["openingChargeDate", "dunningDate", "openingInvoiceDate", "openingReceiptDate"] as const;
+const dictionaryValueAliases: Partial<Record<ReceivablesImportField, Record<string, string>>> = {
+  projectStatus: { 作废: "取消或作废" },
+};
 const issue = (code: string, message: string, extra: Omit<ReceivablesImportIssue, "code" | "message"> = {}): ReceivablesImportIssue => ({ code, message, ...extra });
 
 function cellText(cell: ExcelJS.Cell): string {
@@ -239,6 +242,7 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
   }
   const ledgerByContract = new Map(references.ledgers.map((ledger) => [ledger.contractNoNormalized, ledger]));
   const rows: ReceivablesImportParsedRow[] = [];
+  let openingBalanceDatePending = false;
 
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
@@ -252,7 +256,8 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     }
     const normalizedData = { ...Object.fromEntries(Object.keys(aliases).map((field) => [field, null])), presentFields: [...columns.keys()] } as ReceivablesImportData;
     for (const field of Object.keys(aliases) as ReceivablesImportField[]) {
-      const value = raw[field]?.trim() ?? "";
+      const sourceValue = raw[field]?.trim() ?? "";
+      const value = dictionaryValueAliases[field]?.[sourceValue] ?? sourceValue;
       if (!value) continue;
       if ((amountFields as readonly string[]).includes(field)) normalizedData[field] = decimal(value, rowNumber, field, rowErrors) as never;
       else if ((dateFields as readonly string[]).includes(field)) normalizedData[field] = dateOnly(value, rowNumber, field, rowErrors) as never;
@@ -291,22 +296,17 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     };
     if (normalizedData.openingInvoiceAmount && new Prisma.Decimal(normalizedData.openingInvoiceAmount).gt(0) && !normalizedData.openingInvoiceDate) {
       if (options.openingBalanceDate) normalizedData.openingInvoiceDate = openingBalanceDate();
-      else rowErrors.push(issue("OPENING_INVOICE_DATE_REQUIRED", "期初开票金额大于零时必须提供开票日期", { rowNumber, field: "openingInvoiceDate" }));
+      else if (!target) openingBalanceDatePending = true;
     }
     if (normalizedData.openingReceiptAmount && new Prisma.Decimal(normalizedData.openingReceiptAmount).gt(0) && !normalizedData.openingReceiptDate) {
       if (options.openingBalanceDate) normalizedData.openingReceiptDate = openingBalanceDate();
-      else rowErrors.push(issue("OPENING_RECEIPT_DATE_REQUIRED", "期初到账金额大于零时必须提供到账日期", { rowNumber, field: "openingReceiptDate" }));
-    }
-    if (!options.openingBalanceDate && ["openingInvoiceAmount", "openingReceiptAmount"].some((field) => {
-      const column = columns.get(field as ReceivablesImportField);
-      return column && ["已开发票", "已到账收入"].includes(cellText(headerRow.getCell(column)));
-    }) && [normalizedData.openingInvoiceAmount, normalizedData.openingReceiptAmount].some((amount) => amount && new Prisma.Decimal(amount).gt(0))) {
-      rowErrors.push(issue("OPENING_BALANCE_DATE_REQUIRED", "旧表包含期初开票或到账金额，请为本批次选择期初余额日期", { rowNumber, field: "openingBalanceDate" }));
+      else if (!target) openingBalanceDatePending = true;
     }
     const openingTotals = [normalizedData.openingInvoiceAmount, normalizedData.openingReceiptAmount].some((amount) => amount !== null && new Prisma.Decimal(amount).gt(0));
     const rowWarnings = target && openingTotals ? [issue("EXISTING_OPENING_TOTALS_SKIP_ONLY", "已有合同含非零期初开票或到账金额，只能跳过", { rowNumber })] : [];
     rows.push({ rowNumber, normalizedData, errors: rowErrors, ledgerId: target?.id ?? null, targetRevision: target?.revision ?? null, allowedDecisions: target ? openingTotals ? ["skip"] : ["skip", "update"] : ["create"], warnings: rowWarnings });
   }
+  if (openingBalanceDatePending) warnings.push(issue("OPENING_BALANCE_DATE_PENDING", "检测到期初开票或到账金额，请在最终应用前填写期初余额日期", { field: "openingBalanceDate" }));
 
   const contracts = new Map<string, ReceivablesImportParsedRow[]>();
   for (const row of rows) {
@@ -325,6 +325,15 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
 export type ReceivablesImportContext = { principal: Principal; requestId: string };
 export type ReceivablesImportFile = { originalName: string; mimeType: string; content: Buffer };
 export type ReceivablesImportEnvironment = { uploadRoot: string; openingBalanceDate?: string | null | undefined; columnMappings?: ReceivablesImportColumnMappings | undefined };
+
+export function receivablesImportNeedsOpeningBalanceDate(rows: readonly { ledgerId: string | null; normalizedData: unknown }[]) {
+  return rows.some((item) => {
+    if (item.ledgerId) return false;
+    const data = item.normalizedData as ReceivablesImportData;
+    return (!!data.openingInvoiceAmount && new Prisma.Decimal(data.openingInvoiceAmount).gt(0) && !data.openingInvoiceDate)
+      || (!!data.openingReceiptAmount && new Prisma.Decimal(data.openingReceiptAmount).gt(0) && !data.openingReceiptDate);
+  });
+}
 export type ReceivablesImportDecisions = { revision: number; rows: readonly { rowNumber: number; decision: "skip" | "update" }[] };
 type Tx = Prisma.TransactionClient;
 const setupLockKey = 8_645_136_501n;
@@ -525,6 +534,9 @@ function throwReceivablesImportDatabaseError(error: unknown): never {
 
 export async function applyReceivablesImport(context: ReceivablesImportContext, batchId: string, decisions: ReceivablesImportDecisions, env: ReceivablesImportEnvironment) {
   await authorizeReceivablesImport(context.principal);
+  const suppliedDateErrors: ReceivablesImportIssue[] = [];
+  const suppliedOpeningBalanceDate = env.openingBalanceDate ? dateOnly(env.openingBalanceDate, 0, "openingBalanceDate", suppliedDateErrors) : null;
+  if (suppliedDateErrors.length) throw invalid("OPENING_BALANCE_DATE_INVALID", "期初余额日期无效");
   const prepared = await prepareReceivablesImportFile(batchId, env.uploadRoot);
   let primaryError: unknown;
   try {
@@ -553,6 +565,9 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
         const hasOpeningTotals = [data.openingInvoiceAmount, data.openingReceiptAmount].some((amount) => amount !== null && new Prisma.Decimal(amount).gt(0));
         if (item.ledgerId && choice.get(item.rowNumber) === "update" && hasOpeningTotals) throw invalid("IMPORT_OPENING_TOTALS_UPDATE_FORBIDDEN", "已有合同含非零期初金额，只能跳过");
       }
+      const batchOpeningBalanceDate = batch.openingBalanceDate?.toISOString().slice(0, 10) ?? suppliedOpeningBalanceDate;
+      const needsOpeningBalanceDate = receivablesImportNeedsOpeningBalanceDate(batch.items);
+      if (needsOpeningBalanceDate && !batchOpeningBalanceDate) throw invalid("OPENING_BALANCE_DATE_REQUIRED", "请在最终应用前填写期初余额日期");
       for (const [index, item] of batch.items.entries()) {
         const row = reparsed.rows[index]!;
         if (stableJson(item.normalizedData) !== stableJson(row.normalizedData) || item.ledgerId !== row.ledgerId || item.targetRevision !== row.targetRevision) throw conflict("IMPORT_PREVIEW_STALE", "导入预览已失效");
@@ -580,13 +595,13 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
           await tx.receivableLedgerRevision.create({ data: { ledgerId: before.id, revision: before.revision, beforeSnapshot: snapshot(before), reason: "批次导入更新", changedBy: context.principal.accountId, importBatchId: batchId } });
           ledger = await tx.receivableLedger.update({ where: { id: before.id }, data: { ...ledgerData(data, "update"), updatedBy: context.principal.accountId, revision: { increment: 1 } } });
         }
-        if (!item.ledgerId && data.openingInvoiceAmount && new Prisma.Decimal(data.openingInvoiceAmount).gt(0)) await importedDetail(tx, context, access, ledger.id, batchId, "invoice", data.openingInvoiceAmount, data.openingInvoiceDate!);
-        if (!item.ledgerId && data.openingReceiptAmount && new Prisma.Decimal(data.openingReceiptAmount).gt(0)) await importedDetail(tx, context, access, ledger.id, batchId, "receipt", data.openingReceiptAmount, data.openingReceiptDate!);
+        if (!item.ledgerId && data.openingInvoiceAmount && new Prisma.Decimal(data.openingInvoiceAmount).gt(0)) await importedDetail(tx, context, access, ledger.id, batchId, "invoice", data.openingInvoiceAmount, data.openingInvoiceDate ?? batchOpeningBalanceDate!);
+        if (!item.ledgerId && data.openingReceiptAmount && new Prisma.Decimal(data.openingReceiptAmount).gt(0)) await importedDetail(tx, context, access, ledger.id, batchId, "receipt", data.openingReceiptAmount, data.openingReceiptDate ?? batchOpeningBalanceDate!);
         ledger = await tx.receivableLedger.findUniqueOrThrow({ where: { id: ledger.id } });
         await tx.receivableImportItem.update({ where: { id: item.id }, data: { decision: item.ledgerId ? "update" : null, result: item.ledgerId ? "updated" : "created", ledgerId: ledger.id, appliedRevision: ledger.revision } });
         await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: item.ledgerId ? "receivables.import.item.update" : "receivables.import.item.create", objectType: "receivable_ledger", objectId: ledger.id, requestId: context.requestId, ...auditScope(access), metadata: { batchId, rowNumber: item.rowNumber, targetRevision: item.targetRevision, appliedRevision: ledger.revision, before: ledgerBefore, after: snapshot(ledger) } });
       }
-      const changed = await tx.receivableImportBatch.updateMany({ where: { id: batchId, revision: decisions.revision, status: "previewed" }, data: { status: "applied", revision: { increment: 1 }, appliedAt: new Date(), appliedBy: context.principal.accountId } });
+      const changed = await tx.receivableImportBatch.updateMany({ where: { id: batchId, revision: decisions.revision, status: "previewed" }, data: { status: "applied", revision: { increment: 1 }, appliedAt: new Date(), appliedBy: context.principal.accountId, ...(batch.openingBalanceDate || !suppliedOpeningBalanceDate ? {} : { openingBalanceDate: new Date(`${suppliedOpeningBalanceDate}T00:00:00.000Z`) }) } });
       if (changed.count !== 1) throw conflict();
       const result = await tx.receivableImportBatch.findUniqueOrThrow({ where: { id: batchId }, include: { items: { orderBy: { rowNumber: "asc" } } } });
       await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.apply", objectType: "receivable_import_batch", objectId: batchId, requestId: context.requestId, ...auditScope(access), metadata: { before: { status: batch.status, revision: batch.revision }, after: { status: result.status, revision: result.revision }, checksum: batch.checksum, fileIdentityMode } });
