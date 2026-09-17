@@ -35,7 +35,7 @@
 
       <view wx:if="{{task.status === 'remediation_required'}}" class="status-note warning-note">本轮需重新完成全部课件后才能再次考试。</view>
       <view wx:if="{{task.status === 'locked'}}" class="status-note danger-note">考试次数已用完，任务已锁定。请联系所属部门或项目管理员解锁。</view>
-      <view wx:if="{{task.status === 'confirmation_pending'}}" class="status-note warning-note">已签字，等待项目管理员确认到场和现场交底。</view>
+      <view wx:if="{{task.status === 'confirmation_pending'}}" class="status-note warning-note">{{confirmationText}}</view>
       <view wx:if="{{task.status === 'completed'}}" class="status-note success-note">培训已完成，可在“我的记录”中查看。</view>
     </view>
 
@@ -79,11 +79,11 @@
         </view>
         <view class="result-row">
           <text class="fact-label">考试</text>
-          <text class="result-value">{{!task.batch.examRequired ? '本次不要求考试' : (task.latestAttempt ? (task.latestAttempt.passed ? task.latestAttempt.score + ' 分，通过' : task.latestAttempt.score + ' 分，未通过') : '尚未考试')}}</text>
+          <text class="result-value">{{examResultText}}</text>
         </view>
         <view class="result-row">
           <text class="fact-label">签字</text>
-          <text class="result-value">{{task.signedAt ? '已签字' : '未签字'}}</text>
+          <text class="result-value">{{signatureResultText}}</text>
         </view>
       </view>
     </view>
