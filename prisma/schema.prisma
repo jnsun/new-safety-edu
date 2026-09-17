@@ -313,6 +313,7 @@ model Account {
   receivableImportBatchesRolledBack      ReceivableImportBatch[]      @relation("ReceivableImportRolledBackBy")
   receivableExportJobs                   ReceivableExportJob[]
   coursewareImportSessions               CoursewareImportSession[]
+  challengePointLedgersVoided            ChallengePointLedger[]       @relation("ChallengePointLedgerVoidedBy")
   createdAt                              DateTime                     @default(now()) @map("created_at")
   updatedAt                              DateTime                     @updatedAt @map("updated_at")
 
@@ -366,6 +367,8 @@ model Person {
   roleAssignments         RoleAssignment[]
   coursewarePublishGrants CoursewarePublishGrant[]
   photoHistory            PersonPhotoHistory[]
+  challengeAttempts       ChallengeAttempt[]
+  challengePointLedgers   ChallengePointLedger[]
   createdAt               DateTime                 @default(now()) @map("created_at")
   updatedAt               DateTime                 @updatedAt @map("updated_at")
 
@@ -449,6 +452,8 @@ model Organization {
   monthlyReports          ProjectMonthlyReport[]
   departmentMonthStatuses DepartmentMonthStatus[]
   receivableSetting       ReceivableSetting?
+  challengePointLedgers   ChallengePointLedger[]
+  challengeMonthlySnapshots ChallengeMonthlyOrganizationSnapshot[]
   createdAt               DateTime                    @default(now()) @map("created_at")
   updatedAt               DateTime                    @updatedAt @map("updated_at")
 
@@ -1081,6 +1086,9 @@ model Question {
   correct        Json
   explanation    String?
   active         Boolean           @default(true)
+  challengeEnabled    Boolean      @default(false) @map("challenge_enabled")
+  challengeCategory   String?      @map("challenge_category") @db.VarChar(80)
+  challengeDifficulty String?      @map("challenge_difficulty") @db.VarChar(20)
   currentVersion Int               @default(1) @map("current_version")
   versions       QuestionVersion[]
   paperItems     ExamPaperItem[]
@@ -1102,11 +1110,89 @@ model QuestionVersion {
   explanation String?
   createdBy   String?         @map("created_by") @db.Uuid
   paperItems  ExamPaperItem[]
+  challengeAnswers ChallengeAnswer[]
   createdAt   DateTime        @default(now()) @map("created_at")
 
   @@unique([questionId, version])
   @@index([questionId, createdAt])
   @@map("question_versions")
+}
+
+model ChallengeAttempt {
+  id               String            @id @default(uuid()) @db.Uuid
+  personId         String            @map("person_id") @db.Uuid
+  person           Person            @relation(fields: [personId], references: [id], onDelete: Restrict)
+  challengeDate    DateTime          @map("challenge_date") @db.Date
+  questionSnapshot Json              @map("question_snapshot")
+  completedAt      DateTime?         @map("completed_at")
+  answers          ChallengeAnswer[]
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  @@unique([personId, challengeDate])
+  @@index([challengeDate, createdAt])
+  @@map("challenge_attempts")
+}
+
+model ChallengeAnswer {
+  id                String          @id @default(uuid()) @db.Uuid
+  attemptId         String          @map("attempt_id") @db.Uuid
+  attempt           ChallengeAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+  questionVersionId String          @map("question_version_id") @db.Uuid
+  questionVersion   QuestionVersion @relation(fields: [questionVersionId], references: [id], onDelete: Restrict)
+  answer            Json
+  correct           Boolean
+  pointsAwarded     Int             @default(0) @map("points_awarded")
+  submittedAt       DateTime        @default(now()) @map("submitted_at")
+  pointLedger       ChallengePointLedger?
+
+  @@unique([attemptId, questionVersionId])
+  @@index([questionVersionId])
+  @@map("challenge_answers")
+}
+
+model ChallengePointLedger {
+  id                     String          @id @default(uuid()) @db.Uuid
+  personId               String          @map("person_id") @db.Uuid
+  person                 Person          @relation(fields: [personId], references: [id], onDelete: Restrict)
+  organizationIdSnapshot String?         @map("organization_id_snapshot") @db.Uuid
+  organizationSnapshot   Organization?   @relation(fields: [organizationIdSnapshot], references: [id], onDelete: Restrict)
+  answerId               String?         @unique @map("answer_id") @db.Uuid
+  answer                 ChallengeAnswer? @relation(fields: [answerId], references: [id], onDelete: Restrict)
+  sourceType             String          @map("source_type") @db.VarChar(40)
+  sourceKey              String          @unique @map("source_key") @db.VarChar(180)
+  points                 Int
+  occurredAt             DateTime        @default(now()) @map("occurred_at")
+  voidedAt               DateTime?       @map("voided_at")
+  voidedBy               String?         @map("voided_by") @db.Uuid
+  voidedByAccount        Account?        @relation("ChallengePointLedgerVoidedBy", fields: [voidedBy], references: [id], onDelete: Restrict)
+  voidReason             String?         @map("void_reason") @db.VarChar(500)
+  createdAt              DateTime        @default(now()) @map("created_at")
+  updatedAt              DateTime        @updatedAt @map("updated_at")
+
+  @@index([personId, occurredAt])
+  @@index([organizationIdSnapshot, occurredAt])
+  @@index([voidedAt, occurredAt])
+  @@map("challenge_point_ledgers")
+}
+
+model ChallengeMonthlyOrganizationSnapshot {
+  id                String       @id @default(uuid()) @db.Uuid
+  month             DateTime     @db.Date
+  organizationId    String       @map("organization_id") @db.Uuid
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  activePersonCount Int          @map("active_person_count")
+  participantCount  Int          @map("participant_count")
+  totalPoints       Int          @map("total_points")
+  averagePoints     Decimal      @map("average_points") @db.Decimal(12, 4)
+  rank              Int
+  rewardEligible    Boolean      @map("reward_eligible")
+  finalizedAt       DateTime     @map("finalized_at")
+  createdAt         DateTime     @default(now()) @map("created_at")
+
+  @@unique([month, organizationId])
+  @@index([month, rank])
+  @@map("challenge_monthly_organization_snapshots")
 }
 
 model ExamPaper {
