@@ -35,6 +35,7 @@
     "check:change-request-lifecycle": "tsx scripts/check-change-request-lifecycle.mts",
     "check:project-membership-policy": "tsx scripts/check-project-membership-policy.mts",
     "check:training-governance": "tsx scripts/check-training-governance.mts",
+    "check:training-todo-priority": "tsx scripts/check-training-todo-priority.mts",
     "check:auth-security-policy": "tsx scripts/check-auth-security-policy.mts",
     "check:wechat-identity-policy": "tsx scripts/check-wechat-identity-policy.mts",
     "check:web-login-access": "tsx scripts/check-web-login-access.mts",

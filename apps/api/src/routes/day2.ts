@@ -15,6 +15,7 @@ import { coursewareViewerHeaders } from "../courseware-viewer-policy.js";
 import { nextQuestionVersion, questionVersionSnapshot } from "../question-versions.js";
 import { canPublishCourseware } from "../courseware-publish-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
+import { decorateTodoPriority, sortTodoAssignments } from "../training-todo-priority.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -358,6 +359,10 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     if (scope === "todo") where.status = { notIn: ["completed", "cancelled"] };
     if (scope === "records") where.status = { in: ["completed", "confirmation_pending"] };
     const rows = await prisma.trainingAssignment.findMany({ where, include: learnerAssignmentInclude, orderBy: { createdAt: "desc" } });
+    if (scope === "todo") {
+      const now = new Date();
+      return { data: sortTodoAssignments(rows.map((row) => decorateTodoPriority({ ...learnerAssignment(row), trainingType: row.batch.type, dueAt: row.batch.dueAt }, now))) };
+    }
     return { data: rows.map(learnerAssignment) };
   });
   app.get("/api/me/assignments/:id", authenticated, async (request) => {
