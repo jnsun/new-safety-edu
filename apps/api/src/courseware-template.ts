@@ -125,3 +125,7 @@ export function createCoursewareJsonSchema() {
 export async function createAnonymousCoursewareXlsx() {
   return createCoursewareXlsx([{ courseCode: "COURSE-EXAMPLE", document: anonymousCoursewareDocument }]);
 }
+
+export async function createBlankCoursewareXlsx() {
+  return createCoursewareXlsx([]);
+}

@@ -4,7 +4,7 @@ import { StructuredCoursewareDocumentSchema } from "@safety/contracts";
 import { parseCoursewareXlsx } from "../src/courseware-import-xlsx.js";
 import { parseCoursewarePackage } from "../src/courseware-import-package.js";
 import { exportCoursewareJson, exportCoursewareXlsx, exportCoursewareZip } from "../src/courseware-export.js";
-import { anonymousCoursewareDocument, createAnonymousCoursewareXlsx, createCoursewareJsonSchema, createCoursewareJsonTemplate } from "../src/courseware-template.js";
+import { anonymousCoursewareDocument, createAnonymousCoursewareXlsx, createBlankCoursewareXlsx, createCoursewareJsonSchema, createCoursewareJsonTemplate } from "../src/courseware-template.js";
 
 const code = "COURSE-EXAMPLE";
 const normalized = StructuredCoursewareDocumentSchema.parse(anonymousCoursewareDocument);
@@ -36,6 +36,11 @@ for (const sheet of workbook.worksheets) {
   assert.ok(sheet.columns.every(({ width }) => typeof width === "number" && width >= 10));
 }
 assert.equal(workbook.getWorksheet("随堂题")?.getCell("E2").dataValidation.type, "list");
+
+const blankTemplate = await createBlankCoursewareXlsx();
+const blankWorkbook = new ExcelJS.Workbook();
+await blankWorkbook.xlsx.load(blankTemplate as unknown as ExcelJS.Buffer);
+assert.ok(blankWorkbook.worksheets.every((sheet) => !sheet.getRows(2, Math.max(0, sheet.rowCount - 1))?.some((row) => row.hasValues)));
 
 const jsonTemplate = JSON.parse(createCoursewareJsonTemplate().toString("utf8"));
 assert.equal(jsonTemplate.courses[0].courseCode, code);

@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import { Prisma, type CoursewareType } from "@prisma/client";
 import type { StructuredCoursewareDocument } from "@safety/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -10,7 +10,9 @@ import { audit } from "../audit.js";
 import { prisma } from "../db.js";
 import type { Env } from "../env.js";
 import { exportCoursewareJson, exportCoursewareXlsx, exportCoursewareZip, type ExportAsset } from "../courseware-export.js";
-import { createAnonymousCoursewareXlsx, createCoursewareJsonSchema, createCoursewareJsonTemplate } from "../courseware-template.js";
+import { createAnonymousCoursewareXlsx, createBlankCoursewareXlsx, createCoursewareJsonSchema, createCoursewareJsonTemplate } from "../courseware-template.js";
+import { confirmCoursewareImport, previewCoursewareImport, type CoursewareImportActionPlan, type CoursewareImportConfirmationDatabase, type CoursewareImportConfirmationTransaction, type CoursewareImportScope } from "../courseware-import.js";
+import { parseCoursewarePackage } from "../courseware-import-package.js";
 import {
   canEditCoursewareVersion,
   hashStructuredCourseware,
@@ -126,19 +128,191 @@ async function syncStructuredAssets(tx: Prisma.TransactionClient, coursewareVers
   if (plan.add.length) await tx.coursewareVersionAsset.createMany({ data: plan.add.map((fileId) => ({ coursewareVersionId, fileId })), skipDuplicates: true });
 }
 
+type ImportApplyResult = {
+  success: number;
+  failed: number;
+  items: Array<{ courseCode: string; status: "created" | "new_version"; coursewareId: string; versionId: string; version: number }>;
+};
+
+async function applyCoursewareImport(
+  tx: Prisma.TransactionClient,
+  actionPlan: CoursewareImportActionPlan,
+  sourceBuffer: Buffer | null,
+  importSessionId: string,
+  actorId: string,
+  env: Env
+): Promise<ImportApplyResult> {
+  const sourcePackage = sourceBuffer ? await parseCoursewarePackage(sourceBuffer) : null;
+  const root = resolve(env.UPLOAD_ROOT);
+  const createdPaths: string[] = [];
+  const fileIdsByPath = new Map<string, string>();
+  const rows: ImportApplyResult["items"] = [];
+  try {
+    for (const item of actionPlan.items) {
+      const document = structuredClone(item.document);
+      for (const identity of item.sourceAssets) {
+        const source = sourcePackage?.assets.get(identity.path);
+        if (!source || createHash("sha256").update(source.buffer).digest("hex") !== identity.sha256) {
+          throw Object.assign(new Error(`课件 ${item.courseCode} 的素材校验失败`), { statusCode: 409, code: "COURSEWARE_IMPORT_ASSET_CHANGED" });
+        }
+        let fileId = fileIdsByPath.get(identity.path);
+        if (!fileId) {
+          const storageKey = `.courseware-assets/${randomUUID()}`;
+          const path = resolve(root, storageKey);
+          await mkdir(resolve(path, ".."), { recursive: true });
+          await writeFile(path, source.buffer, { mode: 0o600 });
+          createdPaths.push(path);
+          const file = await tx.privateFile.create({ data: {
+            kind: "courseware",
+            storageKey,
+            originalName: basename(identity.path).slice(0, 240),
+            mimeType: source.mimeType,
+            size: source.buffer.length,
+            sha256: identity.sha256,
+            uploadedBy: actorId
+          } });
+          fileId = file.id;
+          fileIdsByPath.set(identity.path, fileId);
+        }
+        for (const unit of document.units) {
+          const block = unit.blocks.find((candidate) => candidate.key === identity.blockKey);
+          if (block?.type === "knowledge") block.imageFileId = fileId;
+        }
+      }
+
+      let coursewareId: string;
+      let version: number;
+      if (item.classification === "create") {
+        const existing = await tx.courseware.findFirst({ where: { code: item.courseCode, scopeType: actionPlan.scope.scopeType, scopeId: actionPlan.scope.scopeId }, select: { id: true } });
+        if (existing) throw Object.assign(new Error(`课程编码 ${item.courseCode} 已存在，请重新预检`), { statusCode: 409, code: "COURSEWARE_IMPORT_STALE_PREVIEW" });
+        const courseware = await tx.courseware.create({ data: { code: item.courseCode, title: item.title, type: "structured", scopeType: actionPlan.scope.scopeType, scopeId: actionPlan.scope.scopeId } });
+        coursewareId = courseware.id;
+        version = 1;
+      } else {
+        coursewareId = item.existingCoursewareId!;
+        await tx.$queryRaw`SELECT id FROM coursewares WHERE id = ${coursewareId}::uuid FOR UPDATE`;
+        const courseware = await tx.courseware.findFirst({ where: { id: coursewareId, code: item.courseCode, type: "structured", scopeType: actionPlan.scope.scopeType, scopeId: actionPlan.scope.scopeId }, select: { id: true } });
+        if (!courseware) throw Object.assign(new Error(`课程编码 ${item.courseCode} 已发生变化，请重新预检`), { statusCode: 409, code: "COURSEWARE_IMPORT_STALE_PREVIEW" });
+        const latest = await tx.coursewareVersion.findFirst({ where: { coursewareId }, orderBy: { version: "desc" }, select: { version: true } });
+        version = (latest?.version ?? 0) + 1;
+      }
+
+      const created = await tx.coursewareVersion.create({ data: {
+        coursewareId,
+        version,
+        status: "draft",
+        richText: null,
+        fileId: null,
+        structuredContent: document as unknown as Prisma.InputJsonValue,
+        schemaVersion: document.schemaVersion,
+        estimatedMinutes: document.estimatedMinutes,
+        contentHash: item.contentHash,
+        importSessionId,
+        importCourseCode: item.courseCode
+      } });
+      const assetIds = [...new Set(item.sourceAssets.map(({ path }) => fileIdsByPath.get(path)).filter((id): id is string => !!id))];
+      if (assetIds.length) await tx.coursewareVersionAsset.createMany({ data: assetIds.map((fileId) => ({ coursewareVersionId: created.id, fileId })) });
+      rows.push({ courseCode: item.courseCode, status: item.classification === "create" ? "created" : "new_version", coursewareId, versionId: created.id, version });
+    }
+    await tx.auditLog.create({ data: { actorId, action: "courseware.import_apply", objectType: "courseware_import_session", objectId: importSessionId, result: "success", metadata: { scope: actionPlan.scope, count: rows.length } } });
+    return { success: rows.length, failed: 0, items: rows };
+  } catch (error) {
+    await Promise.all(createdPaths.map((path) => unlink(path).catch(() => undefined)));
+    throw error;
+  }
+}
+
 export async function registerCoursewareAuthoringRoutes(app: FastifyInstance, deps: Deps) {
   const manager = { preHandler: [deps.authenticate, deps.requireManager] };
 
   app.get("/api/courseware-authoring/templates/:format", manager, async (request, reply) => {
     const principal = principalOf(request);
-    const { format } = z.object({ format: z.enum(["xlsx", "json", "schema"]) }).parse(request.params);
-    const output = format === "xlsx" ? await createAnonymousCoursewareXlsx() : format === "json" ? createCoursewareJsonTemplate() : createCoursewareJsonSchema();
-    const filename = format === "schema" ? "structured-courseware.schema.json" : `structured-courseware-template.${format}`;
+    const { format } = z.object({ format: z.enum(["xlsx-blank", "xlsx-example", "json", "schema"]) }).parse(request.params);
+    const output = format === "xlsx-blank" ? await createBlankCoursewareXlsx() : format === "xlsx-example" ? await createAnonymousCoursewareXlsx() : format === "json" ? createCoursewareJsonTemplate() : createCoursewareJsonSchema();
+    const filename = format === "schema" ? "structured-courseware.schema.json" : format === "xlsx-blank" ? "structured-courseware-blank.xlsx" : format === "xlsx-example" ? "structured-courseware-example.xlsx" : "structured-courseware-example.json";
     audit(principal.accountId, "courseware.template_download", "courseware_template", format);
     return reply
-      .header("Content-Type", format === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/json; charset=utf-8")
+      .header("Content-Type", format.startsWith("xlsx") ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/json; charset=utf-8")
       .header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
       .send(output);
+  });
+
+  const importScopeSchema = z.object({
+    scopeType: z.enum(["company", "organization", "project"]),
+    scopeId: z.string().uuid().nullable().optional()
+  }).transform((value): CoursewareImportScope => ({ scopeType: value.scopeType, scopeId: value.scopeType === "company" ? null : value.scopeId ?? null }));
+
+  app.post("/api/courseware-authoring/imports/preview", manager, async (request, reply) => {
+    const principal = principalOf(request);
+    const scope = importScopeSchema.parse(request.query);
+    await assertScope(principal, scope.scopeType, scope.scopeId);
+    const part = await request.file({ limits: { files: 1, fileSize: 50 * 1024 * 1024 } });
+    if (!part) throw Object.assign(new Error("请选择课件导入文件"), { statusCode: 400, code: "FILE_REQUIRED" });
+    const filename = basename(part.filename).slice(0, 240);
+    if (!/[.](xlsx|xlsm|json|zip)$/i.test(filename)) throw Object.assign(new Error("仅支持 XLSX、JSON 或 ZIP 课件文件"), { statusCode: 400, code: "UNSUPPORTED_IMPORT_FILE" });
+    const buffer = await part.toBuffer();
+    const storageKey = `.courseware-import-sources/${randomUUID()}`;
+    const root = resolve(deps.env.UPLOAD_ROOT);
+    const diskPath = resolve(root, storageKey);
+    await mkdir(resolve(diskPath, ".."), { recursive: true });
+    await writeFile(diskPath, buffer, { mode: 0o600 });
+    let sourceFileId: string | undefined;
+    try {
+      const source = await prisma.privateFile.create({ data: {
+        kind: "attachment",
+        storageKey,
+        originalName: filename,
+        mimeType: part.mimetype || "application/octet-stream",
+        size: buffer.length,
+        sha256: createHash("sha256").update(buffer).digest("hex"),
+        uploadedBy: principal.accountId
+      } });
+      sourceFileId = source.id;
+      const existingCoursewares = await prisma.courseware.findMany({
+        where: { scopeType: scope.scopeType, scopeId: scope.scopeId },
+        select: { id: true, code: true, type: true, scopeType: true, scopeId: true, versions: { orderBy: { version: "desc" }, take: 1, select: { contentHash: true } } }
+      });
+      const preview = await previewCoursewareImport({ filename, buffer }, {
+        createdBy: principal.accountId,
+        scope,
+        sourceFileId,
+        existingCoursewares: existingCoursewares.map(({ versions, ...courseware }) => ({ ...courseware, scopeType: courseware.scopeType as CoursewareImportScope["scopeType"], latestContentHash: versions[0]?.contentHash ?? null })),
+        store: { create: async (data) => prisma.coursewareImportSession.create({ data: data as Prisma.CoursewareImportSessionUncheckedCreateInput, select: { id: true } }) }
+      });
+      audit(principal.accountId, "courseware.import_preview", "courseware_import_session", preview.previewId, { scopeType: scope.scopeType, scopeId: scope.scopeId, itemCount: preview.items.length, issueCount: preview.issues.length });
+      return reply.code(201).send({ data: preview });
+    } catch (error) {
+      if (sourceFileId) await prisma.privateFile.delete({ where: { id: sourceFileId } }).catch(() => undefined);
+      await unlink(diskPath).catch(() => undefined);
+      throw error;
+    }
+  });
+
+  const confirmSchema = z.object({ previewId: z.string().uuid(), sourceHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+  app.post("/api/courseware-authoring/imports/confirm", manager, async (request) => {
+    const principal = principalOf(request);
+    const input = confirmSchema.parse(request.body);
+    const confirmationDatabase = prisma as unknown as CoursewareImportConfirmationDatabase<CoursewareImportConfirmationTransaction>;
+    const result = await confirmCoursewareImport<CoursewareImportConfirmationTransaction, ImportApplyResult>(confirmationDatabase, { ...input, actorId: principal.accountId }, {
+      authorizeScope: async (_tx, actorId, scope) => {
+        if (actorId !== principal.accountId) throw Object.assign(new Error("导入操作者不一致"), { statusCode: 403, code: "FORBIDDEN" });
+        await assertScope(principal, scope.scopeType, scope.scopeId);
+      },
+      loadPrivateSource: async (tx, fileId, actorId) => {
+        const database = tx as unknown as Prisma.TransactionClient;
+        const file = await database.privateFile.findFirst({ where: { id: fileId, uploadedBy: actorId, kind: "attachment" } });
+        if (!file) throw Object.assign(new Error("课件导入源文件不存在"), { statusCode: 409, code: "COURSEWARE_IMPORT_SOURCE_MISSING" });
+        const root = resolve(deps.env.UPLOAD_ROOT);
+        const path = resolve(root, file.storageKey);
+        const outside = relative(root, path);
+        if (isAbsolute(file.storageKey) || outside === ".." || outside.startsWith("../") || outside.startsWith("..\\") || isAbsolute(outside)) throw Object.assign(new Error("课件导入源文件路径无效"), { statusCode: 409, code: "COURSEWARE_IMPORT_SOURCE_INVALID" });
+        const stat = await lstat(path);
+        if (!stat.isFile() || stat.size !== file.size) throw Object.assign(new Error("课件导入源文件已变化"), { statusCode: 409, code: "COURSEWARE_IMPORT_SOURCE_CHANGED" });
+        return readFile(path);
+      }
+    }, async (tx, state, importSessionId) => applyCoursewareImport(tx as unknown as Prisma.TransactionClient, state.actionPlan, state.sourceBuffer, importSessionId, principal.accountId, deps.env));
+    audit(principal.accountId, "courseware.import_confirm", "courseware_import_session", input.previewId, { repeated: result.repeated });
+    return { data: result };
   });
 
   app.get("/api/courseware-versions/:id/export", manager, async (request, reply) => {
