@@ -22,6 +22,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
   const [candidateSearch, setCandidateSearch] = useState("");
   const [listSearch, setListSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("active");
+  const [expandedDepartmentId, setExpandedDepartmentId] = useState<string>();
   const [dictionaryCategory, setDictionaryCategory] = useState<ReceivablesReferenceCategory>("project_status");
   const [form] = Form.useForm();
   const [migrationForm] = Form.useForm();
@@ -175,7 +176,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
   };
   const createLabel = section === "grants" ? "新建授权" : section === "departments" ? "新增部门" : "新增选项";
   return <div className="receivables-page receivables-admin-page">
-    <div className="receivables-compact-toolbar"><Typography.Text type="secondary">配置与授权变更均记录原因、修订号和审计信息。</Typography.Text><Button type="primary" onClick={() => openEditor()}>{createLabel}</Button></div>
+    {section !== "departments" && <div className="receivables-compact-toolbar"><Typography.Text type="secondary">配置与授权变更均记录原因、修订号和审计信息。</Typography.Text><Button type="primary" onClick={() => openEditor()}>{createLabel}</Button></div>}
     {rows.isFetching && <Card loading />}
     {rows.isError && <Alert type="error" showIcon message="数据加载失败，已隐藏缓存内容" action={<Button onClick={() => void rows.refetch()}>重试</Button>} />}
     {currentRows && section === "grants" && <Table size="small" rowKey="id" dataSource={currentRows as ReceivablesGrant[]} pagination={{ pageSize: 20, hideOnSinglePage: true }} scroll={{ x: 760 }} locale={{ emptyText: "暂无财务授权" }} columns={[
@@ -188,15 +189,24 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     ]} />}
 
     {currentRows && section === "departments" && <>
-      <div className="receivables-admin-toolbar"><Input allowClear value={listSearch} placeholder="搜索部门名称或代码" onChange={(event) => setListSearch(event.target.value)} /><Select value={statusFilter} onChange={setStatusFilter} options={[{ value: "active", label: "启用" }, { value: "inactive", label: "停用" }, { value: "all", label: "全部" }]} /></div>
-      <Table size="small" rowKey="id" dataSource={visibleDepartments} pagination={{ pageSize: 20, hideOnSinglePage: true }} locale={{ emptyText: listSearch ? "没有匹配的财务归属部门" : "暂无财务归属部门" }} columns={[
-        { title: "部门名称", dataIndex: "name" },
-        { title: "代码", dataIndex: "code", width: 150, render: (value: string | null) => value || "—" },
-        { title: "状态", width: 90, render: (_: unknown, row: ReceivablesDepartment) => <Tag color={row.active ? "green" : "default"}>{row.active ? "启用" : "停用"}</Tag> },
-        { title: "排序", dataIndex: "sortOrder", width: 80 },
-        { title: "修订", dataIndex: "revision", width: 80 },
-        { title: "操作", width: 280, render: (_: unknown, row: ReceivablesDepartment) => rowActions(row) },
-      ]} />
+      <div className="receivables-department-toolbar">
+        <Typography.Text><strong>{visibleDepartments.length}</strong> 个部门</Typography.Text>
+        <Input allowClear value={listSearch} placeholder="搜索名称或代码" aria-label="搜索财务归属部门" onChange={(event) => setListSearch(event.target.value)} />
+        <Select value={statusFilter} aria-label="部门状态" onChange={setStatusFilter} options={[{ value: "active", label: "启用" }, { value: "inactive", label: "停用" }, { value: "all", label: "全部" }]} />
+        <Button type="primary" onClick={() => openEditor()}>新增部门</Button>
+      </div>
+      {visibleDepartments.length === 0 ? <div className="receivables-department-empty">{listSearch ? "没有匹配的财务归属部门" : "暂无财务归属部门"}</div> : <div className="receivables-department-grid">
+        {visibleDepartments.map((row) => <article className={`receivables-department-item${row.active ? "" : " is-inactive"}`} key={row.id}>
+          <div className="receivables-department-heading"><strong title={row.name}>{row.name}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "启用" : "停用"}</Tag></div>
+          <div className="receivables-department-meta"><span>代码 <b>{row.code || "—"}</b></span><span>排序 <b>{row.sortOrder}</b></span><span>修订 <b>{row.revision}</b></span></div>
+          <div className="receivables-department-actions">
+            <Button size="small" disabled={!row.active} onClick={() => openEditor(row)}>编辑</Button>
+            <Button size="small" danger disabled={!row.active} onClick={() => openDeactivate(row)}>停用</Button>
+            {!row.active && access.canManageAccess && <Button size="small" onClick={() => setExpandedDepartmentId((current) => current === row.id ? undefined : row.id)}>{expandedDepartmentId === row.id ? "收起迁移" : "迁移引用"}</Button>}
+          </div>
+          {!row.active && access.canManageAccess && expandedDepartmentId === row.id && <div className="receivables-department-migration"><Select aria-label="迁移目标" placeholder="选择启用部门" options={activeTargets.filter((item) => item.id !== row.id).map((item) => ({ value: item.id, label: "name" in item ? item.name : item.value }))} onChange={(targetId) => void previewMigration(row.id, targetId)} /></div>}
+        </article>)}
+      </div>}
     </>}
 
     {currentRows && section === "dictionaries" && <div className="receivables-dictionary-layout">

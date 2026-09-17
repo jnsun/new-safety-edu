@@ -12,6 +12,8 @@ import {
 } from "../src/receivables-core.js";
 import {
   defaultReceivablesColumnPreference,
+  defaultReceivablesDashboardPreference,
+  normalizeReceivablesDashboardPreference,
   normalizeReceivablesColumnPreference,
   receivablesDashboardMode,
   receivablesDashboardActionModel,
@@ -20,7 +22,7 @@ import {
   receivablesPortalMode,
   resolveReceivablesRoute,
 } from "../../admin/src/receivables-types.js";
-import { buildReceivablesDashboardStatements, normalizeStoredReceivablesColumnPreference } from "../src/receivables-query.js";
+import { buildReceivablesDashboardStatements, normalizeStoredReceivablesColumnPreference, normalizeStoredReceivablesDashboardPreference, receivablesDashboardPreferenceSchema } from "../src/receivables-query.js";
 
 assert.equal(normalizeContractNo("  HT-001  "), "HT-001");
 assert.deepEqual(
@@ -94,6 +96,10 @@ assert.equal(defaultReceivablesColumnPreference.widths.balance, 128);
 assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, widths: { ...defaultReceivablesColumnPreference.widths, projectName: 99999 } }).widths.projectName, 600);
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).order[0], "contractNo");
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).widths.projectName, 220);
+assert.deepEqual(normalizeReceivablesDashboardPreference([{ id: "balance", w: 99, h: 0, title: "  我的应收  " }, { id: "balance", w: 4, h: 3 }, { id: "bad" }]), [{ id: "balance", w: 12, h: 2, title: "我的应收" }]);
+assert.deepEqual(normalizeReceivablesDashboardPreference(null), defaultReceivablesDashboardPreference);
+assert.deepEqual(normalizeStoredReceivablesDashboardPreference([{ id: "balance", w: 99, h: 0, title: "  我的应收  " }, { id: "balance", w: 4, h: 3 }, { id: "bad" }]), [{ id: "balance", w: 12, h: 2, title: "我的应收" }]);
+assert.equal(receivablesDashboardPreferenceSchema.safeParse([{ id: "bad", w: 4, h: 3 }]).success, false);
 assert.equal(receivablesDashboardMode({ canManageMoney: true, canMaintainCollection: true } as never).kind, "finance");
 assert.equal(receivablesDashboardMode({ canManageMoney: false, canMaintainCollection: true } as never).kind, "collection");
 assert.equal(receivablesDashboardMode({ canManageMoney: false, canMaintainCollection: false } as never).kind, "overview");

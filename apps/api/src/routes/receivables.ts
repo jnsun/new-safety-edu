@@ -6,7 +6,7 @@ import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import { administerReceivables } from "../receivables-admin.js";
 import { assertReceivablesFinanceOrganization, receivablesFinanceOrganizationName, requireReceivables, resolveReceivablesAccess, selectReceivablesFinanceOrganization } from "../receivables-access.js";
-import { getReceivablesColumnPreference, getReceivablesReferenceData, previewReceivablesExport, queryReceivables, receivablesColumnPreferenceSchema, receivablesExportCategoryIds, receivablesExportColumnIds, saveReceivablesColumnPreference } from "../receivables-query.js";
+import { getReceivablesColumnPreference, getReceivablesDashboardPreference, getReceivablesReferenceData, previewReceivablesExport, queryReceivables, receivablesColumnPreferenceSchema, receivablesDashboardPreferenceSchema, receivablesExportCategoryIds, receivablesExportColumnIds, saveReceivablesColumnPreference, saveReceivablesDashboardPreference } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
 import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
@@ -171,6 +171,12 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   }));
   app.put("/api/receivables/preferences/columns", { preHandler: deps.authenticate }, async (request) => ({
     data: await saveReceivablesColumnPreference(request.principal as Principal, receivablesColumnPreferenceSchema.parse(request.body)),
+  }));
+  app.get("/api/receivables/preferences/dashboard", { preHandler: deps.authenticate }, async (request) => ({
+    data: await getReceivablesDashboardPreference(request.principal as Principal),
+  }));
+  app.put("/api/receivables/preferences/dashboard", { preHandler: deps.authenticate }, async (request) => ({
+    data: await saveReceivablesDashboardPreference(request.principal as Principal, receivablesDashboardPreferenceSchema.parse(request.body)),
   }));
   app.get("/api/receivables/reference-data", { preHandler: deps.authenticate }, async (request) => ({ data: await getReceivablesReferenceData(request.principal as Principal) }));
   app.get("/api/receivables/exports", { preHandler: deps.authenticate }, async (request) => ({

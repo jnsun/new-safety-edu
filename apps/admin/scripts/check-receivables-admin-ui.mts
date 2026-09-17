@@ -52,11 +52,26 @@ assert.deepEqual(groupReceivablesImportIssues([
 ]);
 
 const ledgerSource = readFileSync(new URL("../src/ReceivablesLedger.tsx", import.meta.url), "utf8");
+const adminSource = readFileSync(new URL("../src/ReceivablesAdmin.tsx", import.meta.url), "utf8");
+const pageSource = readFileSync(new URL("../src/ReceivablesPage.tsx", import.meta.url), "utf8");
+const mainSource = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
+const adminPackage = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 assert.match(ledgerSource, /className: "receivables-resizable-header"/, "resize handles are anchored to the table header cell");
 assert.match(ledgerSource, /pointercancel/, "column resizing cleans up cancelled pointer gestures");
 assert.doesNotMatch(styles, /\.receivables-filter-grid \.ant-input-group \.ant-input[^\{]*\{[^}]*height:/s, "the inner search input must not be forced to the wrapper height");
 assert.match(styles, /\.receivables-filter-grid \.ant-input-affix-wrapper > \.ant-input\s*\{[^}]*height:\s*auto/s, "the inner search input stays inside its affix wrapper");
+assert.match(styles, /\.receivables-filter-grid \.ant-select-single[^\{]*\{[^}]*height:\s*36px/s, "select and search controls use equal outer desktop heights");
+assert.doesNotMatch(styles, /\.receivables-filter-grid \.ant-select-selector[^\{]*\{[^}]*height:/s, "the select inner selector must not overflow its outer layout box");
 assert.match(styles, /\.receivables-resizable-header\s*\{[^}]*position:\s*relative/s, "the resize hit target uses the real header boundary");
+assert.match(adminSource, /receivables-department-toolbar/, "department controls share one compact toolbar");
+assert.match(adminSource, /receivables-department-grid/, "departments use a dense unpaginated grid");
+assert.doesNotMatch(adminSource, /visibleDepartments[^\n]*pagination=/, "department results are not paginated");
+assert.match(mainSource, /import ["']@ant-design\/v5-patch-for-react-19["']/, "React 19 compatibility patch is loaded before Ant Design static modals are used");
+assert.match(adminPackage, /"@ant-design\/v5-patch-for-react-19"/, "React 19 compatibility patch is an explicit admin dependency");
+assert.match(pageSource, /编辑看板/);
+assert.match(pageSource, /onDragStart/);
+assert.match(pageSource, /onPointerDown/);
+assert.match(pageSource, /preferences\/dashboard/);
 
 console.log("RECEIVABLES_ADMIN_UI_OK");

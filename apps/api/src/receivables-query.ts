@@ -96,6 +96,36 @@ export function normalizeStoredReceivablesColumnPreference(value: unknown): Rece
   return { order, visible: effectiveVisible, frozen, widths };
 }
 const receivablesColumnPreferenceKey = "receivables.columns.v1";
+export const receivablesDashboardCardIds = ["balance", "amounts", "ledgerCount", "anomalies", "collection", "debtStatuses", "creditorUnits"] as const;
+export type ReceivablesDashboardCardPreference = { id: typeof receivablesDashboardCardIds[number]; w: number; h: number; title?: string | undefined };
+export const defaultReceivablesDashboardPreference: ReceivablesDashboardCardPreference[] = [
+  { id: "balance", w: 8, h: 4 }, { id: "anomalies", w: 4, h: 4 },
+  { id: "amounts", w: 5, h: 3 }, { id: "ledgerCount", w: 3, h: 3 },
+  { id: "collection", w: 4, h: 3 }, { id: "debtStatuses", w: 6, h: 4 },
+  { id: "creditorUnits", w: 6, h: 4 },
+];
+export const receivablesDashboardPreferenceSchema = z.array(z.object({
+  id: z.enum(receivablesDashboardCardIds),
+  w: z.number().int().min(3).max(12),
+  h: z.number().int().min(2).max(8),
+  title: z.string().trim().min(1).max(40).optional(),
+}).strict()).max(receivablesDashboardCardIds.length).refine((items) => new Set(items.map((item) => item.id)).size === items.length, "看板卡片不得重复");
+export function normalizeStoredReceivablesDashboardPreference(value: unknown): ReceivablesDashboardCardPreference[] {
+  if (!Array.isArray(value)) return defaultReceivablesDashboardPreference.map((item) => ({ ...item }));
+  const validIds = new Set<string>(receivablesDashboardCardIds);
+  const seen = new Set<string>();
+  return value.flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const item = raw as Record<string, unknown>;
+    if (typeof item.id !== "string" || !validIds.has(item.id) || seen.has(item.id)) return [];
+    seen.add(item.id);
+    const rawWidth = typeof item.w === "number" && Number.isFinite(item.w) ? item.w : 4;
+    const rawHeight = typeof item.h === "number" && Number.isFinite(item.h) ? item.h : 3;
+    const title = typeof item.title === "string" ? item.title.trim().slice(0, 40) : "";
+    return [{ id: item.id as ReceivablesDashboardCardPreference["id"], w: Math.max(3, Math.min(12, Math.round(rawWidth))), h: Math.max(2, Math.min(8, Math.round(rawHeight))), ...(title ? { title } : {}) }];
+  });
+}
+const receivablesDashboardPreferenceKey = "receivables.dashboard.v1";
 export const receivablesReferenceCategories = ["project_status", "final_method", "debt_status", "client_attr", "unit", "work_nature", "sector", "comm_method", "feedback", "progress_note", "next_plan", "attach_category"] as const;
 
 export type NormalizedReceivablesFilters = {
@@ -553,6 +583,26 @@ export async function saveReceivablesColumnPreference(principal: Principal, valu
     await tx.userPreference.upsert({
       where: { accountId_key: { accountId: principal.accountId, key: receivablesColumnPreferenceKey } },
       create: { accountId: principal.accountId, key: receivablesColumnPreferenceKey, value },
+      update: { value },
+    });
+    return value;
+  });
+}
+
+export async function getReceivablesDashboardPreference(principal: Principal): Promise<ReceivablesDashboardCardPreference[]> {
+  return prisma.$transaction(async (tx) => {
+    requireReceivables(await resolveReceivablesAccess(principal, tx), "enter");
+    const row = await tx.userPreference.findUnique({ where: { accountId_key: { accountId: principal.accountId, key: receivablesDashboardPreferenceKey } }, select: { value: true } });
+    return row ? normalizeStoredReceivablesDashboardPreference(row.value) : defaultReceivablesDashboardPreference.map((item) => ({ ...item }));
+  });
+}
+
+export async function saveReceivablesDashboardPreference(principal: Principal, value: ReceivablesDashboardCardPreference[]): Promise<ReceivablesDashboardCardPreference[]> {
+  return prisma.$transaction(async (tx) => {
+    requireReceivables(await resolveReceivablesAccess(principal, tx), "enter");
+    await tx.userPreference.upsert({
+      where: { accountId_key: { accountId: principal.accountId, key: receivablesDashboardPreferenceKey } },
+      create: { accountId: principal.accountId, key: receivablesDashboardPreferenceKey, value },
       update: { value },
     });
     return value;
