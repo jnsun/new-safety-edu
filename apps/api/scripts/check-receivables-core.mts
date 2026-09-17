@@ -88,9 +88,12 @@ assert.equal(receivablesPortalMode({ state: "unconfigured", canEnter: false, can
 assert.deepEqual(receivablesNavigation({ canRecover: true } as never), [{ path: "/receivables", label: "初始化状态" }]);
 assert.equal(receivablesNavigation({ canEnter: true, canReadLedger: true, canCreateLedger: true, canImport: false, canExport: false, canManageAccess: false, canManageConfiguration: false } as never).some((item) => item.path === "/receivables/data"), true);
 assert.equal(normalizeReceivablesColumnPreference({ order: defaultReceivablesColumnPreference.order, visible: defaultReceivablesColumnPreference.visible, frozen: defaultReceivablesColumnPreference.frozen }).widths.projectName, defaultReceivablesColumnPreference.widths.projectName);
+assert.equal(defaultReceivablesColumnPreference.widths.projectName, 220);
+assert.equal(defaultReceivablesColumnPreference.widths.latestProgress, 180);
+assert.equal(defaultReceivablesColumnPreference.widths.balance, 128);
 assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, widths: { ...defaultReceivablesColumnPreference.widths, projectName: 99999 } }).widths.projectName, 600);
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).order[0], "contractNo");
-assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).widths.projectName, 240);
+assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).widths.projectName, 220);
 assert.equal(receivablesDashboardMode({ canManageMoney: true, canMaintainCollection: true } as never).kind, "finance");
 assert.equal(receivablesDashboardMode({ canManageMoney: false, canMaintainCollection: true } as never).kind, "collection");
 assert.equal(receivablesDashboardMode({ canManageMoney: false, canMaintainCollection: false } as never).kind, "overview");

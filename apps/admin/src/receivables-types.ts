@@ -261,7 +261,14 @@ export type ReceivablesColumnPreference = {
   frozen: ReceivablesColumnId[];
   widths: Record<ReceivablesColumnId, number>;
 };
-export const defaultReceivablesColumnWidths = Object.fromEntries(receivablesColumnIds.map((id) => [id, id === "projectName" || id === "customerName" ? 240 : id === "latestProgress" || id === "nextPlan" ? 220 : 150])) as Record<ReceivablesColumnId, number>;
+export const defaultReceivablesColumnWidths: Record<ReceivablesColumnId, number> = {
+  financeDepartmentName: 148, contractNo: 128, projectName: 220, customerName: 180,
+  creditorUnit: 124, debtStatus: 112, finalAmount: 128, invoicedAmount: 128,
+  receivedAmount: 128, internalReceivable: 128, externalReceivable: 128, balance: 128,
+  writeoffAmount: 128, collectionOwner: 112, openingChargeDate: 124, dunningDate: 124,
+  communicationMethod: 104, counterpartyFeedback: 160, latestProgress: 180, nextPlan: 180,
+  anomaly: 124, updatedAt: 138,
+};
 export const defaultReceivablesColumnPreference: ReceivablesColumnPreference = {
   order: [...receivablesColumnIds],
   visible: [...receivablesColumnIds],
