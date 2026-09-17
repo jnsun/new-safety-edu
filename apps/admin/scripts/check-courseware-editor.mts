@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   COURSEWARE_BLOCK_LABELS,
+  coursewareNavigationDecision,
   createBlock,
   createEmptyCoursewareDocument,
   editorDismissalBlockMessage,
@@ -63,6 +64,11 @@ const savingEditor = { id: "saving" };
 const savedEditor = { id: "saved" };
 assert.equal(replaceSavingEditorIfStillActive(savingEditor, savingEditor, savedEditor), savedEditor, "活动编辑器应接收创建结果");
 assert.equal(replaceSavingEditorIfStillActive(undefined, savingEditor, savedEditor), undefined, "已经离开的编辑器不得被迟到响应重新打开");
+assert.equal(coursewareNavigationDecision({ editorOpen: false, dirty: true, saving: true }), "allow", "编辑器未打开时不得安装全局导航阻止");
+assert.equal(coursewareNavigationDecision({ editorOpen: true, dirty: true, saving: false }), "confirm_discard", "脏编辑器导航必须明确确认放弃");
+assert.equal(coursewareNavigationDecision({ editorOpen: true, dirty: false, saving: true }), "block_saving", "保存期间导航必须无条件阻止且不可覆盖");
+assert.equal(coursewareNavigationDecision({ editorOpen: true, dirty: true, saving: true }), "block_saving", "保存优先级必须高于脏数据放弃确认");
+assert.equal(coursewareNavigationDecision({ editorOpen: true, dirty: false, saving: false }), "allow", "干净且空闲的编辑器不得阻止导航");
 
 const editorSource = await readFile(new URL("../src/courseware/CoursewareEditor.tsx", import.meta.url), "utf8");
 assert.match(editorSource, /保存草稿/, "编辑器必须提供明确的保存草稿动作");
@@ -81,6 +87,18 @@ assert.match(pageSource, /重新加载/, "课件列表错误必须提供重试�
 assert.match(pageSource, /确认放弃未保存的修改/, "关闭编辑器必须确认未保存内容");
 assert.match(pageSource, /editorDismissalBlockMessage/, "所有页面级编辑器关闭路径必须先检查保存中状态");
 assert.match(pageSource, /replaceSavingEditorIfStillActive/, "迟到的创建响应不得重新打开已经关闭的编辑器");
+assert.match(pageSource, /useBlocker/, "结构化课件编辑器必须安装 React Router 导航阻止器");
+assert.match(pageSource, /blocker\.proceed\(\)/, "脏导航确认后必须显式继续原导航");
+assert.match(pageSource, /blocker\.reset\(\)/, "取消或保存中导航必须显式重置原导航");
+
+const mainSource = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
+assert.match(mainSource, /createBrowserRouter/, "应用必须使用支持 useBlocker 的 React Router Data Router");
+assert.match(mainSource, /RouterProvider/, "Data Router 必须由 RouterProvider 挂载");
+assert.doesNotMatch(mainSource, /<BrowserRouter>/, "声明式 BrowserRouter 不支持当前 useBlocker API");
+
+const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+assert.match(appSource, /navigate\("\/logout"\)/, "退出登录必须先走可被 Router blocker 拦截的导航");
+assert.match(appSource, /path="\/logout"/, "退出路由必须在导航获准后才执行会话注销");
 
 const blockSource = await readFile(new URL("../src/courseware/BlockEditor.tsx", import.meta.url), "utf8");
 assert.match(blockSource, /questionType === "multiple_choice"/, "只有多选题可以使用多值正确答案控件");

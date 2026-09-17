@@ -40,6 +40,13 @@ export function editorDismissalBlockMessage(saving: boolean) {
   return saving ? "正在保存，请稍候" : null;
 }
 
+export function coursewareNavigationDecision({ editorOpen, dirty, saving }: { editorOpen: boolean; dirty: boolean; saving: boolean }) {
+  if (!editorOpen) return "allow" as const;
+  if (saving) return "block_saving" as const;
+  if (dirty) return "confirm_discard" as const;
+  return "allow" as const;
+}
+
 export function replaceSavingEditorIfStillActive<T>(current: T | undefined, savingEditor: T, savedEditor: T): T | undefined {
   return current === savingEditor ? savedEditor : current;
 }

@@ -2689,9 +2689,33 @@ function PlatformPortal({ accountId }: { accountId: string }) {
   );
 }
 
-function Shell({ principal }: { principal: Principal }) {
+function LogoutRoute() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const started = useRef(false);
+  const [error, setError] = useState<string>();
+  const logout = async () => {
+    setError(undefined);
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+      queryClient.removeQueries({ queryKey: ["receivables"] });
+      navigate("/login", { replace: true });
+      queryClient.removeQueries({ queryKey: ["me"] });
+    } catch (logoutError) {
+      setError(logoutError instanceof Error ? logoutError.message : "退出失败，请稍后重试");
+    }
+  };
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void logout();
+  }, []);
+  if (error) return <Alert type="error" showIcon message="退出失败" description={error} action={<Button onClick={() => void logout()}>重试</Button>} />;
+  return <div className="center">正在安全退出…</div>;
+}
+
+function Shell({ principal }: { principal: Principal }) {
+  const navigate = useNavigate();
   const location = useLocation();
   const wechatWeb = useQuery({ queryKey: ["wechat-web-config"], queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config") });
   const inReceivables = location.pathname.startsWith("/receivables");
@@ -2758,11 +2782,7 @@ function Shell({ principal }: { principal: Principal }) {
               <Button onClick={() => setPasswordOpen(true)}>修改密码</Button>
               {wechatWeb.data?.enabled && <Typography.Text type="secondary">更换微信请退出后使用新微信扫码，并通过已登记手机号验证。</Typography.Text>}
               <Button
-                onClick={async () => {
-                  queryClient.removeQueries({ queryKey: ["receivables"] });
-                  await api("/api/auth/logout", { method: "POST" });
-                  navigate("/login");
-                }}
+                onClick={() => navigate("/logout")}
               >
                 退出
               </Button>
@@ -2802,6 +2822,7 @@ function Shell({ principal }: { principal: Principal }) {
                 }
               />
               <Route path="/receivables/*" element={<ReceivablesPage accountId={principal.accountId} />} />
+              <Route path="/logout" element={<LogoutRoute />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Layout.Content>

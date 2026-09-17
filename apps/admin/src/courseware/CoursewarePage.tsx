@@ -2,10 +2,11 @@ import { UploadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Form, Input, message, Modal, Select, Space, Table, Tabs, Tag, Typography, Upload } from "antd";
 import type { UploadProps } from "antd";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useBlocker } from "react-router-dom";
 import { api, json } from "../api";
 import { CoursewareEditor } from "./CoursewareEditor";
-import { createEmptyCoursewareDocument, editorDismissalBlockMessage, replaceSavingEditorIfStillActive, validateCoursewareDocument, type StructuredCoursewareDocument } from "./types";
+import { coursewareNavigationDecision, createEmptyCoursewareDocument, editorDismissalBlockMessage, replaceSavingEditorIfStillActive, validateCoursewareDocument, type StructuredCoursewareDocument } from "./types";
 
 type Version = { id: string; version: number; status: string; structuredContent?: unknown };
 type Courseware = { id: string; title: string; type: string; versions: Version[] };
@@ -54,6 +55,9 @@ export function CoursewarePage() {
   const [editorDirty, setEditorDirty] = useState(false);
   const [editorSaving, setEditorSaving] = useState(false);
   const [activeTab, setActiveTab] = useState("course");
+  const navigationConfirmOpen = useRef(false);
+  const navigationDecision = coursewareNavigationDecision({ editorOpen: !!structuredEditor, dirty: editorDirty, saving: editorSaving });
+  const blocker = useBlocker(navigationDecision !== "allow");
 
   const scopeOptions = [
     ...(companyAdmin ? [{ value: "company:", label: "全公司" }] : []),
@@ -103,6 +107,30 @@ export function CoursewarePage() {
     if (structuredEditor) { confirmDiscard(() => setActiveTab(key)); return; }
     setActiveTab(key);
   };
+  useEffect(() => {
+    if (blocker.state !== "blocked") { navigationConfirmOpen.current = false; return; }
+    const decision = coursewareNavigationDecision({ editorOpen: !!structuredEditor, dirty: editorDirty, saving: editorSaving });
+    if (decision === "block_saving") {
+      message.info(editorDismissalBlockMessage(true));
+      blocker.reset();
+      return;
+    }
+    if (decision === "confirm_discard") {
+      if (navigationConfirmOpen.current) return;
+      navigationConfirmOpen.current = true;
+      Modal.confirm({
+        title: "确认放弃未保存的修改？",
+        content: "当前本地修改尚未保存，离开后无法恢复。",
+        okText: "放弃修改并离开",
+        okButtonProps: { danger: true },
+        cancelText: "继续编辑",
+        onOk: () => { navigationConfirmOpen.current = false; clearEditor(); blocker.proceed(); },
+        onCancel: () => { navigationConfirmOpen.current = false; blocker.reset(); }
+      });
+      return;
+    }
+    blocker.proceed();
+  }, [blocker, editorDirty, editorSaving, structuredEditor]);
   const editStructured = (courseware: Courseware, version: Version) => {
     const parsed = validateCoursewareDocument(version.structuredContent);
     if (!parsed.success) { message.error("该草稿内容不符合当前结构化课件规范，无法安全编辑"); return; }
