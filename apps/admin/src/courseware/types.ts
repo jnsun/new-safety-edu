@@ -36,6 +36,14 @@ export type EditorAction =
   | { type: "move"; unitKey: string; key: string; direction: -1 | 1 }
   | { type: "saved"; revision: number };
 
+export function editorDismissalBlockMessage(saving: boolean) {
+  return saving ? "正在保存，请稍候" : null;
+}
+
+export function replaceSavingEditorIfStillActive<T>(current: T | undefined, savingEditor: T, savedEditor: T): T | undefined {
+  return current === savingEditor ? savedEditor : current;
+}
+
 type CheckpointBlock = Extract<CoursewareBlock, { type: "checkpoint" }>;
 
 export function normalizeCheckpointQuestionType(block: CheckpointBlock, questionType: CheckpointBlock["questionType"]) {

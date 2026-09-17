@@ -4,8 +4,10 @@ import {
   COURSEWARE_BLOCK_LABELS,
   createBlock,
   createEmptyCoursewareDocument,
+  editorDismissalBlockMessage,
   editorReducer,
   normalizeCheckpointQuestionType,
+  replaceSavingEditorIfStillActive,
   validateCoursewareDocument
 } from "../src/courseware/types.ts";
 
@@ -55,11 +57,19 @@ const unknownBlock = {
 };
 assert.equal(validateCoursewareDocument(unknownBlock).success, false, "未知内容块不得通过保存校验");
 
+assert.equal(editorDismissalBlockMessage(true), "正在保存，请稍候", "保存期间必须阻止离开并给出明确反馈");
+assert.equal(editorDismissalBlockMessage(false), null, "没有保存请求时不应阻止正常离开");
+const savingEditor = { id: "saving" };
+const savedEditor = { id: "saved" };
+assert.equal(replaceSavingEditorIfStillActive(savingEditor, savingEditor, savedEditor), savedEditor, "活动编辑器应接收创建结果");
+assert.equal(replaceSavingEditorIfStillActive(undefined, savingEditor, savedEditor), undefined, "已经离开的编辑器不得被迟到响应重新打开");
+
 const editorSource = await readFile(new URL("../src/courseware/CoursewareEditor.tsx", import.meta.url), "utf8");
 assert.match(editorSource, /保存草稿/, "编辑器必须提供明确的保存草稿动作");
 assert.match(editorSource, /发布.*版本列表/, "编辑器必须说明发布动作与保存草稿分离");
 assert.match(editorSource, /coursewareTitle/, "文档标题必须由权威课件标题派生");
 assert.match(editorSource, /beforeunload/, "脏草稿必须阻止浏览器直接离开");
+assert.match(editorSource, /onSavingChange/, "编辑器必须把保存中状态上报给页面级离开守卫");
 
 const day2Source = await readFile(new URL("../src/Day2Pages.tsx", import.meta.url), "utf8");
 assert.match(day2Source, /export \{ CoursewarePage \} from "\.\/courseware\/CoursewarePage"/, "Day2Pages 应保持为薄入口并复用独立课件页面");
@@ -69,6 +79,8 @@ assert.match(pageSource, /创建新版本/, "已发布结构化课件必须提�
 assert.match(pageSource, /scopeKey/, "新建课件必须提交用户选择的授权范围");
 assert.match(pageSource, /重新加载/, "课件列表错误必须提供重试入口");
 assert.match(pageSource, /确认放弃未保存的修改/, "关闭编辑器必须确认未保存内容");
+assert.match(pageSource, /editorDismissalBlockMessage/, "所有页面级编辑器关闭路径必须先检查保存中状态");
+assert.match(pageSource, /replaceSavingEditorIfStillActive/, "迟到的创建响应不得重新打开已经关闭的编辑器");
 
 const blockSource = await readFile(new URL("../src/courseware/BlockEditor.tsx", import.meta.url), "utf8");
 assert.match(blockSource, /questionType === "multiple_choice"/, "只有多选题可以使用多值正确答案控件");
@@ -76,5 +88,11 @@ assert.match(blockSource, /questionType === "multiple_choice"/, "只有多选题
 const previewSource = await readFile(new URL("../src/courseware/MobilePreview.tsx", import.meta.url), "utf8");
 assert.match(previewSource, /selectedChoice/, "情境后果必须在模拟选择后显示");
 assert.match(previewSource, /selectedAnswers/, "随堂题解析必须在模拟作答后显示");
+assert.match(previewSource, /aria-pressed/, "预览选项必须向辅助技术暴露选中状态");
+assert.match(previewSource, />已选</, "预览选项必须使用非颜色标记显示选中状态");
+
+const styleSource = await readFile(new URL("../src/courseware/courseware.css", import.meta.url), "utf8");
+assert.match(styleSource, /\.preview-options button:focus-visible\s*\{/, "键盘焦点必须使用独立于选中态的样式");
+assert.match(styleSource, /\.preview-options button\.selected\s*\{/, "选中态必须使用独立于焦点和悬停的样式");
 
 console.log("courseware editor check passed");

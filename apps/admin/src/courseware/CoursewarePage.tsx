@@ -5,7 +5,7 @@ import type { UploadProps } from "antd";
 import { useState } from "react";
 import { api, json } from "../api";
 import { CoursewareEditor } from "./CoursewareEditor";
-import { createEmptyCoursewareDocument, validateCoursewareDocument, type StructuredCoursewareDocument } from "./types";
+import { createEmptyCoursewareDocument, editorDismissalBlockMessage, replaceSavingEditorIfStillActive, validateCoursewareDocument, type StructuredCoursewareDocument } from "./types";
 
 type Version = { id: string; version: number; status: string; structuredContent?: unknown };
 type Courseware = { id: string; title: string; type: string; versions: Version[] };
@@ -52,6 +52,7 @@ export function CoursewarePage() {
   const [fileId, setFileId] = useState<string>();
   const [structuredEditor, setStructuredEditor] = useState<EditorTarget>();
   const [editorDirty, setEditorDirty] = useState(false);
+  const [editorSaving, setEditorSaving] = useState(false);
   const [activeTab, setActiveTab] = useState("course");
 
   const scopeOptions = [
@@ -90,8 +91,10 @@ export function CoursewarePage() {
   const upload: NonNullable<UploadProps["customRequest"]> = async ({ file, onSuccess, onError }) => { try { const body = new FormData(); body.append("file", file as Blob); const result = await api<{ id: string }>("/api/files?kind=courseware", { method: "POST", body }); setFileId(result.id); onSuccess?.(result); } catch (error) { onError?.(error as Error); } };
   const versionOptions = (coursewares.data ?? []).flatMap((courseware) => courseware.versions.filter((version) => version.status === "published").map((version) => ({ value: version.id, label: `${courseware.title} v${version.version}` })));
 
-  const clearEditor = () => { setStructuredEditor(undefined); setEditorDirty(false); };
+  const clearEditor = () => { setStructuredEditor(undefined); setEditorDirty(false); setEditorSaving(false); };
   const confirmDiscard = (after?: () => void) => {
+    const blockedMessage = editorDismissalBlockMessage(editorSaving);
+    if (blockedMessage) { message.info(blockedMessage); return; }
     const leave = () => { clearEditor(); after?.(); };
     if (!editorDirty) { leave(); return; }
     Modal.confirm({ title: "确认放弃未保存的修改？", content: "当前本地修改尚未保存，离开后无法恢复。", okText: "放弃修改", okButtonProps: { danger: true }, cancelText: "继续编辑", onOk: leave });
@@ -112,15 +115,17 @@ export function CoursewarePage() {
     createVersion.mutate({ courseware, version, document: parsed.data });
   };
   const saveStructured = async (document: StructuredCoursewareDocument) => {
-    if (!structuredEditor) return;
-    if (structuredEditor.mode === "create") {
-      if (!structuredEditor.scope) throw new Error("请选择课件适用范围");
-      const created = await api<Courseware>("/api/coursewares", json("POST", { ...structuredEditor.scope, title: structuredEditor.coursewareTitle, type: "structured", structuredContent: { ...document, title: structuredEditor.coursewareTitle } }));
+    const savingEditor = structuredEditor;
+    if (!savingEditor) return;
+    if (savingEditor.mode === "create") {
+      if (!savingEditor.scope) throw new Error("请选择课件适用范围");
+      const created = await api<Courseware>("/api/coursewares", json("POST", { ...savingEditor.scope, title: savingEditor.coursewareTitle, type: "structured", structuredContent: { ...document, title: savingEditor.coursewareTitle } }));
       const version = created.versions[0];
       if (!version) throw new Error("草稿已创建，但未返回课件版本");
-      setStructuredEditor({ mode: "edit", coursewareId: created.id, versionId: version.id, coursewareTitle: created.title, document });
+      const savedEditor: EditorTarget = { mode: "edit", coursewareId: created.id, versionId: version.id, coursewareTitle: created.title, document };
+      setStructuredEditor((current) => replaceSavingEditorIfStillActive(current, savingEditor, savedEditor));
     } else {
-      await api(`/api/courseware-versions/${structuredEditor.versionId}/draft`, json("PUT", { structuredContent: { ...document, title: structuredEditor.coursewareTitle } }));
+      await api(`/api/courseware-versions/${savingEditor.versionId}/draft`, json("PUT", { structuredContent: { ...document, title: savingEditor.coursewareTitle } }));
     }
     message.success("结构化课件草稿已保存");
     void qc.invalidateQueries({ queryKey: ["coursewares"] });
@@ -143,7 +148,7 @@ export function CoursewarePage() {
     <Tabs activeKey={activeTab} onChange={switchTab} items={[{ key: "course", label: "课件版本", children: coursewareList }, { key: "template", label: "培训模板", children: templateList }]} />
 
     <Modal title="新建课件" open={courseOpen} footer={null} onCancel={() => setCourseOpen(false)}><Form layout="vertical" onFinish={(values) => { const selectedScope = parseScopeKey(String(values.scopeKey)); const content = { ...selectedScope, title: values.title, type: kind, ...(kind === "rich_text" ? { richText: values.richText } : { fileId }) }; if (kind !== "structured") { createCourse.mutate(content); return; } const document = createEmptyCoursewareDocument(); document.title = String(values.title); setCourseOpen(false); setEditorDirty(true); setStructuredEditor({ mode: "create", coursewareTitle: String(values.title), scope: selectedScope, document }); }}><Form.Item name="title" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="scopeKey" label="适用范围" rules={[{ required: true, message: "请选择适用范围" }]}><Select showSearch optionFilterProp="label" options={scopeOptions} /></Form.Item><Form.Item label="类型"><Select value={kind} onChange={setKind} options={[{ value: "rich_text", label: "图文课件" }, { value: "single_html", label: "单文件 HTML" }, { value: "structured", label: "结构化互动课件" }]} /></Form.Item>{kind === "rich_text" && <Form.Item name="richText" label="图文内容" rules={[{ required: true }]}><Input.TextArea rows={8} /></Form.Item>}{kind === "single_html" && <Form.Item label="HTML 文件" required><Upload accept=".html,text/html" maxCount={1} customRequest={upload}><Button icon={<UploadOutlined />}>上传</Button></Upload></Form.Item>}<Button type="primary" htmlType="submit" loading={createCourse.isPending}>{kind === "structured" ? "进入内容编辑器" : "创建草稿"}</Button></Form></Modal>
-    <Modal title="编辑结构化课件" open={!!structuredEditor} footer={null} width="calc(100vw - 48px)" destroyOnHidden onCancel={() => confirmDiscard()}>{structuredEditor && <CoursewareEditor initialDocument={structuredEditor.document} initiallyDirty={structuredEditor.mode === "create"} coursewareTitle={structuredEditor.coursewareTitle} onSave={saveStructured} onClose={() => confirmDiscard()} onDirtyChange={setEditorDirty} />}</Modal>
+    <Modal title="编辑结构化课件" open={!!structuredEditor} footer={null} width="calc(100vw - 48px)" destroyOnHidden onCancel={() => confirmDiscard()}>{structuredEditor && <CoursewareEditor initialDocument={structuredEditor.document} initiallyDirty={structuredEditor.mode === "create"} coursewareTitle={structuredEditor.coursewareTitle} onSave={saveStructured} onClose={() => confirmDiscard()} onDirtyChange={setEditorDirty} onSavingChange={setEditorSaving} />}</Modal>
     <Modal title="新建培训模板" open={templateOpen} footer={null} onCancel={() => setTemplateOpen(false)}><Form layout="vertical" onFinish={(value) => createTemplate.mutate(value)}><Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="type" label="培训类型" rules={[{ required: true }]}><Select options={trainingTypes} /></Form.Item><Form.Item name="coursewareVersionIds" label="已发布课件（选择顺序即展示顺序）" rules={[{ required: true }]}><Select mode="multiple" options={versionOptions} /></Form.Item><Button type="primary" htmlType="submit">保存模板</Button></Form></Modal>
     <Modal title="课件发布权限" open={grantOpen} footer={null} width={760} onCancel={() => setGrantOpen(false)}><Table size="small" rowKey="id" pagination={false} dataSource={grants.data} columns={[{ title: "人员", render: (_: unknown, row: PublishGrant) => row.person.name }, { title: "范围", render: (_: unknown, row: PublishGrant) => `${row.scopeType === "organization" ? "组织" : "项目"} · ${[...(organizations.data ?? []), ...(projects.data ?? [])].find((item) => item.id === row.scopeId)?.name ?? row.scopeId}` }, { title: "操作", render: (_: unknown, row: PublishGrant) => <Button danger size="small" onClick={() => { let reason = ""; Modal.confirm({ title: "取消发布权限", content: <Input.TextArea placeholder="请输入取消原因" onChange={(event) => { reason = event.target.value; }} />, onOk: async () => { if (reason.trim().length < 2) throw new Error("请输入至少 2 个字的原因"); await api(`/api/courseware-publish-grants/${row.id}`, json("DELETE", { reason: reason.trim() })); message.success("发布权限已取消"); void grants.refetch(); } }); }}>取消</Button> }]} /><Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => { await api("/api/courseware-publish-grants", json("POST", values)); message.success("发布权限已授予"); void grants.refetch(); }} initialValues={{ scopeType: "organization" }}><Form.Item name="personId" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" placeholder="选择管理员" style={{ width: 180 }} options={(people.data ?? []).map((person) => ({ value: person.id, label: person.name }))} /></Form.Item><Form.Item name="scopeType" rules={[{ required: true }]}><Select style={{ width: 120 }} options={[{ value: "organization", label: "组织" }, { value: "project", label: "项目" }]} onChange={setGrantScopeType} /></Form.Item><Form.Item name="scopeId" rules={[{ required: true }]}><Select placeholder="选择范围" style={{ width: 180 }} options={(grantScopeType === "organization" ? organizations.data ?? [] : projects.data ?? []).map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="reason" rules={[{ required: true, min: 2 }]}><Input placeholder="授权原因" /></Form.Item><Button type="primary" htmlType="submit">授予</Button></Form></Modal>
   </>;

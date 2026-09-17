@@ -23,11 +23,12 @@ type Props = {
   onSave: (document: StructuredCoursewareDocument) => Promise<void>;
   onClose: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onSavingChange?: (saving: boolean) => void;
 };
 
 const blockOptions = Object.entries(COURSEWARE_BLOCK_LABELS).map(([value, label]) => ({ value, label }));
 
-export function CoursewareEditor({ initialDocument, initiallyDirty = false, coursewareTitle, onSave, onClose, onDirtyChange }: Props) {
+export function CoursewareEditor({ initialDocument, initiallyDirty = false, coursewareTitle, onSave, onClose, onDirtyChange, onSavingChange }: Props) {
   const [state, dispatch] = useReducer(editorReducer, {
     document: { ...(initialDocument ?? createEmptyCoursewareDocument()), title: coursewareTitle },
     dirty: initiallyDirty || initialDocument === undefined,
@@ -41,13 +42,13 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, cour
   useEffect(() => { onDirtyChange?.(state.dirty); }, [onDirtyChange, state.dirty]);
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent) => {
-      if (!state.dirty) return;
+      if (!state.dirty && !saving) return;
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", guard);
     return () => window.removeEventListener("beforeunload", guard);
-  }, [state.dirty]);
+  }, [saving, state.dirty]);
 
   const change = (action: EditorAction) => {
     setSaveError(undefined);
@@ -64,6 +65,7 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, cour
       return;
     }
     setSaving(true);
+    onSavingChange?.(true);
     setSaveError(undefined);
     try {
       await onSave(parsed.data);
@@ -72,6 +74,7 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, cour
       setSaveError(error instanceof Error ? error.message : "草稿保存失败，请稍后重试");
     } finally {
       setSaving(false);
+      onSavingChange?.(false);
     }
   };
 
