@@ -1,4 +1,7 @@
 const api = require('../../utils/api')
+const examPositionKey = (attemptId) => `exam-position:${attemptId}`
+const activeAttemptKey = (assignmentId) => `exam-active-attempt:${assignmentId}`
+const finalizedAttemptErrors = new Set(['INVALID_ASSIGNMENT_STATE', 'EXAM_NOT_REQUIRED', 'ATTEMPT_CLOSED', 'ATTEMPT_EXPIRED'])
 
 function questionTypeText(type) {
   if (type === 'multiple_choice') return '多选题'
@@ -42,6 +45,7 @@ Page({
   async loadAttempt() {
     clearInterval(this.timer)
     clearTimeout(this.saveTimer)
+    this.examFinalized = false
     this.setData({ loading: true, error: '', expired: false })
     try {
       const attempt = await api.request(`/api/assignments/${this.data.assignmentId}/attempts/start`, 'POST')
@@ -54,17 +58,24 @@ Page({
         options: Array.isArray(question.options) ? question.options.map(String) : []
       }))
       const firstUnanswered = questions.findIndex((question) => !answers[question.id]?.length)
-      const currentIndex = firstUnanswered < 0 ? 0 : firstUnanswered
+      const fallbackIndex = firstUnanswered < 0 ? 0 : firstUnanswered
+      const position = this.restoreExamPosition(attempt.id, questions.length, fallbackIndex)
+      const currentIndex = position.currentIndex
       this.answerRevision = 0
       this.savedRevision = 0
       this.setData({
-        attempt, questions, answers, currentIndex, reviewing: false,
+        attempt, questions, answers, currentIndex, reviewing: position.reviewing,
         saveState: Object.keys(answers).length ? 'saved' : 'idle',
         saveStateText: Object.keys(answers).length ? '已恢复并保存' : '答案会自动保存',
         ...examViewState(questions, answers, currentIndex)
       })
+      this.persistExamPosition(currentIndex, position.reviewing)
       if (questions.length) this.startTimer()
     } catch (error) {
+      if (finalizedAttemptErrors.has(error.code)) {
+        this.examFinalized = true
+        this.clearExamPosition()
+      }
       this.setData({ error: error.message })
     } finally {
       this.setData({ loading: false })
@@ -81,6 +92,8 @@ Page({
       })
       if (!seconds) {
         clearInterval(this.timer)
+        this.examFinalized = true
+        this.clearExamPosition()
         this.setData({ error: '考试时间已到，请返回任务页查看最新状态。' })
       }
     }
@@ -156,11 +169,13 @@ Page({
   showQuestion(index) {
     if (index < 0 || index >= this.data.questions.length) return
     this.setData({ currentIndex: index, reviewing: false, ...examViewState(this.data.questions, this.data.answers, index) })
+    this.persistExamPosition(index, false)
   },
   previous() { this.showQuestion(this.data.currentIndex - 1) },
   next() {
     if (this.data.canGoNext) return this.showQuestion(this.data.currentIndex + 1)
     this.setData({ reviewing: true })
+    this.persistExamPosition(this.data.currentIndex, true)
   },
   openQuestion(e) { this.showQuestion(Number(e.currentTarget.dataset.index)) },
   continueAnswering() {
@@ -185,6 +200,8 @@ Page({
       if (!await this.flushSave()) throw new Error('答案尚未保存，请重试后再交卷')
       const result = await api.request(`/api/attempts/${this.data.attempt.id}/submit`, 'POST')
       clearInterval(this.timer)
+      this.examFinalized = true
+      this.clearExamPosition()
       await new Promise((resolve) => wx.showModal({
         title: result.passed ? '考试通过' : '考试未通过',
         content: `本次成绩 ${result.score} 分${result.assignmentStatus === 'locked' ? '，考试次数已用完，任务已锁定。' : result.passed ? '，请继续完成本人签字。' : '，请重新完成全部课件补学。'}`,
@@ -194,6 +211,10 @@ Page({
       }))
       wx.navigateBack()
     } catch (error) {
+      if (finalizedAttemptErrors.has(error.code)) {
+        this.examFinalized = true
+        this.clearExamPosition()
+      }
       this.setData({ error: error.message })
     } finally {
       this.setData({ busy: false })
@@ -203,7 +224,48 @@ Page({
   onUnload() {
     clearInterval(this.timer)
     clearTimeout(this.saveTimer)
+    this.persistExamPosition(this.data.currentIndex, this.data.reviewing)
     this.flushSave()
   },
-  onHide() { return this.flushSave() }
+  onHide() {
+    this.persistExamPosition(this.data.currentIndex, this.data.reviewing)
+    return this.flushSave()
+  },
+
+  restoreExamPosition(attemptId, questionCount, fallbackIndex) {
+    try {
+      const pointerKey = activeAttemptKey(this.data.assignmentId)
+      const previousAttemptId = wx.getStorageSync(pointerKey)
+      if (previousAttemptId && previousAttemptId !== attemptId) {
+        wx.removeStorageSync(examPositionKey(previousAttemptId))
+        wx.removeStorageSync(examPositionKey(attemptId))
+      }
+      wx.setStorageSync(pointerKey, attemptId)
+      const stored = wx.getStorageSync(examPositionKey(attemptId))
+      if (!questionCount || !stored || stored.attemptId !== attemptId) return { currentIndex: fallbackIndex, reviewing: false }
+      const storedIndex = Number(stored.currentIndex)
+      const currentIndex = Number.isInteger(storedIndex) ? Math.min(Math.max(storedIndex, 0), questionCount - 1) : fallbackIndex
+      return { currentIndex, reviewing: Boolean(stored.reviewing) }
+    } catch {
+      return { currentIndex: fallbackIndex, reviewing: false }
+    }
+  },
+
+  persistExamPosition(currentIndex, reviewing) {
+    if (this.examFinalized || !this.data.attempt?.id) return
+    try {
+      wx.setStorageSync(activeAttemptKey(this.data.assignmentId), this.data.attempt.id)
+      wx.setStorageSync(examPositionKey(this.data.attempt.id), { attemptId: this.data.attempt.id, currentIndex, reviewing: Boolean(reviewing) })
+    } catch {}
+  },
+
+  clearExamPosition() {
+    try {
+      const pointerKey = activeAttemptKey(this.data.assignmentId)
+      const storedAttemptId = wx.getStorageSync(pointerKey)
+      if (storedAttemptId) wx.removeStorageSync(examPositionKey(storedAttemptId))
+      if (this.data.attempt?.id && this.data.attempt.id !== storedAttemptId) wx.removeStorageSync(examPositionKey(this.data.attempt.id))
+      wx.removeStorageSync(pointerKey)
+    } catch {}
+  }
 })

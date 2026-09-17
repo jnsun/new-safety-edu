@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 const [todo, task, courseware, coursewarePage, exam, examPage, signature, signaturePage, records, recordDetail] = await Promise.all([
@@ -33,6 +34,104 @@ assert.doesNotMatch(exam, /wx:for="\{\{questions\}\}"/, "考试不得一次渲�
 assert.match(examPage, /nextLabel: currentIndex < questions\.length - 1 \? '下一题' : '检查答题'/, "末题后必须进入答题检查");
 assert.match(examPage, /\/attempts\/start`, 'POST'/, "进入考试必须复用开始或恢复接口");
 assert.match(examPage, /\/answers`, 'PUT'/, "答案必须自动保存到服务端");
+
+const storage = new Map([
+  ["exam-active-attempt:assignment-1", "attempt-1"],
+  ["exam-position:attempt-1", { attemptId: "attempt-1", currentIndex: 1, reviewing: true }]
+]);
+let attemptResponse = {
+  id: "attempt-1",
+  attemptNumber: 1,
+  expiresAt: "2099-09-17T00:30:00.000Z",
+  answers: [],
+  questions: [
+    { id: "q1", type: "single_choice", prompt: "第一题", options: ["A", "B"] },
+    { id: "q2", type: "single_choice", prompt: "第二题", options: ["A", "B"] }
+  ]
+};
+let startError;
+let examDefinition;
+vm.runInNewContext(examPage, {
+  Page(value) { examDefinition = value; },
+  require(id) {
+    assert.equal(id, "../../utils/api");
+    return { request: async (path) => {
+      if (String(path).endsWith("/attempts/start")) {
+        if (startError) throw startError;
+        return attemptResponse;
+      }
+      if (String(path).endsWith("/submit")) return { passed: true, score: 100, assignmentStatus: "pending_signature" };
+      return { saved: 1 };
+    } };
+  },
+  wx: {
+    getStorageSync(key) { return storage.get(key); },
+    setStorageSync(key, value) { storage.set(key, value); },
+    removeStorageSync(key) { storage.delete(key); },
+    showToast() {},
+    showModal(options) { options.success?.({ confirm: true }); },
+    navigateBack() {}
+  },
+  console,
+  Promise,
+  Date,
+  setTimeout,
+  clearTimeout,
+  setInterval() { return 1; },
+  clearInterval() {}
+});
+
+assert.ok(examDefinition);
+const examInstance = () => ({
+  ...examDefinition,
+  data: { ...examDefinition.data, assignmentId: "assignment-1" },
+  setData(values) { Object.assign(this.data, values); }
+});
+
+const resumedExam = examInstance();
+await resumedExam.loadAttempt();
+assert.equal(resumedExam.data.currentIndex, 1, "相同 active attempt 必须恢复上次题号");
+assert.equal(resumedExam.data.reviewing, true, "相同 active attempt 必须恢复答题检查状态");
+
+storage.set("exam-position:attempt-1", { attemptId: "other-attempt", currentIndex: 1, reviewing: true });
+const mismatchedExam = examInstance();
+await mismatchedExam.loadAttempt();
+assert.equal(mismatchedExam.data.currentIndex, 0, "不匹配的 attempt 位置不得恢复");
+assert.equal(mismatchedExam.data.reviewing, false, "不匹配的 attempt 检查状态不得恢复");
+
+storage.set("exam-position:attempt-1", { attemptId: "attempt-1", currentIndex: 99, reviewing: false });
+const clampedExam = examInstance();
+await clampedExam.loadAttempt();
+assert.equal(clampedExam.data.currentIndex, 1, "恢复题号必须限制在当前试卷范围内");
+
+storage.set("exam-active-attempt:assignment-1", "attempt-old");
+storage.set("exam-position:attempt-old", { attemptId: "attempt-old", currentIndex: 1, reviewing: true });
+attemptResponse = { ...attemptResponse, id: "attempt-new" };
+const newAttemptExam = examInstance();
+await newAttemptExam.loadAttempt();
+assert.equal(storage.has("exam-position:attempt-old"), false, "新 attempt 必须清理旧位置");
+assert.equal(newAttemptExam.data.currentIndex, 0, "新 attempt 不得继承旧题号");
+
+await newAttemptExam.submit();
+newAttemptExam.onUnload();
+assert.equal(storage.has("exam-position:attempt-new"), false, "交卷成功必须清理位置");
+assert.equal(storage.has("exam-active-attempt:assignment-1"), false, "交卷成功必须清理 active attempt 指针");
+
+attemptResponse = { ...attemptResponse, id: "attempt-expired", expiresAt: "2099-09-17T00:30:00.000Z" };
+const expiredExam = examInstance();
+await expiredExam.loadAttempt();
+expiredExam.data.attempt.expiresAt = "2000-01-01T00:00:00.000Z";
+expiredExam.startTimer();
+assert.equal(storage.has("exam-position:attempt-expired"), false, "计时结束必须清理位置");
+assert.equal(storage.has("exam-active-attempt:assignment-1"), false, "计时结束必须清理 active attempt 指针");
+
+storage.set("exam-active-attempt:assignment-1", "attempt-stale");
+storage.set("exam-position:attempt-stale", { attemptId: "attempt-stale", currentIndex: 1, reviewing: true });
+startError = Object.assign(new Error("当前任务不可开始考试"), { code: "INVALID_ASSIGNMENT_STATE" });
+const finalizedExam = examInstance();
+await finalizedExam.loadAttempt();
+assert.equal(storage.has("exam-position:attempt-stale"), false, "没有 active attempt 时必须清理旧位置");
+assert.equal(storage.has("exam-active-attempt:assignment-1"), false, "没有 active attempt 时必须清理指针");
 
 assert.match(signature, /wx:if="\{\{signedAtText\}\}" class="submitted-panel"/, "已签字时必须展示不可覆盖状态");
 assert.match(signature, /disabled="\{\{busy \|\| !previewed\}\}" bindtap="submit"/, "正式签字提交前必须预览");
