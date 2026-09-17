@@ -2919,7 +2919,8 @@ function Shell({ principal }: { principal: Principal }) {
     <>
       <Layout className="app-shell">
         <Layout.Sider
-          width={inReceivables ? 196 : 228}
+          className={inReceivables ? "receivables-sider" : undefined}
+          width={inReceivables ? 184 : 228}
           breakpoint="lg"
           collapsedWidth="0"
           theme="light"
