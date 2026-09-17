@@ -74,6 +74,7 @@
     "smoke:receivables-export": "tsx scripts/smoke-receivables-export.mts",
     "smoke:receivables-e2e": "tsx scripts/smoke-receivables-e2e.mts",
     "smoke:structured-courseware": "tsx scripts/smoke-structured-courseware.mts",
+    "smoke:daily-challenge": "tsx scripts/smoke-daily-challenge.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
   },
