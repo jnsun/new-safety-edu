@@ -11,6 +11,7 @@ import {
   type CoursewareImportSessionStore,
   type ExistingCoursewareReference
 } from "../src/courseware-import.js";
+import { hashStructuredCoursewareSourceIdentity } from "../src/structured-courseware.js";
 
 const actorId = "00000000-0000-4000-8000-000000000001";
 const companyScope = { scopeType: "company" as const, scopeId: null };
@@ -32,26 +33,46 @@ const document = {
   }]
 };
 
-async function workbookBuffer(options: { duplicate?: boolean; missingUnit?: boolean; asset?: string; formula?: boolean; emptyBody?: boolean } = {}) {
+async function workbookBuffer(options: { duplicate?: boolean; missingUnit?: boolean; asset?: string; formula?: boolean; emptyBody?: boolean; courseCode?: string } = {}) {
+  const courseCode = options.courseCode ?? "SAFE-001";
   const workbook = new ExcelJS.Workbook();
   const courses = workbook.addWorksheet("课程");
   courses.addRow(["模板版本", "课程编码", "标题", "摘要", "学习目标", "预计时长"]);
-  courses.addRow([1, "SAFE-001", "匿名安全微课", "匿名摘要", "识别风险\n正确处置", 15]);
+  courses.addRow([1, courseCode, "匿名安全微课", "匿名摘要", "识别风险\n正确处置", 15]);
   if (options.formula) courses.getCell("C2").value = { formula: "1+1", result: "匿名安全微课" };
-  if (options.duplicate) courses.addRow([1, "SAFE-001", "重复编码", "匿名摘要", "识别风险", 10]);
+  if (options.duplicate) courses.addRow([1, courseCode, "重复编码", "匿名摘要", "识别风险", 10]);
   const units = workbook.addWorksheet("单元");
   units.addRow(["课程编码", "单元编码", "标题", "顺序", "预计时长"]);
-  units.addRow(["SAFE-001", "UNIT-001", "风险识别", 1, 8]);
+  units.addRow([courseCode, "UNIT-001", "风险识别", 1, 8]);
   const blocks = workbook.addWorksheet("内容块");
   blocks.addRow(["课程编码", "单元编码", "内容块编码", "块类型", "标题", "正文", "素材文件名", "列表项", "禁止项", "顺序"]);
-  blocks.addRow(["SAFE-001", "UNIT-001", "BLOCK-001", "knowledge", "知识卡", options.emptyBody ? "" : "匿名正文", options.asset ?? "", "", "", 1]);
+  blocks.addRow([courseCode, "UNIT-001", "BLOCK-001", "knowledge", "知识卡", options.emptyBody ? "" : "匿名正文", options.asset ?? "", "", "", 1]);
   const checkpoints = workbook.addWorksheet("随堂题");
   checkpoints.addRow(["课程编码", "单元编码", "内容块编码", "题型", "题干", "选项", "答案", "解析", "顺序"]);
-  if (options.missingUnit) checkpoints.addRow(["SAFE-001", "UNIT-404", "CHECK-001", "single_choice", "应如何处理？", "立即报告\n忽略", "1", "按制度报告", 2]);
+  if (options.missingUnit) checkpoints.addRow([courseCode, "UNIT-404", "CHECK-001", "single_choice", "应如何处理？", "立即报告\n忽略", "1", "按制度报告", 2]);
   const scenarios = workbook.addWorksheet("情境选择");
   scenarios.addRow(["课程编码", "单元编码", "内容块编码", "场景", "选项", "选择后果", "制度依据", "顺序"]);
-  scenarios.addRow(["SAFE-001", "UNIT-001", "SCENE-001", "发现隐患", "立即报告", "及时处置", "匿名制度条款", 3]);
-  scenarios.addRow(["SAFE-001", "UNIT-001", "SCENE-001", "发现隐患", "继续作业", "风险扩大", "匿名制度条款", 3]);
+  scenarios.addRow([courseCode, "UNIT-001", "SCENE-001", "发现隐患", "立即报告", "及时处置", "匿名制度条款", 3]);
+  scenarios.addRow([courseCode, "UNIT-001", "SCENE-001", "发现隐患", "继续作业", "风险扩大", "匿名制度条款", 3]);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+async function orphanCourseWorkbookBuffer() {
+  const workbook = new ExcelJS.Workbook();
+  const courses = workbook.addWorksheet("课程");
+  courses.addRow(["模板版本", "课程编码", "标题", "摘要", "学习目标", "预计时长"]);
+  courses.addRow([1, "SAFE-VALID", "有效课程", "匿名摘要", "目标", 10]);
+  const units = workbook.addWorksheet("单元");
+  units.addRow(["课程编码", "单元编码", "标题", "顺序", "预计时长"]);
+  units.addRow(["SAFE-VALID", "UNIT-1", "有效单元", 1, 5]);
+  units.addRow(["SAFE-ORPHAN", "UNIT-ORPHAN", "孤儿单元", 1, 5]);
+  const blocks = workbook.addWorksheet("内容块");
+  blocks.addRow(["课程编码", "单元编码", "内容块编码", "块类型", "标题", "正文", "素材文件名", "列表项", "禁止项", "顺序"]);
+  blocks.addRow(["SAFE-VALID", "UNIT-1", "BLOCK-1", "knowledge", "知识卡", "匿名正文", "", "", "", 1]);
+  const checkpoints = workbook.addWorksheet("随堂题");
+  checkpoints.addRow(["课程编码", "单元编码", "内容块编码", "题型", "题干", "选项", "答案", "解析", "顺序"]);
+  const scenarios = workbook.addWorksheet("情境选择");
+  scenarios.addRow(["课程编码", "单元编码", "内容块编码", "场景", "选项", "选择后果", "制度依据", "顺序"]);
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 
@@ -129,6 +150,14 @@ assert.equal(isolatedWorkbook.items.find((item) => item.courseCode === "SAFE-B")
 assert.ok(isolatedWorkbook.issues.filter((entry) => entry.sheet === "内容块" && entry.row === 2).every((entry) => entry.courseCode === "SAFE-A"));
 const isolatedSession = saved.at(-1)!;
 assert.deepEqual((isolatedSession.actionPlan as { items: Array<{ courseCode: string; classification: string }> }).items.map(({ courseCode, classification }) => ({ courseCode, classification })), [{ courseCode: "SAFE-B", classification: "create" }]);
+const orphanWorkbook = await preview("orphan.xlsx", await orphanCourseWorkbookBuffer());
+assert.equal(orphanWorkbook.items.find((item) => item.courseCode === "SAFE-VALID")?.classification, "create");
+assert.equal(orphanWorkbook.items.find((item) => item.courseCode === "SAFE-ORPHAN")?.classification, "invalid");
+assert.ok(orphanWorkbook.issues.some((entry) => entry.courseCode === "SAFE-ORPHAN" && entry.code === "UNKNOWN_COURSE_CODE"));
+const overlongCourseCode = "C".repeat(121);
+const overlongWorkbook = await preview("overlong-code.xlsx", await workbookBuffer({ courseCode: overlongCourseCode }));
+assert.ok(overlongWorkbook.issues.some((entry) => entry.sheet === "课程" && entry.row === 2 && entry.field === "课程编码" && entry.code === "INVALID_COURSE_CODE"));
+assert.equal(overlongWorkbook.items.find((item) => item.courseCode === overlongCourseCode)?.classification, "invalid");
 assert.ok((await preview("macro.xlsm", Buffer.from("anonymous"))).issues.some((entry) => entry.code === "MACRO_WORKBOOK_NOT_ALLOWED"));
 
 const rowHeavyXml = Buffer.from(`<worksheet>${"<row></row>".repeat(20_001)}</worksheet>`);
@@ -190,6 +219,22 @@ const validPackage = await previewCoursewareImport({ filename: "courseware.zip",
 assert.equal(validPackage.items[0]?.classification, "create");
 assert.equal(validPackage.issues.length, 0);
 const validPackageSession = saved.at(-1)!;
+const validPlanItem = (validPackageSession.actionPlan as { items: Array<{ contentHash: string; sourceAssets: Array<{ blockKey: string; path: string; sha256: string }> }> }).items[0]!;
+const materializedDocument = structuredClone(document);
+materializedDocument.units[0]!.blocks[0]!.imageFileId = "20000000-0000-4000-8000-000000000001";
+assert.equal(hashStructuredCoursewareSourceIdentity(materializedDocument, validPlanItem.sourceAssets), validPlanItem.contentHash, "materialized private-file UUIDs must not change source identity");
+const identicalPackage = await previewCoursewareImport({ filename: "identical.zip", buffer: validPackageBuffer }, { createdBy: actorId, scope: companyScope, existingCoursewares: [{ id: "10000000-0000-4000-8000-000000000010", code: "SAFE-ZIP", type: "structured", latestContentHash: validPlanItem.contentHash, ...companyScope }], store, sourceFileId, now: new Date("2026-09-17T00:00:00.000Z") });
+assert.equal(identicalPackage.items[0]?.classification, "conflict");
+const changedPng = Buffer.concat([png, Buffer.from("anonymous-image-change")]);
+const changedAssetPackageBuffer = await zip([{ name: "courseware.json", data: packageJson }, { name: "assets/diagram.png", data: changedPng }]);
+const imageOnlyChange = await previewCoursewareImport({ filename: "image-only-change.zip", buffer: changedAssetPackageBuffer }, { createdBy: actorId, scope: companyScope, existingCoursewares: [{ id: "10000000-0000-4000-8000-000000000010", code: "SAFE-ZIP", type: "structured", latestContentHash: validPlanItem.contentHash, ...companyScope }], store, sourceFileId, now: new Date("2026-09-17T00:00:00.000Z") });
+assert.equal(imageOnlyChange.items[0]?.classification, "new_version");
+
+const duplicateBindingManifest = Buffer.from(JSON.stringify({ templateVersion: 1, courses: [{ courseCode: "SAFE-TWO-ASSETS", document, assets: [{ blockKey: "BLOCK-001", path: "assets/a.png" }, { blockKey: "BLOCK-001", path: "assets/b.png" }] }] }));
+const duplicateBindingPackage = await zip([{ name: "courseware.json", data: duplicateBindingManifest }, { name: "assets/a.png", data: png }, { name: "assets/b.png", data: changedPng }]);
+const duplicateBindingPreview = await previewCoursewareImport({ filename: "two-assets.zip", buffer: duplicateBindingPackage }, { createdBy: actorId, scope: companyScope, existingCoursewares: [], store, sourceFileId, now: new Date("2026-09-17T00:00:00.000Z") });
+assert.equal(duplicateBindingPreview.items[0]?.classification, "invalid");
+assert.ok(duplicateBindingPreview.issues.some((entry) => entry.courseCode === "SAFE-TWO-ASSETS" && entry.code === "MULTIPLE_ASSET_BINDINGS"));
 
 const pathFixture = await zip([{ name: "courseware.json", data: packageJson }, { name: "assets/diagram.png", data: png }]);
 for (const [label, replacement, expected] of [

@@ -156,6 +156,14 @@ function required(row: Row, name: string, issues: CoursewareImportIssue[], conte
   return result;
 }
 
+function courseCode(row: Row, issues: CoursewareImportIssue[]) {
+  const raw = value(row, "课程编码");
+  const result = required(row, "课程编码", issues, {});
+  if (result && typeof raw !== "string") issues.push(issue(row.sheet, row.row, "课程编码", "INVALID_COURSE_CODE", "课程编码必须为文本", { courseCode: result }));
+  if (result.length > 120) issues.push(issue(row.sheet, row.row, "课程编码", "INVALID_COURSE_CODE", "课程编码不能超过 120 个字符", { courseCode: result }));
+  return result;
+}
+
 function duplicateCodes(
   rows: Row[],
   field: string,
@@ -227,26 +235,26 @@ export async function parseCoursewareXlsx(buffer: Buffer): Promise<ParsedCoursew
   );
   const coursesByCode = new Map<string, Row>();
   courseRows.forEach((row) => {
-    const courseCode = required(row, "课程编码", issues, {});
-    required(row, "标题", issues, { courseCode });
-    required(row, "摘要", issues, { courseCode });
-    if (!list(value(row, "学习目标")).length) issues.push(issue(row.sheet, row.row, "学习目标", "REQUIRED", "学习目标不能为空", { courseCode }));
-    positiveInteger(row, "预计时长", issues, { courseCode });
-    if (courseCode && !coursesByCode.has(courseCode)) coursesByCode.set(courseCode, row);
+    const code = courseCode(row, issues);
+    required(row, "标题", issues, { courseCode: code });
+    required(row, "摘要", issues, { courseCode: code });
+    if (!list(value(row, "学习目标")).length) issues.push(issue(row.sheet, row.row, "学习目标", "REQUIRED", "学习目标不能为空", { courseCode: code }));
+    positiveInteger(row, "预计时长", issues, { courseCode: code });
+    if (code && !coursesByCode.has(code)) coursesByCode.set(code, row);
   });
 
   const unitsByCode = new Map<string, Row>();
   const unitsByCourse = new Map<string, Row[]>();
   unitRows.forEach((row) => {
-    const courseCode = required(row, "课程编码", issues, {});
-    const unitCode = required(row, "单元编码", issues, { courseCode });
-    required(row, "标题", issues, { courseCode, unitCode });
-    positiveInteger(row, "顺序", issues, { courseCode, unitCode });
-    positiveInteger(row, "预计时长", issues, { courseCode, unitCode });
-    if (courseCode && !coursesByCode.has(courseCode)) issues.push(issue(row.sheet, row.row, "课程编码", "UNKNOWN_COURSE_CODE", `课程编码不存在：${courseCode}`, { courseCode, unitCode }));
-    const unitIdentity = composite(courseCode, unitCode);
-    if (courseCode && unitCode && !unitsByCode.has(unitIdentity)) unitsByCode.set(unitIdentity, row);
-    if (courseCode) unitsByCourse.set(courseCode, [...(unitsByCourse.get(courseCode) ?? []), row]);
+    const code = courseCode(row, issues);
+    const unitCode = required(row, "单元编码", issues, { courseCode: code });
+    required(row, "标题", issues, { courseCode: code, unitCode });
+    positiveInteger(row, "顺序", issues, { courseCode: code, unitCode });
+    positiveInteger(row, "预计时长", issues, { courseCode: code, unitCode });
+    if (code && !coursesByCode.has(code)) issues.push(issue(row.sheet, row.row, "课程编码", "UNKNOWN_COURSE_CODE", `课程编码不存在：${code}`, { courseCode: code, unitCode }));
+    const unitIdentity = composite(code, unitCode);
+    if (code && unitCode && !unitsByCode.has(unitIdentity)) unitsByCode.set(unitIdentity, row);
+    if (code) unitsByCourse.set(code, [...(unitsByCourse.get(code) ?? []), row]);
   });
 
   const blocksByUnit = new Map<string, Array<{ order: number; block: CoursewareBlock; assetPath?: string; assetRow?: number }>>();
@@ -267,40 +275,40 @@ export async function parseCoursewareXlsx(buffer: Buffer): Promise<ParsedCoursew
   };
 
   blockRows.forEach((row) => {
-    const courseCode = required(row, "课程编码", issues, {});
-    const unitCode = required(row, "单元编码", issues, { courseCode });
-    const blockCode = required(row, "内容块编码", issues, { courseCode, unitCode });
-    const context = contextForUnit(courseCode, unitCode);
+    const code = courseCode(row, issues);
+    const unitCode = required(row, "单元编码", issues, { courseCode: code });
+    const blockCode = required(row, "内容块编码", issues, { courseCode: code, unitCode });
+    const context = contextForUnit(code, unitCode);
     const kind = required(row, "块类型", issues, context);
     const order = positiveInteger(row, "顺序", issues, context);
-    if (!unitsByCode.has(composite(courseCode, unitCode))) {
+    if (!unitsByCode.has(composite(code, unitCode))) {
       issues.push(issue(row.sheet, row.row, "单元编码", "UNKNOWN_UNIT_CODE", `当前课程中不存在单元编码：${unitCode}`, context));
       return;
     }
-    if (!blockCode || !order || duplicateBlockCodes.has(composite(courseCode, blockCode))) return;
+    if (!blockCode || !order || duplicateBlockCodes.has(composite(code, blockCode))) return;
     const title = rowText(row, "标题");
     const body = rowText(row, "正文");
     const items = list(value(row, "列表项"));
     const donts = list(value(row, "禁止项"));
     const assetPath = rowText(row, "素材文件名");
-    if (kind === "knowledge") validateAndAddBlock(row, courseCode, unitCode, order, { key: blockCode, type: "knowledge", title, body, imageFileId: null }, assetPath || undefined);
-    else if (kind === "do_dont") validateAndAddBlock(row, courseCode, unitCode, order, { key: blockCode, type: "do_dont", title, dos: items, donts });
-    else if (kind === "steps") validateAndAddBlock(row, courseCode, unitCode, order, { key: blockCode, type: "steps", title, steps: items });
-    else if (kind === "summary") validateAndAddBlock(row, courseCode, unitCode, order, { key: blockCode, type: "summary", points: items });
+    if (kind === "knowledge") validateAndAddBlock(row, code, unitCode, order, { key: blockCode, type: "knowledge", title, body, imageFileId: null }, assetPath || undefined);
+    else if (kind === "do_dont") validateAndAddBlock(row, code, unitCode, order, { key: blockCode, type: "do_dont", title, dos: items, donts });
+    else if (kind === "steps") validateAndAddBlock(row, code, unitCode, order, { key: blockCode, type: "steps", title, steps: items });
+    else if (kind === "summary") validateAndAddBlock(row, code, unitCode, order, { key: blockCode, type: "summary", points: items });
     else issues.push(issue(row.sheet, row.row, "块类型", "INVALID_BLOCK_TYPE", `不支持的块类型：${kind}`, context));
   });
 
   checkpointRows.forEach((row) => {
-    const courseCode = required(row, "课程编码", issues, {});
-    const unitCode = required(row, "单元编码", issues, { courseCode });
-    const context = contextForUnit(courseCode, unitCode);
+    const code = courseCode(row, issues);
+    const unitCode = required(row, "单元编码", issues, { courseCode: code });
+    const context = contextForUnit(code, unitCode);
     const blockCode = required(row, "内容块编码", issues, context);
     const order = positiveInteger(row, "顺序", issues, context);
-    if (!unitsByCode.has(composite(courseCode, unitCode))) {
+    if (!unitsByCode.has(composite(code, unitCode))) {
       issues.push(issue(row.sheet, row.row, "单元编码", "UNKNOWN_UNIT_CODE", `当前课程中不存在单元编码：${unitCode}`, context));
       return;
     }
-    if (!blockCode || !order || duplicateBlockCodes.has(composite(courseCode, blockCode))) return;
+    if (!blockCode || !order || duplicateBlockCodes.has(composite(code, blockCode))) return;
     const aliases: Record<string, "single_choice" | "multiple_choice" | "true_false"> = { single_choice: "single_choice", multiple_choice: "multiple_choice", true_false: "true_false", 单选: "single_choice", 多选: "multiple_choice", 判断: "true_false" };
     const questionType = aliases[rowText(row, "题型")];
     if (!questionType) {
@@ -309,7 +317,7 @@ export async function parseCoursewareXlsx(buffer: Buffer): Promise<ParsedCoursew
     }
     const options = list(value(row, "选项"));
     const correctIndexes = rowText(row, "答案").split(/[,，\s]+/).filter(Boolean).map((item) => Number(item) - 1);
-    validateAndAddBlock(row, courseCode, unitCode, order, {
+    validateAndAddBlock(row, code, unitCode, order, {
       key: blockCode,
       type: "checkpoint",
       prompt: rowText(row, "题干"),
@@ -323,26 +331,27 @@ export async function parseCoursewareXlsx(buffer: Buffer): Promise<ParsedCoursew
   for (const [blockIdentity, rows] of scenarioGroups) {
     const first = rows[0]!;
     if (duplicateBlockCodes.has(blockIdentity)) continue;
-    const courseCode = required(first, "课程编码", issues, {});
-    const unitCode = required(first, "单元编码", issues, { courseCode });
-    const blockCode = required(first, "内容块编码", issues, { courseCode, unitCode });
-    const context = contextForUnit(courseCode, unitCode);
+    const code = courseCode(first, issues);
+    const unitCode = required(first, "单元编码", issues, { courseCode: code });
+    const blockCode = required(first, "内容块编码", issues, { courseCode: code, unitCode });
+    const context = contextForUnit(code, unitCode);
     const order = positiveInteger(first, "顺序", issues, context);
     rows.forEach((row) => {
+      if (row !== first) courseCode(row, issues);
       required(row, "选项", issues, context);
       required(row, "选择后果", issues, context);
       required(row, "制度依据", issues, context);
     });
-    if (!unitsByCode.has(composite(courseCode, unitCode))) {
+    if (!unitsByCode.has(composite(code, unitCode))) {
       issues.push(issue(first.sheet, first.row, "单元编码", "UNKNOWN_UNIT_CODE", `当前课程中不存在单元编码：${unitCode}`, context));
       continue;
     }
-    const inconsistent = rows.some((row) => rowText(row, "课程编码") !== courseCode || rowText(row, "单元编码") !== unitCode || rowText(row, "场景") !== rowText(first, "场景") || rowText(row, "顺序") !== rowText(first, "顺序"));
+    const inconsistent = rows.some((row) => rowText(row, "课程编码") !== code || rowText(row, "单元编码") !== unitCode || rowText(row, "场景") !== rowText(first, "场景") || rowText(row, "顺序") !== rowText(first, "顺序"));
     if (inconsistent) {
       rows.forEach((row) => issues.push(issue(row.sheet, row.row, "内容块编码", "INCONSISTENT_SCENARIO", `同一课程内情境编码 ${blockCode} 的场景、单元或顺序不一致`, context)));
       continue;
     }
-    if (order && blockCode) validateAndAddBlock(first, courseCode, unitCode, order, {
+    if (order && blockCode) validateAndAddBlock(first, code, unitCode, order, {
       key: blockCode,
       type: "scenario",
       prompt: rowText(first, "场景"),

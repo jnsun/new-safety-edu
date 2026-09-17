@@ -27,6 +27,52 @@ export function hashStructuredCourseware(input: unknown) {
   return createHash("sha256").update(stableJson(normalizeStructuredCourseware(input))).digest("hex");
 }
 
+export type StructuredCoursewareSourceAssetIdentity = {
+  blockKey: string;
+  path: string;
+  sha256: string;
+};
+
+/**
+ * Portable identity for imported structured content. Imported versions must persist
+ * this hash from the server action plan; generated PrivateFile UUIDs are deliberately
+ * removed so the same source document and assets hash identically after materialization.
+ */
+export function hashStructuredCoursewareSourceIdentity(input: unknown, sourceAssets: StructuredCoursewareSourceAssetIdentity[]) {
+  const document = normalizeStructuredCourseware(input);
+  const materializedImageKeys = new Set(document.units.flatMap((unit) => unit.blocks.flatMap((block) => block.type === "knowledge" && block.imageFileId ? [block.key] : [])));
+  if (!sourceAssets.length) {
+    if (materializedImageKeys.size) throw new Error("已物化图片必须提供来源身份");
+    return hashStructuredCourseware(document);
+  }
+  const knowledgeKeys = new Set(document.units.flatMap((unit) => unit.blocks.flatMap((block) => block.type === "knowledge" ? [block.key] : [])));
+  const seenBlocks = new Set<string>();
+  const assets = sourceAssets.map((asset) => {
+    const blockKey = asset.blockKey.trim();
+    const path = asset.path.trim().normalize("NFC");
+    const digest = asset.sha256.toLowerCase();
+    if (!knowledgeKeys.has(blockKey)) throw new Error(`素材只能关联图文知识卡：${blockKey}`);
+    if (seenBlocks.has(blockKey)) throw new Error(`同一图文知识卡只能关联一个素材：${blockKey}`);
+    if (!path || !/^[a-f0-9]{64}$/.test(digest)) throw new Error(`素材来源身份无效：${blockKey}`);
+    seenBlocks.add(blockKey);
+    return { blockKey, path, sha256: digest };
+  }).sort((left, right) => left.blockKey.localeCompare(right.blockKey) || left.path.localeCompare(right.path));
+  for (const blockKey of materializedImageKeys) if (!seenBlocks.has(blockKey)) throw new Error(`缺少已物化图片的来源身份：${blockKey}`);
+  const portableDocument: StructuredCoursewareDocument = {
+    ...document,
+    units: document.units.map((unit) => ({
+      ...unit,
+      blocks: unit.blocks.map((block) => block.type === "knowledge" ? { ...block, imageFileId: null } : block)
+    }))
+  };
+  return createHash("sha256").update(stableJson({
+    kind: "structured-courseware-source",
+    version: 1,
+    document: portableDocument,
+    assets
+  })).digest("hex");
+}
+
 export function serializeStructuredCoursewareForLearner(input: unknown, resumeState: unknown) {
   const document = normalizeStructuredCourseware(input);
   return {

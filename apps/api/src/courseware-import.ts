@@ -6,7 +6,10 @@ import {
   type StructuredCoursewareDocument
 } from "@safety/contracts";
 import { z } from "zod";
-import { hashStructuredCourseware } from "./structured-courseware.js";
+import {
+  hashStructuredCoursewareSourceIdentity,
+  type StructuredCoursewareSourceAssetIdentity
+} from "./structured-courseware.js";
 import { CoursewareXlsxError, parseCoursewareXlsx } from "./courseware-import-xlsx.js";
 import { CoursewarePackageError, parseCoursewarePackage } from "./courseware-import-package.js";
 
@@ -131,17 +134,33 @@ const AssetBindingSchema = z.object({
   row: z.number().int().nonnegative().optional()
 }).strict();
 
+const SourceAssetIdentitySchema = z.object({
+  blockKey: z.string().min(1),
+  path: z.string().min(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/)
+}).strict();
+
 const ImportActionPlanItemSchema = z.object({
-  courseCode: z.string().min(1).max(120),
+  courseCode: z.string().trim().min(1).max(120),
   title: z.string().min(1).max(180),
   classification: z.enum(["create", "new_version"]),
   existingCoursewareId: z.string().uuid().nullable(),
   contentHash: z.string().regex(/^[a-f0-9]{64}$/),
   document: StructuredCoursewareDocumentSchema,
-  assetBindings: z.array(AssetBindingSchema)
+  assetBindings: z.array(AssetBindingSchema),
+  sourceAssets: z.array(SourceAssetIdentitySchema)
 }).strict().superRefine((item, context) => {
   if (item.classification === "create" && item.existingCoursewareId !== null) context.addIssue({ code: "custom", path: ["existingCoursewareId"], message: "新增课程不能引用现有课件" });
   if (item.classification === "new_version" && item.existingCoursewareId === null) context.addIssue({ code: "custom", path: ["existingCoursewareId"], message: "新版本必须引用现有课件" });
+  const bindingBlocks = item.assetBindings.map(({ blockKey }) => blockKey.trim());
+  if (new Set(bindingBlocks).size !== bindingBlocks.length) {
+    context.addIssue({ code: "custom", path: ["assetBindings"], message: "同一图文知识卡只能关联一个素材" });
+  }
+  const bindings = new Set(item.assetBindings.map(({ blockKey, path }) => `${blockKey}\0${path.normalize("NFC")}`));
+  const identities = new Set(item.sourceAssets.map(({ blockKey, path }) => `${blockKey}\0${path.normalize("NFC")}`));
+  if (bindings.size !== item.assetBindings.length || identities.size !== item.sourceAssets.length || bindings.size !== identities.size || [...bindings].some((key) => !identities.has(key))) {
+    context.addIssue({ code: "custom", path: ["sourceAssets"], message: "素材绑定与来源身份不一致" });
+  }
 });
 
 export const CoursewareImportActionPlanSchema = z.object({
@@ -303,6 +322,15 @@ export async function confirmCoursewareImport<TTransaction extends CoursewareImp
     if (!actionPlan.success || actionPlan.data.sourceHash !== session.sourceHash || actionPlan.data.scope.scopeType !== scope.data.scopeType || actionPlan.data.scope.scopeId !== scope.data.scopeId) {
       return confirmationError(409, "COURSEWARE_IMPORT_ACTION_PLAN_INVALID", "导入执行计划无效，请重新上传");
     }
+    let contentIdentityValid = true;
+    try {
+      contentIdentityValid = actionPlan.data.items.every((item) => hashStructuredCoursewareSourceIdentity(item.document, item.sourceAssets) === item.contentHash);
+    } catch {
+      contentIdentityValid = false;
+    }
+    if (!contentIdentityValid) {
+      return confirmationError(409, "COURSEWARE_IMPORT_ACTION_PLAN_INVALID", "导入内容来源身份校验失败，请重新上传");
+    }
     let sourceBuffer: Buffer | null = null;
     if (session.containsAssets) {
       if (!session.sourceFileId) return confirmationError(409, "COURSEWARE_IMPORT_PRIVATE_SOURCE_REQUIRED", "含素材的导入必须保留私有源文件");
@@ -335,6 +363,7 @@ export async function previewCoursewareImport(file: SourceFile, options: Preview
   const sourceHash = sha256(file.buffer);
   const { parsed, assets } = await parseSource(file);
   const issues = parsed.issues.map((entry) => ({ ...entry, file: entry.file || file.filename }));
+  const sourceAssetsByCourse = new Map<string, StructuredCoursewareSourceAssetIdentity[]>();
   for (const course of parsed.courses) {
     if (!course.document) continue;
     const blocks = new Map(course.document.units.flatMap((unit) => unit.blocks.map((block) => [block.key, block] as const)));
@@ -344,19 +373,29 @@ export async function previewCoursewareImport(file: SourceFile, options: Preview
       }
     }
     const seenBindings = new Set<string>();
+    const boundBlocks = new Set<string>();
+    const sourceAssets: StructuredCoursewareSourceAssetIdentity[] = [];
     for (const binding of course.assetBindings) {
-      if (!safeAssetReference(binding.path)) {
+      const normalizedPath = binding.path.normalize("NFC");
+      const asset = assets.get(normalizedPath);
+      if (!safeAssetReference(normalizedPath)) {
         issues.push({ file: file.filename, sheet: binding.sheet ?? "素材", row: binding.row ?? 0, field: "path", code: "INVALID_ASSET_PATH", message: `素材路径无效：${binding.path}`, courseCode: course.courseCode });
-      } else if (!assets.has(binding.path)) {
+      } else if (!asset) {
         issues.push({ file: file.filename, sheet: binding.sheet ?? "内容块", row: binding.row ?? 0, field: "素材文件名", code: "MISSING_ASSET", message: `找不到素材：${binding.path}`, courseCode: course.courseCode });
       }
       const block = blocks.get(binding.blockKey);
       if (!block) issues.push({ file: file.filename, sheet: binding.sheet ?? "素材", row: binding.row ?? 0, field: "blockKey", code: "UNKNOWN_BLOCK_KEY", message: `素材关联的内容块不存在：${binding.blockKey}`, courseCode: course.courseCode });
       else if (block.type !== "knowledge") issues.push({ file: file.filename, sheet: binding.sheet ?? "素材", row: binding.row ?? 0, field: "blockKey", code: "INVALID_ASSET_BLOCK", message: `素材只能关联图文知识卡：${binding.blockKey}`, courseCode: course.courseCode });
-      const key = `${binding.blockKey}\0${binding.path}`;
+      if (boundBlocks.has(binding.blockKey)) issues.push({ file: file.filename, sheet: binding.sheet ?? "素材", row: binding.row ?? 0, field: "blockKey", code: "MULTIPLE_ASSET_BINDINGS", message: `同一图文知识卡只能关联一个素材：${binding.blockKey}`, courseCode: course.courseCode });
+      boundBlocks.add(binding.blockKey);
+      const key = `${binding.blockKey}\0${normalizedPath}`;
       if (seenBindings.has(key)) issues.push({ file: file.filename, sheet: "素材", row: 0, field: "path", code: "DUPLICATE_ASSET_BINDING", message: `素材关联重复：${binding.path}`, courseCode: course.courseCode });
       seenBindings.add(key);
+      if (asset && block?.type === "knowledge" && !sourceAssets.some((entry) => entry.blockKey === binding.blockKey)) {
+        sourceAssets.push({ blockKey: binding.blockKey, path: normalizedPath, sha256: asset.sha256 });
+      }
     }
+    sourceAssetsByCourse.set(course.courseCode, sourceAssets);
   }
 
   const existingByCode = new Map<string, ExistingCoursewareReference[]>();
@@ -365,7 +404,12 @@ export async function previewCoursewareImport(file: SourceFile, options: Preview
   });
   const globalIssueCount = issues.filter((entry) => !entry.courseCode).length;
   const globalInvalid = globalIssueCount > 0;
-  const items = parsed.courses.map((course): CoursewareImportPreviewItem => {
+  const previewCourses = [...parsed.courses];
+  const previewCourseCodes = new Set(previewCourses.map(({ courseCode }) => courseCode));
+  for (const courseCode of new Set(issues.flatMap((entry) => entry.courseCode ? [entry.courseCode] : []))) {
+    if (!previewCourseCodes.has(courseCode)) previewCourses.push({ courseCode, title: courseCode, document: null, assetBindings: [] });
+  }
+  const items = previewCourses.map((course): CoursewareImportPreviewItem => {
     const related = issues.filter((entry) => entry.courseCode === course.courseCode);
     const existing = existingByCode.get(course.courseCode) ?? [];
     let classification: CoursewareImportClassification = "create";
@@ -376,7 +420,7 @@ export async function previewCoursewareImport(file: SourceFile, options: Preview
       classification = "conflict";
       issues.push({ file: file.filename, sheet: "数据库", row: 0, field: "课程编码", code: "EXISTING_COURSEWARE_CONFLICT", message: `课程编码 ${course.courseCode} 对应的现有课件冲突`, courseCode: course.courseCode });
     } else if (existing.length === 1) {
-      const contentHash = hashStructuredCourseware(course.document);
+      const contentHash = hashStructuredCoursewareSourceIdentity(course.document, sourceAssetsByCourse.get(course.courseCode) ?? []);
       if (existing[0]!.latestContentHash === contentHash) {
         classification = "conflict";
         issues.push({ file: file.filename, sheet: "数据库", row: 0, field: "内容", code: "UNCHANGED_CONTENT", message: "导入内容与现有最新版本相同", courseCode: course.courseCode });
@@ -398,9 +442,10 @@ export async function previewCoursewareImport(file: SourceFile, options: Preview
       title: course.title,
       classification: item.classification,
       existingCoursewareId: item.existingCoursewareId,
-      contentHash: hashStructuredCourseware(course.document),
+      contentHash: hashStructuredCoursewareSourceIdentity(course.document, sourceAssetsByCourse.get(course.courseCode) ?? []),
       document: course.document,
-      assetBindings: course.assetBindings
+      assetBindings: course.assetBindings,
+      sourceAssets: sourceAssetsByCourse.get(course.courseCode) ?? []
     }];
   });
   const actionPlan = {
