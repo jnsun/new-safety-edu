@@ -10,7 +10,7 @@ import { getReceivablesColumnPreference, getReceivablesReferenceData, previewRec
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
 import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
-import { applyReceivablesImport, authorizeReceivablesImport, listReceivablesImports, previewReceivablesImport, rollbackReceivablesImport } from "../receivables-import.js";
+import { applyReceivablesImport, authorizeReceivablesImport, inspectReceivablesImport, listReceivablesImports, previewReceivablesImport, receivablesImportFields, rollbackReceivablesImport, type ReceivablesImportColumnMappings } from "../receivables-import.js";
 import { consumeReceivablesExport, createReceivablesExportJob, issueReceivablesExportToken, listReceivablesExports, removeConsumedReceivablesExport } from "../receivables-export.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
@@ -102,6 +102,18 @@ const attachmentVoidInput = z.object({ ledgerRevision: z.number().int().positive
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() }).strict();
 const importApplyInput = z.object({ revision: z.number().int().positive(), decisions: z.array(z.object({ rowNumber: z.number().int().min(2), decision: z.enum(["skip", "update"]) }).strict()).max(200_000) }).strict();
 const importRollbackInput = z.object({ revision: z.number().int().positive(), reason: reasonInput }).strict();
+const columnMappingsField = z.string().max(20_000).optional().transform((value, ctx): ReceivablesImportColumnMappings => {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !Object.entries(parsed).every(([source, target]) => source.trim() && typeof target === "string" && receivablesImportFields.includes(target as never))) throw new Error();
+    return parsed as ReceivablesImportColumnMappings;
+  } catch {
+    ctx.addIssue({ code: "custom", message: "字段映射无效" });
+    return z.NEVER;
+  }
+});
+const importPreviewFields = z.object({ openingBalanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), columnMappings: columnMappingsField }).strict();
 const grantCandidateInput = z.object({ search: z.string().trim().min(2).max(80) }).strict();
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
@@ -186,13 +198,21 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     return reply.send(file.handle.createReadStream({ start: 0, autoClose: false }));
   });
   app.get("/api/receivables/imports", { preHandler: deps.authenticate }, async (request) => ({ data: await listReceivablesImports(request.principal as Principal) }));
+  app.post("/api/receivables/imports/inspect", { preHandler: deps.authenticate }, async (request) => {
+    const part = await request.file({ limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+    if (!part) throw httpError(400, "FILE_REQUIRED", "请选择文件");
+    const content = await part.toBuffer();
+    if (part.file.truncated) throw httpError(413, "FILE_TOO_LARGE", "导入文件不得超过 10 MiB");
+    return { data: await inspectReceivablesImport(adminContext(request), { originalName: part.filename, mimeType: part.mimetype, content }) };
+  });
   app.post("/api/receivables/imports/preview", { preHandler: deps.authenticate }, async (request, reply) => {
     await authorizeReceivablesImport(request.principal as Principal);
     const part = await request.file({ limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
     if (!part) throw httpError(400, "FILE_REQUIRED", "请选择文件");
     const content = await part.toBuffer();
     if (part.file.truncated) throw httpError(413, "FILE_TOO_LARGE", "导入文件不得超过 10 MiB");
-    const data = await previewReceivablesImport(adminContext(request), { originalName: part.filename, mimeType: part.mimetype, content }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads" });
+    const input = importPreviewFields.parse(multipartFields(part.fields as Record<string, unknown>));
+    const data = await previewReceivablesImport(adminContext(request), { originalName: part.filename, mimeType: part.mimetype, content }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads", openingBalanceDate: input.openingBalanceDate, columnMappings: input.columnMappings });
     return reply.code(201).send({ data });
   });
   app.post("/api/receivables/imports/:id/apply", { preHandler: deps.authenticate }, async (request) => {

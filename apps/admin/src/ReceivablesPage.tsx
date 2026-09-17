@@ -222,7 +222,7 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
       ...(currentAccess.canImport ? [{ key: "import", label: "Excel 导入", children: <ReceivablesTransfers accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section="imports" /> }] : []),
       ...(currentAccess.canExport ? [{ key: "export", label: "Excel 导出", children: <ReceivablesTransfers accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section="exports" /> }] : []),
     ];
-    return <div className="receivables-page"><Typography.Title level={3}>数据处理</Typography.Title><Tabs activeKey={requested} items={items} onChange={(tab) => navigate(`/receivables/data?tab=${tab}`)} /></div>;
+    return <div className="receivables-page"><Tabs activeKey={requested} items={items} onChange={(tab) => navigate(`/receivables/data?tab=${tab}`)} /></div>;
   }
   if (route === "grants" || route === "departments" || route === "dictionaries") return <ReceivablesAdmin accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} section={route} />;
   return <ReceivablesDashboard accountId={accountId} scopeFingerprint={scopeFingerprint} access={currentAccess} />;

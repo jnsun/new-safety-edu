@@ -119,6 +119,20 @@ export const receivablesReferenceCategories = [
   "project_status", "final_method", "debt_status", "client_attr", "unit", "work_nature", "sector", "comm_method", "feedback", "progress_note", "next_plan", "attach_category",
 ] as const;
 export type ReceivablesReferenceCategory = typeof receivablesReferenceCategories[number];
+export const receivablesReferenceCategoryLabels: Record<ReceivablesReferenceCategory, string> = {
+  project_status: "项目状态",
+  final_method: "决算方式",
+  debt_status: "债权状态",
+  client_attr: "客户属性",
+  unit: "单位",
+  work_nature: "工作性质",
+  sector: "八大板块",
+  comm_method: "沟通方式",
+  feedback: "对方反馈",
+  progress_note: "最新进展",
+  next_plan: "下一步计划",
+  attach_category: "附件分类",
+};
 export type ReceivablesReferenceData = {
   departments: Array<{ id: string; name: string; canRead: boolean; canWrite: boolean }>;
   dictionaries: Record<ReceivablesReferenceCategory, Array<{ id: string; value: string }>>;
@@ -164,6 +178,18 @@ export type ReceivablesDictionaryOption = {
 };
 
 export type ReceivablesImportIssue = { code: string; message: string; rowNumber?: number; field?: string; column?: string };
+export function groupReceivablesImportIssues(issues: ReceivablesImportIssue[]) {
+  const groups = new Map<string, { code: string; message: string; count: number; rows: number[]; columns: string[] }>();
+  for (const issue of issues) {
+    const key = `${issue.code}\u0000${issue.message}`;
+    const group = groups.get(key) ?? { code: issue.code, message: issue.message, count: 0, rows: [], columns: [] };
+    group.count += 1;
+    if (issue.rowNumber && !group.rows.includes(issue.rowNumber)) group.rows.push(issue.rowNumber);
+    if (issue.column && !group.columns.includes(issue.column)) group.columns.push(issue.column);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
 export type ReceivablesImportData = {
   presentFields: string[];
   financeDepartmentId: string | null;
@@ -269,6 +295,37 @@ export const defaultReceivablesColumnWidths: Record<ReceivablesColumnId, number>
   communicationMethod: 104, counterpartyFeedback: 160, latestProgress: 180, nextPlan: 180,
   anomaly: 124, updatedAt: 138,
 };
+export type ReceivablesImportField = keyof Omit<ReceivablesImportData, "presentFields">;
+export type ReceivablesImportInspection = {
+  unknownColumns: Array<{ name: string; samples: string[] }>;
+  recognizedFields: ReceivablesImportField[];
+};
+
+export function groupReceivablesDictionaryOptions(rows: ReceivablesDictionaryOption[]) {
+  const byCategory = new Map(rows.map((row) => [row.category, [] as ReceivablesDictionaryOption[]]));
+  for (const row of rows) byCategory.get(row.category)!.push(row);
+  return receivablesReferenceCategories.map((category) => {
+    const sorted = [...(byCategory.get(category) ?? [])].sort((left, right) => left.sortOrder - right.sortOrder || left.value.localeCompare(right.value, "zh-CN"));
+    return { category, label: receivablesReferenceCategoryLabels[category], total: sorted.length, active: sorted.filter((item) => item.active).length, options: sorted };
+  });
+}
+
+export function filterReceivablesDepartments(rows: ReceivablesDepartment[], search: string, status: "active" | "inactive" | "all") {
+  const keyword = search.trim().toLocaleLowerCase("zh-CN");
+  return rows.filter((row) => {
+    if (status !== "all" && row.active !== (status === "active")) return false;
+    return !keyword || row.name.toLocaleLowerCase("zh-CN").includes(keyword) || row.code?.toLocaleLowerCase("zh-CN").includes(keyword);
+  }).sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, "zh-CN"));
+}
+
+export function updateReceivablesSelectedScopes(role: ReceivablesGrant["role"], departmentIds: string[], scopes: Array<{ departmentId: string; canRead: boolean; canWrite: boolean }>) {
+  if (role === "admin") return [];
+  const current = new Map(scopes.map((scope) => [scope.departmentId, scope]));
+  return departmentIds.map((departmentId) => {
+    const scope = current.get(departmentId);
+    return { departmentId, canRead: true, canWrite: role === "readonly" ? false : !!scope?.canWrite };
+  });
+}
 export const defaultReceivablesColumnPreference: ReceivablesColumnPreference = {
   order: [...receivablesColumnIds],
   visible: [...receivablesColumnIds],
@@ -365,6 +422,15 @@ export const receivablesNavigation = (access: ReceivablesAccess) => [
     { path: "/receivables/dictionaries", label: "业务字典" },
   ] : []),
 ];
+
+export function receivablesPageTitle(pathname: string) {
+  if (pathname.startsWith("/receivables/ledger")) return "台账总览";
+  if (pathname.startsWith("/receivables/data") || pathname.startsWith("/receivables/imports") || pathname.startsWith("/receivables/exports")) return "数据处理";
+  if (pathname.startsWith("/receivables/access")) return "账号与权限";
+  if (pathname.startsWith("/receivables/departments")) return "财务归属部门";
+  if (pathname.startsWith("/receivables/dictionaries")) return "业务字典";
+  return "应收账款看板";
+}
 
 export function receivablesDashboardMode(access: Pick<ReceivablesAccess, "canManageMoney" | "canMaintainCollection">) {
   if (access.canManageMoney) return { kind: "finance" as const, title: "财务异常处置台", description: "先核对金额异常，再处理开票、回款和台账数据。", actionLabel: "处理财务数据", actionPath: "/receivables/data" };

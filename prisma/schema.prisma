@@ -1595,6 +1595,8 @@ model ReceivableImportBatch {
   revision       Int                        @default(1)
   rowCount       Int                        @default(0) @map("row_count")
   errorCount     Int                        @default(0) @map("error_count")
+  openingBalanceDate DateTime?              @map("opening_balance_date") @db.Date
+  columnMappings     Json?                  @map("column_mappings")
   requestedBy    String                     @map("requested_by") @db.Uuid
   requester      Account                    @relation("ReceivableImportRequestedBy", fields: [requestedBy], references: [id], onDelete: Restrict)
   appliedAt      DateTime?                  @map("applied_at")

@@ -60,7 +60,7 @@ import {
   QualificationsPage,
 } from "./SafetyManagementPages";
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
-import { receivablesNavigation, receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
+import { receivablesNavigation, receivablesPageTitle, receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 import { personMatchesSearch } from "./person-search";
 import { platformConditionalModule } from "./platform-access";
 import { masterDataSelectedKey, peopleOrganizationNav } from "./people-organization/navigation";
@@ -2714,19 +2714,16 @@ function Shell({ principal }: { principal: Principal }) {
             : "培训教育";
   return (
     <>
-      <Layout className="app-shell">
+      <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}`}>
         <Layout.Sider
           className={inReceivables ? "receivables-sider" : undefined}
-          width={inReceivables ? 184 : 228}
+          width={inReceivables ? 168 : 228}
           breakpoint="lg"
           collapsedWidth="0"
           theme="light"
         >
-          <div className="brand">
-            <div className="brand-mark">安</div>
-            <div className="brand-copy">
-              物化院<small>{workspaceTitle}</small>
-            </div>
+          <div className={`brand${inReceivables ? " receivables-brand" : ""}`}>
+            {inReceivables ? <div className="brand-copy">应收账款管理</div> : <><div className="brand-mark">安</div><div className="brand-copy">物化院<small>{workspaceTitle}</small></div></>}
           </div>
           <Menu
             mode="inline"
@@ -2737,7 +2734,7 @@ function Shell({ principal }: { principal: Principal }) {
         </Layout.Sider>
         <Layout>
           <Layout.Header className="topbar">
-            <span className="topbar-title">{workspaceTitle}</span>
+            <span className="topbar-title">{inReceivables ? receivablesPageTitle(location.pathname) : workspaceTitle}</span>
             <Space>
               {!inReceivables && <Tag>
                 {principal.roles
@@ -2757,7 +2754,7 @@ function Shell({ principal }: { principal: Principal }) {
               </Button>
             </Space>
           </Layout.Header>
-          <Layout.Content className="content">
+          <Layout.Content className={`content${inReceivables ? " receivables-content" : ""}`}>
             <Routes>
               <Route path="/" element={<PlatformPortal accountId={principal.accountId} />} />
               <Route path="/training-dashboard" element={<DashboardPage />} />

@@ -52,7 +52,9 @@ export type ReceivablesImportData = {
   openingReceiptAmount: string | null;
   openingReceiptDate: string | null;
 };
-type ReceivablesImportField = Exclude<keyof ReceivablesImportData, "presentFields">;
+export type ReceivablesImportField = Exclude<keyof ReceivablesImportData, "presentFields">;
+export type ReceivablesImportColumnMappings = Partial<Record<string, ReceivablesImportField>>;
+type ReceivablesImportParseOptions = { openingBalanceDate?: string | null | undefined; columnMappings?: ReceivablesImportColumnMappings | undefined };
 
 export type ReceivablesImportParsedRow = {
   rowNumber: number;
@@ -68,12 +70,12 @@ const aliases: Record<ReceivablesImportField, readonly string[]> = {
   financeDepartmentId: ["财务归属部门", "归属部门", "finance_department", "financeDepartment"],
   contractNo: ["合同编号", "合同号", "contract_no", "contractNo"],
   projectName: ["项目名称", "project_name", "projectName"],
-  customerName: ["客户名称", "customer_name", "customerName"],
+  customerName: ["客户名称", "债务单位", "customer_name", "customerName"],
   customerType: ["客户属性", "customer_type", "customerType"],
   creditorUnit: ["债权单位", "单位", "creditor_unit", "creditorUnit"],
   workNature: ["工作性质", "work_nature", "workNature"],
   sector: ["八大板块", "板块", "sector"],
-  projectStatus: ["项目状态", "project_status", "projectStatus"],
+  projectStatus: ["项目状态", "项目进度", "project_status", "projectStatus"],
   settlementMethod: ["决算方式", "settlement_method", "settlementMethod"],
   contractAmount: ["合同金额", "contract_amount", "contractAmount"],
   finalAmount: ["决算金额", "final_amount", "finalAmount"],
@@ -86,11 +88,14 @@ const aliases: Record<ReceivablesImportField, readonly string[]> = {
   counterpartyFeedback: ["对方反馈", "反馈", "feedback", "counterpartyFeedback"],
   latestProgress: ["最新进展", "进展", "latest_progress", "latestProgress"],
   nextPlan: ["下一步计划", "计划", "next_plan", "nextPlan"],
-  openingInvoiceAmount: ["开票金额", "期初开票金额", "opening_invoice_amount", "openingInvoiceAmount"],
+  openingInvoiceAmount: ["开票金额", "期初开票金额", "已开发票", "opening_invoice_amount", "openingInvoiceAmount"],
   openingInvoiceDate: ["开票日期", "期初开票日期", "opening_invoice_date", "openingInvoiceDate"],
-  openingReceiptAmount: ["到账金额", "回款金额", "期初到账金额", "opening_receipt_amount", "openingReceiptAmount"],
+  openingReceiptAmount: ["到账金额", "回款金额", "期初到账金额", "已到账收入", "opening_receipt_amount", "openingReceiptAmount"],
   openingReceiptDate: ["到账日期", "回款日期", "期初到账日期", "opening_receipt_date", "openingReceiptDate"],
 };
+
+const ignoredLegacyColumns = new Set(["决算情况", "账内应收", "账外应收", "应收合计"]);
+export const receivablesImportFields = Object.keys(aliases) as ReceivablesImportField[];
 
 const dictionaryCategories: Partial<Record<keyof ReceivablesImportData, string>> = {
   projectStatus: "project_status",
@@ -139,6 +144,11 @@ function cellText(cell: ExcelJS.Cell): string {
   return cell.text.trim();
 }
 
+function formulaResultMissing(cell: ExcelJS.Cell): boolean {
+  const value = cell.value;
+  return !!value && typeof value === "object" && "formula" in value && (!("result" in value) || value.result === null || value.result === undefined || value.result === "");
+}
+
 function decimal(value: string, rowNumber: number, field: string, errors: ReceivablesImportIssue[]): string | null {
   if (!value) return null;
   try {
@@ -165,7 +175,26 @@ function dateOnly(value: string, rowNumber: number, field: string, errors: Recei
   return value;
 }
 
-export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, references: ReceivablesImportReference) {
+export function inspectReceivablesImportWorkbook(workbook: ExcelJS.Workbook) {
+  validateReceivableWorkbookShape(workbook);
+  const worksheet = workbook.worksheets[0]!;
+  const headerRow = worksheet.getRow(1);
+  const knownHeaders = new Set(Object.values(aliases).flat());
+  const unknownColumns: Array<{ name: string; samples: string[] }> = [];
+  const recognizedFields = new Set<ReceivablesImportField>();
+  for (let column = 1; column <= Math.max(headerRow.cellCount, headerRow.actualCellCount); column += 1) {
+    const name = cellText(headerRow.getCell(column));
+    if (!name) continue;
+    const field = (Object.entries(aliases) as Array<[ReceivablesImportField, readonly string[]]>).find(([, names]) => names.includes(name))?.[0];
+    if (field) { recognizedFields.add(field); continue; }
+    if (knownHeaders.has(name) || ignoredLegacyColumns.has(name)) continue;
+    const samples = [...new Set(Array.from({ length: Math.min(5, Math.max(0, worksheet.rowCount - 1)) }, (_, index) => cellText(worksheet.getRow(index + 2).getCell(column))).filter(Boolean))].slice(0, 3);
+    unknownColumns.push({ name, samples });
+  }
+  return { unknownColumns, recognizedFields: [...recognizedFields] };
+}
+
+export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, references: ReceivablesImportReference, options: ReceivablesImportParseOptions = {}) {
   validateReceivableWorkbookShape(workbook);
   const worksheet = workbook.worksheets[0]!;
   const headerRow = worksheet.getRow(1);
@@ -179,8 +208,12 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
   for (let column = 1; column <= Math.max(headerRow.cellCount, headerRow.actualCellCount); column += 1) {
     const name = cellText(headerRow.getCell(column));
     if (!name) continue;
-    const field = aliasToField.get(name);
+    const field = aliasToField.get(name) ?? options.columnMappings?.[name];
     if (!field) {
+      if (ignoredLegacyColumns.has(name)) {
+        warnings.push(issue("IGNORED_CALCULATED_COLUMN", "该列由系统重新计算或不属于导入事实，已忽略", { column: name }));
+        continue;
+      }
       warnings.push(issue("UNKNOWN_COLUMN", "未知列将被忽略", { column: name }));
       continue;
     }
@@ -211,7 +244,12 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     const row = worksheet.getRow(rowNumber);
     if (!columns.size || [...columns.values()].every((column) => !cellText(row.getCell(column)))) continue;
     const rowErrors: ReceivablesImportIssue[] = [];
-    const raw = Object.fromEntries([...columns].map(([field, column]) => [field, cellText(row.getCell(column))])) as Partial<Record<keyof ReceivablesImportData, string>>;
+    const raw: Partial<Record<keyof ReceivablesImportData, string>> = {};
+    for (const [field, column] of columns) {
+      const cell = row.getCell(column);
+      if (formulaResultMissing(cell)) rowErrors.push(issue("FORMULA_RESULT_MISSING", "公式单元格没有已计算结果，请先在 Excel 中重新计算并保存", { rowNumber, field }));
+      raw[field] = cellText(cell);
+    }
     const normalizedData = { ...Object.fromEntries(Object.keys(aliases).map((field) => [field, null])), presentFields: [...columns.keys()] } as ReceivablesImportData;
     for (const field of Object.keys(aliases) as ReceivablesImportField[]) {
       const value = raw[field]?.trim() ?? "";
@@ -246,11 +284,24 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     if ((!target || amountFieldsPresent) && normalizedData.contractAmount === null && normalizedData.finalAmount === null && !["工作量", "按工作量结算"].includes(normalizedData.settlementMethod ?? "")) {
       rowErrors.push(issue("FINAL_AMOUNT_REQUIRED", "非工作量结算必须提供合同金额或决算金额", { rowNumber, field: "finalAmount" }));
     }
+    let resolvedOpeningBalanceDate: string | null | undefined;
+    const openingBalanceDate = () => {
+      if (resolvedOpeningBalanceDate === undefined) resolvedOpeningBalanceDate = options.openingBalanceDate ? dateOnly(options.openingBalanceDate, rowNumber, "openingBalanceDate", rowErrors) : null;
+      return resolvedOpeningBalanceDate;
+    };
     if (normalizedData.openingInvoiceAmount && new Prisma.Decimal(normalizedData.openingInvoiceAmount).gt(0) && !normalizedData.openingInvoiceDate) {
-      rowErrors.push(issue("OPENING_INVOICE_DATE_REQUIRED", "期初开票金额大于零时必须提供开票日期", { rowNumber, field: "openingInvoiceDate" }));
+      if (options.openingBalanceDate) normalizedData.openingInvoiceDate = openingBalanceDate();
+      else rowErrors.push(issue("OPENING_INVOICE_DATE_REQUIRED", "期初开票金额大于零时必须提供开票日期", { rowNumber, field: "openingInvoiceDate" }));
     }
     if (normalizedData.openingReceiptAmount && new Prisma.Decimal(normalizedData.openingReceiptAmount).gt(0) && !normalizedData.openingReceiptDate) {
-      rowErrors.push(issue("OPENING_RECEIPT_DATE_REQUIRED", "期初到账金额大于零时必须提供到账日期", { rowNumber, field: "openingReceiptDate" }));
+      if (options.openingBalanceDate) normalizedData.openingReceiptDate = openingBalanceDate();
+      else rowErrors.push(issue("OPENING_RECEIPT_DATE_REQUIRED", "期初到账金额大于零时必须提供到账日期", { rowNumber, field: "openingReceiptDate" }));
+    }
+    if (!options.openingBalanceDate && ["openingInvoiceAmount", "openingReceiptAmount"].some((field) => {
+      const column = columns.get(field as ReceivablesImportField);
+      return column && ["已开发票", "已到账收入"].includes(cellText(headerRow.getCell(column)));
+    }) && [normalizedData.openingInvoiceAmount, normalizedData.openingReceiptAmount].some((amount) => amount && new Prisma.Decimal(amount).gt(0))) {
+      rowErrors.push(issue("OPENING_BALANCE_DATE_REQUIRED", "旧表包含期初开票或到账金额，请为本批次选择期初余额日期", { rowNumber, field: "openingBalanceDate" }));
     }
     const openingTotals = [normalizedData.openingInvoiceAmount, normalizedData.openingReceiptAmount].some((amount) => amount !== null && new Prisma.Decimal(amount).gt(0));
     const rowWarnings = target && openingTotals ? [issue("EXISTING_OPENING_TOTALS_SKIP_ONLY", "已有合同含非零期初开票或到账金额，只能跳过", { rowNumber })] : [];
@@ -273,7 +324,7 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
 
 export type ReceivablesImportContext = { principal: Principal; requestId: string };
 export type ReceivablesImportFile = { originalName: string; mimeType: string; content: Buffer };
-export type ReceivablesImportEnvironment = { uploadRoot: string };
+export type ReceivablesImportEnvironment = { uploadRoot: string; openingBalanceDate?: string | null | undefined; columnMappings?: ReceivablesImportColumnMappings | undefined };
 export type ReceivablesImportDecisions = { revision: number; rows: readonly { rowNumber: number; decision: "skip" | "update" }[] };
 type Tx = Prisma.TransactionClient;
 const setupLockKey = 8_645_136_501n;
@@ -292,6 +343,11 @@ export const receivablesImportBatchTransactionOptions = {
   maxWait: 10_000,
   timeout: 120_000,
 } as const;
+
+export const receivablesImportBatchParseOptions = (batch: { openingBalanceDate: Date | null; columnMappings?: unknown }) => ({
+  ...(batch.openingBalanceDate ? { openingBalanceDate: batch.openingBalanceDate.toISOString().slice(0, 10) } : {}),
+  ...(batch.columnMappings && typeof batch.columnMappings === "object" && !Array.isArray(batch.columnMappings) && Object.keys(batch.columnMappings).length ? { columnMappings: batch.columnMappings as ReceivablesImportColumnMappings } : {}),
+});
 
 async function references(db: Tx | typeof prisma): Promise<ReceivablesImportReference> {
   const [departments, dictionaryOptions, ledgers] = await Promise.all([
@@ -312,11 +368,18 @@ export async function authorizeReceivablesImport(principal: Principal) {
   requireReceivables(await resolveReceivablesAccess(principal), "import");
 }
 
+export async function inspectReceivablesImport(context: ReceivablesImportContext, file: ReceivablesImportFile) {
+  await authorizeReceivablesImport(context.principal);
+  if (file.mimeType !== "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || !file.originalName.toLowerCase().endsWith(".xlsx")) throw httpError(400, "INVALID_IMPORT_FILE_TYPE", "导入仅支持 XLSX 文件");
+  await validateReceivableAttachment(file.originalName, file.mimeType, file.content);
+  return inspectReceivablesImportWorkbook(await loadWorkbook(file.content));
+}
+
 export async function previewReceivablesImport(context: ReceivablesImportContext, file: ReceivablesImportFile, env: ReceivablesImportEnvironment) {
   await authorizeReceivablesImport(context.principal);
   if (file.mimeType !== "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || !file.originalName.toLowerCase().endsWith(".xlsx")) throw httpError(400, "INVALID_IMPORT_FILE_TYPE", "导入仅支持 XLSX 文件");
   await validateReceivableAttachment(file.originalName, file.mimeType, file.content);
-  const parsed = parseReceivablesImportWorkbook(await loadWorkbook(file.content), await references(prisma));
+  const parsed = parseReceivablesImportWorkbook(await loadWorkbook(file.content), await references(prisma), { openingBalanceDate: env.openingBalanceDate, columnMappings: env.columnMappings });
   const checksum = createHash("sha256").update(file.content).digest("hex");
   const storageKey = importStorageKey();
   await storeReceivableAttachment(env.uploadRoot, storageKey, file.content);
@@ -325,8 +388,8 @@ export async function previewReceivablesImport(context: ReceivablesImportContext
       const access = await lockAuthority(tx, context.principal);
       requireReceivables(access, "import");
       const originalFile = await tx.privateFile.create({ data: { kind: "attachment", storageKey, originalName: file.originalName.slice(0, 240), mimeType: file.mimeType, size: file.content.length, sha256: checksum, uploadedBy: context.principal.accountId } });
-      const created = await tx.receivableImportBatch.create({ data: { originalFileId: originalFile.id, checksum, rowCount: parsed.rows.length, errorCount: parsed.errors.length, requestedBy: context.principal.accountId, items: { create: parsed.rows.map((row) => ({ rowNumber: row.rowNumber, contractNoNormalized: row.normalizedData.contractNo, normalizedData: snapshot(row.normalizedData), errors: row.errors.length ? snapshot(row.errors) : Prisma.JsonNull, ledgerId: row.ledgerId, targetRevision: row.targetRevision })) } }, include: { items: { orderBy: { rowNumber: "asc" } } } });
-      await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.preview", objectType: "receivable_import_batch", objectId: created.id, requestId: context.requestId, ...auditScope(access), metadata: { checksum, rowCount: parsed.rows.length, errorCount: parsed.errors.length, fileId: originalFile.id } });
+      const created = await tx.receivableImportBatch.create({ data: { originalFileId: originalFile.id, checksum, rowCount: parsed.rows.length, errorCount: parsed.errors.length, openingBalanceDate: env.openingBalanceDate ? new Date(`${env.openingBalanceDate}T00:00:00.000Z`) : null, columnMappings: env.columnMappings && Object.keys(env.columnMappings).length ? snapshot(env.columnMappings) : Prisma.JsonNull, requestedBy: context.principal.accountId, items: { create: parsed.rows.map((row) => ({ rowNumber: row.rowNumber, contractNoNormalized: row.normalizedData.contractNo, normalizedData: snapshot(row.normalizedData), errors: row.errors.length ? snapshot(row.errors) : Prisma.JsonNull, ledgerId: row.ledgerId, targetRevision: row.targetRevision })) } }, include: { items: { orderBy: { rowNumber: "asc" } } } });
+      await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.import.preview", objectType: "receivable_import_batch", objectId: created.id, requestId: context.requestId, ...auditScope(access), metadata: { checksum, rowCount: parsed.rows.length, errorCount: parsed.errors.length, fileId: originalFile.id, openingBalanceDate: env.openingBalanceDate ?? null, columnMappings: env.columnMappings ?? {} } });
       return created;
     });
     return { batchId: batch.id, revision: batch.revision, checksum, rows: batch.items, errors: parsed.errors, warnings: parsed.warnings };
@@ -384,7 +447,7 @@ async function prepareReceivablesImportFile(batchId: string, uploadRoot: string)
     const checksum = createHash("sha256").update(content).digest("hex");
     if (after.size !== snapshotBatch.originalFile.size || checksum !== snapshotBatch.checksum || checksum !== snapshotBatch.originalFile.sha256) throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换");
     await validateReceivableAttachment(snapshotBatch.originalFile.originalName, snapshotBatch.originalFile.mimeType, content).catch(() => { throw conflict("IMPORT_FILE_CHANGED", "导入原文件不存在或已替换"); });
-    const reparsed = parseReceivablesImportWorkbook(await loadWorkbook(content), await references(prisma));
+    const reparsed = parseReceivablesImportWorkbook(await loadWorkbook(content), await references(prisma), receivablesImportBatchParseOptions(snapshotBatch));
     return { handle, path, stat: after, content, checksum, reparsed };
   } catch (error) {
     await handle.close().catch(() => undefined);

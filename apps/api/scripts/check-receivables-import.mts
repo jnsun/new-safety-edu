@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { classifyReceivablesImportDatabaseError, classifyReceivablesImportFileError, parseReceivablesImportWorkbook, receivablesImportBatchTransactionOptions } from "../src/receivables-import.js";
+import { classifyReceivablesImportDatabaseError, classifyReceivablesImportFileError, inspectReceivablesImportWorkbook, parseReceivablesImportWorkbook, receivablesImportBatchParseOptions, receivablesImportBatchTransactionOptions } from "../src/receivables-import.js";
 
 const references = {
   departments: [
@@ -82,6 +82,51 @@ const inactiveHistory = parseReceivablesImportWorkbook(workbook(
 assert.deepEqual(codes(inactiveHistory), [], "existing ledger may retain its inactive department during import update");
 assert.deepEqual(inactiveHistory.rows[0]?.allowedDecisions, ["skip", "update"]);
 
+const legacyWorkbook = workbook([
+  "合同编号", "项目名称", "合同金额", "项目进度", "决算情况", "决算金额", "已开发票", "已到账收入",
+  "账内应收", "账外应收", "应收合计", "财务归属部门", "债务单位",
+], [[
+  " LEGACY-001 ", "旧表项目", 315, "完工", "未决算", 315, 315,
+  { formula: "294.136+10", result: 304.136 }, { formula: "G2-H2", result: 10.864 },
+  { formula: "F2-G2", result: 0 }, { formula: "F2-H2", result: 10.864 }, "一所", "债务客户",
+]]);
+const legacy = parseReceivablesImportWorkbook(legacyWorkbook, references, { openingBalanceDate: "2026-09-17" });
+assert.deepEqual(codes(legacy), [], "the supplied legacy workbook shape should normalize without blocking errors");
+assert.equal(legacy.rows[0]?.normalizedData.contractNo, "LEGACY-001");
+assert.equal(legacy.rows[0]?.normalizedData.projectStatus, "完工");
+assert.equal(legacy.rows[0]?.normalizedData.customerName, "债务客户");
+assert.equal(legacy.rows[0]?.normalizedData.openingInvoiceAmount, "315.0000");
+assert.equal(legacy.rows[0]?.normalizedData.openingInvoiceDate, "2026-09-17");
+assert.equal(legacy.rows[0]?.normalizedData.openingReceiptAmount, "304.1360");
+assert.equal(legacy.rows[0]?.normalizedData.openingReceiptDate, "2026-09-17");
+assert.ok(!legacy.warnings.some(({ code }) => code === "UNKNOWN_COLUMN"), "known legacy and derived columns should not be reported as unknown");
+assert.ok(!legacy.rows[0]?.normalizedData.presentFields.some((field) => ["internalReceivable", "externalReceivable", "balance"].includes(field)), "derived values must not become imported facts");
+
+const legacyWithoutBalanceDate = parseReceivablesImportWorkbook(legacyWorkbook, references);
+assert.ok(codes(legacyWithoutBalanceDate).includes("OPENING_BALANCE_DATE_REQUIRED"), "legacy opening totals need one explicit batch date");
+assert.ok(codes(parseReceivablesImportWorkbook(legacyWorkbook, references, { openingBalanceDate: "2026-02-30" })).includes("DATE_INVALID"), "the shared opening balance date must be a real calendar date");
+
+const customHeaders = workbook(
+  ["所属经营实体", "旧合同编号", "项目简称", "旧决算金额", "无关备注"],
+  [["一所", "MAP-001", "北区勘查", "100", "第一条"], ["一所", "MAP-002", "南区勘查", "200", "第二条"]],
+);
+assert.deepEqual(inspectReceivablesImportWorkbook(customHeaders).unknownColumns, [
+  { name: "所属经营实体", samples: ["一所"] },
+  { name: "旧合同编号", samples: ["MAP-001", "MAP-002"] },
+  { name: "项目简称", samples: ["北区勘查", "南区勘查"] },
+  { name: "旧决算金额", samples: ["100", "200"] },
+  { name: "无关备注", samples: ["第一条", "第二条"] },
+]);
+const mapped = parseReceivablesImportWorkbook(customHeaders, references, { columnMappings: { 所属经营实体: "financeDepartmentId", 旧合同编号: "contractNo", 项目简称: "projectName", 旧决算金额: "finalAmount" } });
+assert.deepEqual(codes(mapped), []);
+assert.equal(mapped.rows[0]?.normalizedData.contractNo, "MAP-001");
+assert.equal(mapped.rows[0]?.normalizedData.projectName, "北区勘查");
+assert.ok(mapped.warnings.some(({ code, column }) => code === "UNKNOWN_COLUMN" && column === "无关备注"));
+assert.ok(codes(parseReceivablesImportWorkbook(customHeaders, references, { columnMappings: { 所属经营实体: "financeDepartmentId", 旧合同编号: "contractNo", 项目简称: "contractNo", 旧决算金额: "finalAmount" } })).includes("AMBIGUOUS_COLUMN"));
+
+const formulaWithoutCachedResult = workbook(["合同编号", "归属部门", "合同金额"], [["FORMULA-001", "一所", { formula: "1+1" }]]);
+assert.ok(codes(parseReceivablesImportWorkbook(formulaWithoutCachedResult, references)).includes("FORMULA_RESULT_MISSING"), "formula inputs without cached results must be explicit errors");
+
 const failures = [
   ["ambiguous alias", workbook(["合同号", "合同编号", "归属部门"], [["A", "B", "一所"]]), "AMBIGUOUS_COLUMN"],
   ["missing contract", workbook(["合同号", "归属部门"], [["", "一所"]]), "CONTRACT_NO_REQUIRED"],
@@ -121,6 +166,9 @@ assert.equal(classifyReceivablesImportDatabaseError({ code: "P2024" }), null);
 assert.equal(receivablesImportBatchTransactionOptions.maxWait, 10_000);
 assert.ok(receivablesImportBatchTransactionOptions.timeout >= 120_000);
 assert.equal(receivablesImportBatchTransactionOptions.isolationLevel, "ReadCommitted");
+assert.deepEqual(receivablesImportBatchParseOptions({ openingBalanceDate: new Date("2026-09-17T00:00:00.000Z") }), { openingBalanceDate: "2026-09-17" });
+assert.deepEqual(receivablesImportBatchParseOptions({ openingBalanceDate: null }), {});
+assert.deepEqual(receivablesImportBatchParseOptions({ openingBalanceDate: null, columnMappings: { 旧合同编号: "contractNo" } }), { columnMappings: { 旧合同编号: "contractNo" } });
 for (const code of ["ENOENT"] as const) assert.equal(classifyReceivablesImportFileError(Object.assign(new Error(code), { code })), "changed");
 for (const code of ["EACCES", "EPERM", "EMFILE", "ENFILE", "EIO"] as const) assert.equal(classifyReceivablesImportFileError(Object.assign(new Error(code), { code })), "io");
 assert.equal(classifyReceivablesImportFileError(new Error("not a filesystem error")), null);
