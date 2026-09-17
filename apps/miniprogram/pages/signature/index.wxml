@@ -41,7 +41,7 @@
         <text class="section-copy">签字表示本人已查看以上学习内容和考试结果。请先预览，再正式提交。</text>
       </view>
       <view class="sign-box">
-        <canvas canvas-id="signature" disable-scroll="true" bindtouchstart="start" bindtouchmove="move"></canvas>
+        <canvas canvas-id="signature" disable-scroll="true" bindtouchstart="start" bindtouchmove="move" bindtouchend="end" bindtouchcancel="end"></canvas>
         <text wx:if="{{!touched}}" class="hint">请在此处手写签名</text>
       </view>
       <view class="action-row">

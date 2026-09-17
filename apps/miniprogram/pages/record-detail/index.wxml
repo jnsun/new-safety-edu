@@ -54,6 +54,8 @@
         <view><text class="section-title">项目现场确认</text><text class="section-copy">仅记录到场和现场交底事实</text></view>
       </view>
       <view class="fact-row"><text class="fact-label">确认状态</text><text class="fact-value">{{record.projectConfirmationText}}</text></view>
+      <view wx:if="{{record.projectConfirmation}}" class="fact-row"><text class="fact-label">确认时间</text><text class="fact-value">{{record.projectConfirmedAtText}}</text></view>
+      <view wx:if="{{record.projectConfirmation}}" class="fact-row"><text class="fact-label">确认人员</text><text class="fact-value">{{record.projectConfirmerName}}</text></view>
       <view wx:if="{{record.batch.project}}" class="fact-row"><text class="fact-label">所属项目</text><text class="fact-value">{{record.batch.project.name}}</text></view>
     </view>
   </block>

@@ -1,5 +1,6 @@
 const api = require('../../utils/api')
 const { date, decorate } = require('../../utils/format')
+const MIN_SIGNATURE_DISTANCE = 24
 
 function signatureSummary(task) {
   const completionTimes = task.coursewares.map((item) => item.completedAt).filter(Boolean).sort()
@@ -30,7 +31,7 @@ Page({
       await getApp().globalData.ready
       const record = decorate(await api.request(`/api/me/assignments/${this.data.assignmentId}`))
       const summary = signatureSummary(record)
-      this.setData({ record, ...summary, loading: false }, () => {
+      this.setData({ record, ...summary, touched: false, previewed: false, loading: false }, () => {
         if (summary.canSign) this.initializeCanvas()
       })
     } catch (error) {
@@ -39,6 +40,8 @@ Page({
   },
 
   initializeCanvas() {
+    this.strokeDistance = 0
+    this.lastPoint = null
     this.context = wx.createCanvasContext('signature', this)
     this.context.setStrokeStyle('#172b4d')
     this.context.setLineWidth(4)
@@ -50,22 +53,35 @@ Page({
     const point = e.touches[0]
     this.context.beginPath()
     this.context.moveTo(point.x, point.y)
-    this.setData({ touched: true, previewed: false, error: '' })
+    this.lastPoint = { x: point.x, y: point.y }
   },
 
   move(e) {
-    if (!this.context || this.data.busy) return
+    if (!this.context || !this.lastPoint || this.data.busy) return
     const point = e.touches[0]
+    const distance = Math.hypot(point.x - this.lastPoint.x, point.y - this.lastPoint.y)
     this.context.lineTo(point.x, point.y)
     this.context.stroke()
     this.context.draw(true)
     this.context.moveTo(point.x, point.y)
+    this.lastPoint = { x: point.x, y: point.y }
+    if (distance > 0) {
+      this.strokeDistance += distance
+      const touched = this.strokeDistance >= MIN_SIGNATURE_DISTANCE
+      if (touched !== this.data.touched || this.data.previewed || this.data.error) {
+        this.setData({ touched, previewed: false, error: '' })
+      }
+    }
   },
+
+  end() { this.lastPoint = null },
 
   clear() {
     if (!this.context || !this.data.canSign || this.data.busy) return
     this.context.clearRect(0, 0, 1000, 500)
     this.context.draw()
+    this.strokeDistance = 0
+    this.lastPoint = null
     this.setData({ touched: false, previewed: false, error: '' })
   },
 

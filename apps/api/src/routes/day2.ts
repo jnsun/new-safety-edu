@@ -395,7 +395,9 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
     if (!principal.personId) forbidden("账号尚未绑定人员档案");
     const row = await prisma.trainingAssignment.findFirstOrThrow({ where: { id, personId: principal.personId, status: { in: ["completed", "confirmation_pending"] } }, include: learnerAssignmentInclude });
-    return { data: learnerAssignment(row) };
+    const confirmation = await prisma.projectConfirmation.findFirst({ where: { assignmentId: row.id }, select: { confirmedAt: true, confirmedBy: true }, orderBy: { confirmedAt: "desc" } });
+    const confirmer = confirmation ? await prisma.account.findUnique({ where: { id: confirmation.confirmedBy }, select: { person: { select: { name: true } } } }) : null;
+    return { data: { ...learnerAssignment(row), projectConfirmation: confirmation ? { confirmedAt: confirmation.confirmedAt, confirmerName: confirmer?.person?.name ?? "项目管理人员" } : null } };
   });
   app.get("/api/assignments/:id/coursewares/:versionId", authenticated, async (request) => {
     const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
