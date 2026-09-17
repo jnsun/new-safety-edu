@@ -22,6 +22,10 @@ type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
 const idParam = z.object({ id: z.string().uuid() });
 const principalOf = (request: FastifyRequest) => request.principal ?? forbidden("未登录");
 const scopeSchema = z.object({ scopeType: z.enum(["company", "organization", "project"]), scopeId: z.string().uuid().nullable().optional() });
+export const resumeSchema = z.object({
+  blockKey: z.string().trim().min(1).max(120),
+  progressPercent: z.number().int().min(0).max(100)
+});
 
 async function assertScope(principal: Principal, scopeType: ScopeType, scopeId?: string | null) {
   if (scopeType === "company") {
@@ -386,9 +390,19 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     if (!progress.openedAt) await prisma.learningProgress.update({ where: { id: progress.id }, data: { openedAt: new Date() } });
     if (assignment.status === "pending_learning") await prisma.$executeRaw`UPDATE training_assignments SET status = 'learning'::"AssignmentStatus", updated_at = now() WHERE id = ${id}::uuid AND status = 'pending_learning'::"AssignmentStatus"`;
     const version = progress.coursewareVersion;
-    if (version.courseware.type === "rich_text") return { data: { title: version.courseware.title, type: version.courseware.type, richText: version.richText } };
+    if (version.courseware.type === "rich_text") return { data: { title: version.courseware.title, type: version.courseware.type, richText: version.richText, resumeState: progress.resumeState } };
     const token = await new SignJWT({ assignmentId: id, versionId, accountId: principal.accountId }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("5m").sign(new TextEncoder().encode(deps.env.UPLOAD_SIGNING_SECRET));
-    return { data: { title: version.courseware.title, type: version.courseware.type, viewerUrl: `${deps.env.PUBLIC_BASE_URL}/api/courseware-viewer?token=${encodeURIComponent(token)}` } };
+    return { data: { title: version.courseware.title, type: version.courseware.type, viewerUrl: `${deps.env.PUBLIC_BASE_URL}/api/courseware-viewer?token=${encodeURIComponent(token)}`, resumeState: progress.resumeState } };
+  });
+  app.patch("/api/assignments/:id/coursewares/:versionId/resume", authenticated, async (request) => {
+    const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
+    if (!principal.personId) forbidden("课件只能由本人学习");
+    const resumeState = resumeSchema.parse(request.body);
+    const progress = await prisma.learningProgress.findFirst({ where: { assignmentId: id, coursewareVersionId: versionId, assignment: { personId: principal.personId } }, orderBy: { remediationRound: "desc" }, select: { id: true } });
+    if (!progress) forbidden("课件只能由本人学习");
+    const updated = await prisma.learningProgress.updateMany({ where: { id: progress.id, assignment: { personId: principal.personId } }, data: { resumeState } });
+    if (!updated.count) forbidden("课件只能由本人学习");
+    return { data: { resumeState } };
   });
   app.get("/api/courseware-viewer", { logLevel: "silent" }, async (request, reply) => {
     const token = z.object({ token: z.string().min(1) }).parse(request.query).token;

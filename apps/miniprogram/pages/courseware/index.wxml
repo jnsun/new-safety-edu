@@ -1,1 +1,42 @@
-<view class="page"><view wx:if="{{loading}}" class="card empty">正在加载课件…</view><view wx:elif="{{error}}" class="card error">{{error}}</view><block wx:elif="{{content}}"><view class="card"><text class="title">{{content.title}}</text><rich-text wx:if="{{content.type === 'rich_text'}}" nodes="{{content.richText}}"></rich-text><block wx:else><text class="muted">HTML 交互课件将在受控页面中打开，链接五分钟内有效。</text><button class="secondary" bindtap="openHtml">打开 HTML 课件</button></block></view><view class="card"><text class="muted">请确认已浏览到课件末尾，再主动完成本次学习。</text><button class="primary" loading="{{busy}}" bindtap="complete">完成学习</button></view></block></view>
+<view class="page courseware-page">
+  <view wx:if="{{loading}}" class="state-panel">
+    <text class="state-title">正在加载课件</text>
+    <text class="state-copy">正在获取课件内容和上次学习位置，请稍候。</text>
+  </view>
+
+  <view wx:elif="{{error && !content}}" class="state-panel state-error">
+    <text class="state-title">课件加载失败</text>
+    <text class="state-copy">{{error}}</text>
+  </view>
+
+  <block wx:elif="{{content}}">
+    <view class="reader-heading">
+      <text class="course-title">{{content.title}}</text>
+      <text wx:if="{{content.type === 'rich_text'}}" class="resume-copy">图文课件 · 单元进度 {{progressPercent}}% · {{remainingText}}</text>
+      <text wx:else class="resume-copy">HTML 交互课件 · 在受控页面中阅读，页内位置不会同步。</text>
+      <view wx:if="{{content.type === 'rich_text'}}" class="progress" aria-label="单元进度 {{progressPercent}}%">
+        <view class="progress-bar" style="width: {{progressPercent}}%"></view>
+      </view>
+    </view>
+
+    <view wx:if="{{content.type === 'rich_text'}}" class="reader-content">
+      <rich-text nodes="{{content.richText}}"></rich-text>
+    </view>
+
+    <view wx:else class="html-panel">
+      <text class="section-title">打开受控课件</text>
+      <text class="section-copy">链接五分钟内有效。完成阅读后返回本页确认；系统无法读取或恢复 HTML 页面内部的滚动位置。</text>
+      <button class="secondary html-button" bindtap="openHtml">{{htmlOpened ? '再次打开 HTML 课件' : '打开 HTML 课件'}}</button>
+    </view>
+
+    <view class="finish-panel">
+      <text class="section-title">完成本次学习</text>
+      <text wx:if="{{content.type === 'rich_text' && !atEnd}}" class="section-copy">继续向下阅读，到达课件末尾后即可完成。</text>
+      <text wx:elif="{{content.type === 'rich_text'}}" class="section-copy success-copy">已到达课件末尾，可以完成本次学习。</text>
+      <text wx:else class="section-copy">打开并完成 HTML 课件后，返回这里确认。</text>
+      <text wx:if="{{syncWarning}}" class="sync-warning">{{syncWarning}}</text>
+      <text wx:if="{{error}}" class="error action-error">{{error}}</text>
+      <button class="primary finish-button" loading="{{busy}}" disabled="{{content.type === 'rich_text' ? !atEnd : !htmlOpened}}" bindtap="complete">完成本次学习</button>
+    </view>
+  </block>
+</view>

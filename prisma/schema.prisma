@@ -1148,6 +1148,7 @@ model LearningProgress {
   openedAt            DateTime?          @map("opened_at")
   reachedEndAt        DateTime?          @map("reached_end_at")
   completedAt         DateTime?          @map("completed_at")
+  resumeState         Json?              @map("resume_state")
   remediationRound    Int                @default(0) @map("remediation_round")
   createdAt           DateTime           @default(now()) @map("created_at")
   updatedAt           DateTime           @updatedAt @map("updated_at")
