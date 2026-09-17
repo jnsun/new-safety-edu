@@ -82,6 +82,7 @@ assert.match(styles, /\.receivables-filter-grid \.ant-select-single[^\{]*\{[^}]*
 assert.doesNotMatch(styles, /\.receivables-filter-grid \.ant-select-selector[^\{]*\{[^}]*height:/s, "the select inner selector must not overflow its outer layout box");
 assert.match(styles, /\.receivables-resizable-header\s*\{[^}]*position:\s*relative/s, "the resize hit target uses the real header boundary");
 assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\{[^}]*vertical-align:\s*middle/s, "ledger cells are vertically centered");
+assert.match(styles, /\.receivables-page \.ant-table-tbody > tr > td\s*\{[^}]*vertical-align:\s*middle/s, "all receivables tables vertically center their cells");
 assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\{[^}]*padding:\s*3px 6px/s, "ledger rows stay compact when long cells wrap");
 assert.match(ledgerSource, /金额单位：万元/, "ledger states the monetary unit once above the table");
 assert.doesNotMatch(ledgerSource, /finalAmount:\s*"[^"]*（万元）"/, "money column headings do not repeat the unit");
@@ -90,7 +91,11 @@ assert.match(transfersSource, /合同金额（万元）/, "data entry states the
 assert.match(adminSource, /receivables-department-toolbar/, "department controls share one compact toolbar");
 assert.match(adminSource, /receivables-department-grid/, "departments use a dense unpaginated grid");
 assert.match(adminSource, /draggable=\{canReorderDepartments\}/, "department cards expose native drag ordering only when the full list is visible");
-assert.match(adminSource, /显示应收账款/, "department cards expose the receivables visibility switch");
+assert.match(adminSource, /账号 \{row\.accountCount\} 个/, "department cards show the assigned account count");
+assert.match(adminSource, /应收账款 \{row\.receivableCount\} 笔/, "department cards show the receivables count");
+assert.doesNotMatch(adminSource, /显示应收账款/, "department cards do not expose a visibility switch");
+assert.doesNotMatch(adminSource, /<span>代码 <b>/, "department cards do not expose internal codes");
+assert.doesNotMatch(adminSource, /<span>修订 <b>/, "department cards do not expose revision numbers");
 assert.match(adminSource, /`\$\{path\}\/reorder`/, "department order is saved atomically");
 assert.match(adminSource, /section === "departments"[^\n]+name="name"[^\n]+editor === "create"[^\n]+name="code"[^\n]+editor !== "create"[^\n]+name="reason"/, "department editor keeps code create-only and removes manual sorting");
 assert.doesNotMatch(adminSource, /visibleDepartments[^\n]*pagination=/, "department results are not paginated");
@@ -114,11 +119,22 @@ assert.match(transfersSource, /最终应用前填写/, "the preview explains whe
 assert.match(transfersSource, /receivables-import-start/, "initial import controls share one compact row");
 assert.match(transfersSource, /needsOpeningBalanceDate\s*&&/, "opening balance date stays hidden until opening amounts are detected");
 assert.match(styles, /\.receivables-import-start\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center/s, "initial import controls use a compact aligned row");
+assert.match(transfersSource, /receivables-transfer-workspace/, "data processing uses one continuous compact workspace");
+assert.match(styles, /\.receivables-transfer-card \.ant-steps-item-title\s*\{[^}]*font-size:\s*12px/s, "data processing steps stay visually compact");
+assert.match(ledgerSource, /attachment-delete/, "finance managers can open physical attachment deletion");
+assert.match(ledgerSource, /capabilities\.canDelete/, "physical attachment deletion is rendered from a server capability");
 assert.doesNotMatch(styles, /\.receivables-import-upload\s*\{[^}]*max-width:\s*680px/s, "initial import content does not leave a large empty right side");
 assert.match(pageSource, /暂无法计算/, "an unreliable balance is described instead of rendered as a dash");
 assert.match(pageSource, /查看待补充台账/, "unreliable balance links directly to missing final amounts");
 assert.match(pageSource, /finalAmountMissingCount\s*>\s*0/, "balance reliability is driven by the missing-final count");
 assert.match(styles, /\.receivables-balance-unavailable\s*\{[^}]*place-content:\s*center/s, "unavailable balance content remains centered when resized");
 assert.match(styles, /\.receivables-department-grid\s*\{[^}]*repeat\(auto-fill,\s*minmax\(/s, "department cards use an adaptive compact grid");
+assert.match(pageSource, /receivables-balance-content/, "the available balance uses a centered content group");
+assert.match(styles, /\.receivables-balance-content\s*\{[^}]*place-content:\s*center/s, "the balance content remains centered when its card is resized");
+assert.match(transfersSource, /receivables-entry-section/, "new ledger fields are grouped into readable sections");
+assert.match(styles, /\.receivables-entry-section\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s, "new ledger entry uses a dense desktop grid");
+assert.match(transfersSource, /receivables-export-workspace/, "export uses a dedicated compact workspace");
+assert.match(styles, /\.receivables-export-filter-grid\s*\{[^}]*display:\s*grid/s, "export filters use a stable compact grid");
+assert.match(transfersSource, /receivables-export-history/, "export history is visually separated from filter controls");
 
 console.log("RECEIVABLES_ADMIN_UI_OK");

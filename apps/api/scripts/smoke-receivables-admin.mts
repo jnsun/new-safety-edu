@@ -28,7 +28,7 @@ let phoneCounter = 1;
 type JsonResponse<T = unknown> = { data?: T; error?: { code: string; message: string } };
 type AccessResponse = { role: "owner" | "admin" | "reporter" | "readonly" | null; canViewAll: boolean; canCreateLedger: boolean; canExport: boolean; canMaintainCollection: boolean; readDepartmentIds: string[]; writeDepartmentIds: string[] };
 type GrantResponse = { id: string; accountId: string; role: "admin" | "reporter" | "readonly"; revision: number; active: boolean; canCreate: boolean; canExport: boolean; canViewAll: boolean; canMaintainCollection: boolean; departments: Array<{ financeDepartmentId: string; canRead: boolean; canWrite: boolean }> };
-type DepartmentResponse = { id: string; name: string; code: string | null; sortOrder: number; active: boolean; revision: number };
+type DepartmentResponse = { id: string; name: string; code: string | null; sortOrder: number; active: boolean; revision: number; accountCount: number; receivableCount: number };
 type DictionaryResponse = { id: string; category: string; value: string; sortOrder: number; active: boolean; revision: number };
 type PreviewResponse = { impactCount: number; token: string; expiresAt: string };
 type CandidateResponse = { personId: string; accountId: string | null; accountStatus: "pending" | "active" | null; name: string; username: string | null; hasActiveGrant: boolean };
@@ -301,6 +301,15 @@ try {
 
   const ledger = await prisma.receivableLedger.create({ data: { financeDepartmentId: departmentA.id, contractNo: `${marker}-contract-1`, contractNoNormalized: `${marker}-contract-1`, debtStatus: sourceOption.value, createdBy: owner.id } });
   ids.ledgers.push(ledger.id);
+  const departmentSummaries = (await expectStatus<DepartmentResponse[]>("/api/receivables/departments", tokens.owner!, 200)).data!;
+  assert.deepEqual(
+    departmentSummaries.find(({ id }) => id === departmentA.id) && {
+      accountCount: departmentSummaries.find(({ id }) => id === departmentA.id)!.accountCount,
+      receivableCount: departmentSummaries.find(({ id }) => id === departmentA.id)!.receivableCount,
+    },
+    { accountCount: 3, receivableCount: 1 },
+    "department summaries count active explicitly assigned accounts and ledger records",
+  );
   await expectRejectedWithoutMutation(`/api/receivables/departments/${departmentA.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: departmentB.id }) });
   await expectRejectedWithoutMutation(`/api/receivables/dictionary-options/${sourceOption.id}/migrate`, tokens.owner!, 409, { method: "POST", body: JSON.stringify({ mode: "preview", targetId: targetOption.id }) });
   const auditCountBeforeRejectedRenames = await prisma.auditLog.count({ where: { actorId: financeAdmin.id, action: { startsWith: "receivables.admin." } } });

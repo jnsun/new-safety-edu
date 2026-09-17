@@ -67,6 +67,15 @@ const grantSelect = {
   account: { select: { username: true, status: true, person: { select: { name: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { name: true } } } } } } } },
 } satisfies Prisma.ReceivableAccessGrantSelect;
 const departmentSelect = { id: true, name: true, code: true, sortOrder: true, showReceivables: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDepartmentSelect;
+const departmentSummarySelect = {
+  ...departmentSelect,
+  _count: {
+    select: {
+      grantDepartments: { where: { grant: { active: true, revokedAt: null }, OR: [{ canRead: true }, { canWrite: true }] } },
+      ledgers: true,
+    },
+  },
+} satisfies Prisma.ReceivableDepartmentSelect;
 const dictionarySelect = { id: true, category: true, value: true, sortOrder: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDictionaryOptionSelect;
 type GrantRow = Prisma.ReceivableAccessGrantGetPayload<{ select: typeof grantSelect }>;
 type DepartmentRow = Prisma.ReceivableDepartmentGetPayload<{ select: typeof departmentSelect }>;
@@ -519,7 +528,8 @@ export async function administerReceivables(context: ReceivablesAdminContext, op
     case "grant.update": return updateGrant(context, operation.id, operation.input);
     case "department.list":
       await requireAction(context, "manageConfiguration");
-      return prisma.receivableDepartment.findMany({ select: departmentSelect, orderBy: [{ active: "desc" }, { sortOrder: "asc" }, { name: "asc" }] });
+      return (await prisma.receivableDepartment.findMany({ select: departmentSummarySelect, orderBy: [{ active: "desc" }, { sortOrder: "asc" }, { name: "asc" }] }))
+        .map(({ _count, ...department }) => ({ ...department, accountCount: _count.grantDepartments, receivableCount: _count.ledgers }));
     case "department.create": return createDepartment(context, operation.input);
     case "department.update": return updateDepartment(context, operation.id, operation.input);
     case "department.reorder": return reorderDepartments(context, operation.input);

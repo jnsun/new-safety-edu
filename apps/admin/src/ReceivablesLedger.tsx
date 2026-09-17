@@ -150,7 +150,8 @@ type DetailOperation =
         | "invoice-void"
         | "receipt-edit"
         | "receipt-void"
-        | "attachment-void";
+        | "attachment-void"
+        | "attachment-delete";
       id: string;
     };
 
@@ -298,6 +299,7 @@ const operationTitles: Record<DetailOperation["type"], string> = {
   writeoff: "调整核销金额",
   "attachment-create": "上传财务附件",
   "attachment-void": "作废附件",
+  "attachment-delete": "永久删除附件",
 };
 
 export function ReceivablesLedger({
@@ -749,17 +751,18 @@ export function ReceivablesLedger({
       });
       return;
     }
-    if (operation.type === "attachment-void") {
+    if (operation.type === "attachment-void" || operation.type === "attachment-delete") {
       const row = currentDetail.attachments.find(
         (item) => item.id === operation.id,
       );
       if (row)
         mutation.mutate({
-          path: `/api/receivables/ledgers/${ledgerId}/attachments/${row.id}/void`,
+          path: `/api/receivables/ledgers/${ledgerId}/attachments/${row.id}/${operation.type === "attachment-delete" ? "delete" : "void"}`,
           init: json("POST", {
             ledgerRevision: revision,
             revision: row.revision,
             reason: values.reason,
+            ...(operation.type === "attachment-delete" ? { confirm: true } : {}),
           }),
           ledgerId,
         });
@@ -1032,7 +1035,7 @@ export function ReceivablesLedger({
         (conflict.latest?.receipts.find(
           (row) => row.id === operation.id,
         ) as unknown as Record<string, unknown>) ?? {};
-    if (operation && "id" in operation && operation.type === "attachment-void")
+    if (operation && "id" in operation && (operation.type === "attachment-void" || operation.type === "attachment-delete"))
       latest =
         (conflict.latest?.attachments.find(
           (row) => row.id === operation.id,
@@ -1348,6 +1351,14 @@ export function ReceivablesLedger({
               <Button icon={<UploadOutlined />}>选择附件</Button>
             </Upload>
           </Form.Item>
+        </>
+      );
+    if (operation.type === "attachment-delete")
+      return (
+        <>
+          <Alert type="warning" showIcon message="删除后无法恢复" description="附件记录和私有文件将被永久删除，但操作人、删除原因和原文件摘要仍保留在审计日志中。" />
+          <Form.Item name="reason" label="删除原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea rows={4} /></Form.Item>
+          <Form.Item name="confirm" valuePropName="checked" rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error("请确认永久删除")) }]}><Checkbox>我确认永久删除该附件</Checkbox></Form.Item>
         </>
       );
     return (
@@ -1698,8 +1709,8 @@ export function ReceivablesLedger({
               取消
             </Button>
             <Button
-              type={operation?.type.includes("void") ? "default" : "primary"}
-              danger={!!operation?.type.includes("void")}
+              type={operation?.type.includes("void") || operation?.type.includes("delete") ? "default" : "primary"}
+              danger={!!operation && (operation.type.includes("void") || operation.type.includes("delete"))}
               htmlType="submit"
               loading={mutation.isPending}
               disabled={!!conflict && !retryConfirmed}
@@ -2163,6 +2174,11 @@ function LedgerDetailView({
                       }
                     >
                       作废
+                    </Button>
+                  )}
+                  {attachment.capabilities.canDelete && (
+                    <Button type="link" danger onClick={() => openOperation({ type: "attachment-delete", id: attachment.id })}>
+                      永久删除
                     </Button>
                   )}
                 </Space>

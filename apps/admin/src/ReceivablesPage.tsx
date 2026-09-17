@@ -388,18 +388,20 @@ function ReceivablesDashboard({
           </Button>
         </div>
       ) : (
-        <>
+        <div className="receivables-balance-content">
           <div className="receivables-balance-value">
             {money(currentDashboard.amounts.balance)}
           </div>
-          <Typography.Text type="secondary">当前筛选范围</Typography.Text>
-          <Button
-            className="receivables-balance-action"
-            onClick={() => navigate(ledgerPath())}
-          >
-            查看当前范围台账
-          </Button>
-        </>
+          <div className="receivables-balance-footer">
+            <Typography.Text type="secondary">当前筛选范围</Typography.Text>
+            <Button
+              className="receivables-balance-action"
+              onClick={() => navigate(ledgerPath())}
+            >
+              查看当前范围台账
+            </Button>
+          </div>
+        </div>
       );
     if (id === "amounts")
       return (

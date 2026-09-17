@@ -221,21 +221,18 @@ function ReceivablesCreate({
     return <Alert type="error" showIcon message="当前账号没有新增台账权限" />;
   return (
     <div className="receivables-page">
-      <div className="page-title receivables-page-title">
-        <div>
-          <Typography.Title level={3}>新增记录</Typography.Title>
-          <Typography.Text type="secondary">
-            金额事实与催收信息分区录入，保存后直接进入正式台账并保留历史。
-          </Typography.Text>
-        </div>
+      <div className="receivables-work-intro">
+        金额事实与催收信息分区录入，保存后直接进入正式台账并保留历史。
       </div>
-      <Card className="receivables-entry-card">
+      <Card className="receivables-entry-card receivables-work-card" title="新建台账">
         <Form
-          className="receivables-form-grid receivables-entry-form"
+          className="receivables-entry-form"
           form={form}
           layout="vertical"
           onFinish={(values) => create.mutate(values)}
         >
+          <section className="receivables-entry-section">
+            <Typography.Title level={5}>基础信息</Typography.Title>
           <Form.Item
             name="financeDepartmentId"
             label="财务归属部门"
@@ -278,8 +275,10 @@ function ReceivablesCreate({
           <Form.Item name="settlementMethod" label="决算方式">
             <Select allowClear options={options("final_method")} />
           </Form.Item>
+          </section>
           {access.canManageAll && (
-            <>
+            <section className="receivables-entry-section receivables-entry-section-money">
+              <Typography.Title level={5}>金额信息</Typography.Title>
               <Form.Item name="contractAmount" label="合同金额（万元）">
                 <Input inputMode="decimal" />
               </Form.Item>
@@ -289,8 +288,10 @@ function ReceivablesCreate({
               <Form.Item name="openingChargeDate" label="期初挂账日期">
                 <Input type="date" />
               </Form.Item>
-            </>
+            </section>
           )}
+          <section className="receivables-entry-section">
+            <Typography.Title level={5}>催收信息</Typography.Title>
           <Form.Item name="debtStatus" label="债权状态">
             <Select allowClear options={options("debt_status")} />
           </Form.Item>
@@ -315,6 +316,7 @@ function ReceivablesCreate({
           <Form.Item name="nextPlan" label="下一步计划">
             <Select allowClear options={options("next_plan")} />
           </Form.Item>
+          </section>
           <Space className="receivables-form-actions">
             <Button htmlType="button" onClick={() => form.resetFields()}>
               清空
@@ -590,7 +592,7 @@ function ReceivablesImports({
   if (!access.canImport)
     return <Alert type="error" showIcon message="当前账号没有导入权限" />;
   return (
-    <div className="receivables-page">
+    <div className="receivables-page receivables-transfer-workspace">
       <div className="page-title receivables-page-title">
         <div>
           <Typography.Title level={3}>导入批次</Typography.Title>
@@ -1182,18 +1184,13 @@ function ReceivablesExports({
   if (!access.canExport)
     return <Alert type="error" showIcon message="当前账号没有导出权限" />;
   return (
-    <div className="receivables-page">
-      <div className="page-title receivables-page-title">
-        <div>
-          <Typography.Title level={3}>导出任务</Typography.Title>
-          <Typography.Text type="secondary">
-            任务按服务端权限快照生成；下载令牌只通过 POST 请求体传输且单次使用。
-          </Typography.Text>
-        </div>
+    <div className="receivables-page receivables-export-workspace">
+      <div className="receivables-work-intro">
+        按当前权限筛选数据和字段；生成后在下方下载，一次令牌仅能使用一次。
       </div>
-      <Card className="filters" title="导出筛选">
+      <Card className="filters receivables-work-card" title="导出条件">
         <Form className="receivables-export-form" layout="vertical">
-          <Space className="receivables-export-filter-row" wrap align="start">
+          <div className="receivables-export-filter-grid">
             <Form.Item label="基础记录状态">
               <Select<NonNullable<ReceivablesFilters["status"]>>
                 value={filters.status ?? "active"}
@@ -1222,8 +1219,8 @@ function ReceivablesExports({
                 }}
               />
             </Form.Item>
-          </Space>
-          <Space className="receivables-export-filter-row" wrap align="start">
+          </div>
+          <div className="receivables-export-filter-grid receivables-export-category-grid">
             {currentPreview &&
               receivablesExportCategoryIds.map((category) => (
                 <Form.Item
@@ -1246,7 +1243,7 @@ function ReceivablesExports({
                   />
                 </Form.Item>
               ))}
-          </Space>
+          </div>
           {preview.isError && (
             <Alert
               type="error"
@@ -1298,7 +1295,8 @@ function ReceivablesExports({
         />
       )}
       {currentJobs && (
-        <Table
+        <Card className="receivables-export-history" title={`导出记录（${currentJobs.rows.length}）`}>
+          <Table
           size="small"
           rowKey="id"
           dataSource={currentJobs.rows}
@@ -1345,7 +1343,8 @@ function ReceivablesExports({
               ),
             },
           ]}
-        />
+          />
+        </Card>
       )}
     </div>
   );

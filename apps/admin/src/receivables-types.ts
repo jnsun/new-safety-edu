@@ -179,7 +179,7 @@ export type ReceivablesLedgerDetail = {
     revision: number;
     uploadedBy: string;
     voidReason: string | null;
-    capabilities: { canDownload: boolean; canVoid: boolean };
+    capabilities: { canDownload: boolean; canVoid: boolean; canDelete: boolean };
     file: {
       id: string;
       originalName: string;
@@ -295,6 +295,8 @@ export type ReceivablesDepartment = {
   code: string | null;
   sortOrder: number;
   showReceivables: boolean;
+  accountCount: number;
+  receivableCount: number;
   active: boolean;
   revision: number;
   deactivatedAt: string | null;

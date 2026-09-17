@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, message, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { HolderOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, json } from "./api";
@@ -119,11 +119,6 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     }
     fail(error);
   } });
-  const setDepartmentVisibility = useMutation({
-    mutationFn: (row: ReceivablesDepartment) => api(`${path}/${row.id}`, json("PATCH", { revision: row.revision, showReceivables: !row.showReceivables })),
-    onSuccess: async () => { message.success("应收账款显示设置已更新"); await invalidate(); },
-    onError: fail,
-  });
   const reorderDepartments = useMutation({
     mutationFn: (ordered: ReceivablesDepartment[]) => api(`${path}/reorder`, json("PATCH", { items: ordered.map(({ id, revision }) => ({ id, revision })) })),
     onSuccess: async () => { message.success("部门顺序已保存"); await invalidate(); },
@@ -220,8 +215,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
           onDragOver={(event) => { if (!canReorderDepartments || !draggedDepartmentId) return; event.preventDefault(); setDragOverDepartmentId(row.id); }}
           onDrop={(event) => { event.preventDefault(); if (draggedDepartmentId) moveDepartment(draggedDepartmentId, row.id); setDraggedDepartmentId(undefined); setDragOverDepartmentId(undefined); }}>
           <div className="receivables-department-heading"><Button type="text" size="small" className="receivables-department-drag" draggable={canReorderDepartments} disabled={!canReorderDepartments || reorderDepartments.isPending} title={canReorderDepartments ? "拖拽或使用方向键调整顺序" : "清除搜索并切换到启用部门后可排序"} aria-label={`调整${row.name}顺序`} icon={<HolderOutlined />} onDragStart={(event) => { setDraggedDepartmentId(row.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDraggedDepartmentId(undefined); setDragOverDepartmentId(undefined); }} onKeyDown={(event) => { const offset = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : 0; if (!offset) return; const index = visibleDepartments.findIndex(({ id }) => id === row.id); const target = visibleDepartments[index + offset]; if (target) { event.preventDefault(); moveDepartment(row.id, target.id); } }} /><strong title={row.name}>{row.name}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "启用" : "停用"}</Tag></div>
-          <div className="receivables-department-meta"><span>代码 <b>{row.code || "—"}</b></span><span>修订 <b>{row.revision}</b></span></div>
-          <div className="receivables-department-visibility"><span>显示应收账款</span><Switch size="small" checked={row.showReceivables} disabled={!row.active || setDepartmentVisibility.isPending || reorderDepartments.isPending} aria-label={`${row.name}显示应收账款`} onChange={() => setDepartmentVisibility.mutate(row)} /></div>
+          <div className="receivables-department-meta"><span>账号 {row.accountCount} 个</span><span>应收账款 {row.receivableCount} 笔</span></div>
           <div className="receivables-department-actions">
             <Button size="small" disabled={!row.active} onClick={() => openEditor(row)}>编辑</Button>
             <Button size="small" danger disabled={!row.active} onClick={() => openDeactivate(row)}>停用</Button>

@@ -25,6 +25,11 @@ import {
   resolveReceivablesRoute,
 } from "../../admin/src/receivables-types.js";
 import { buildReceivablesDashboardStatements, normalizeStoredReceivablesColumnPreference, normalizeStoredReceivablesDashboardPreference, receivablesDashboardPreferenceSchema } from "../src/receivables-query.js";
+import { assertReceivableAttachmentDeletionAllowed } from "../src/receivables-files.js";
+
+assert.doesNotThrow(() => assertReceivableAttachmentDeletionAllowed({ canManageAll: true, role: "admin" }));
+assert.doesNotThrow(() => assertReceivableAttachmentDeletionAllowed({ canManageAll: true, role: "owner" }));
+assert.throws(() => assertReceivableAttachmentDeletionAllowed({ canManageAll: false, role: "reporter" }), (error: Error & { code?: string }) => error.code === "RECEIVABLES_ATTACHMENT_NOT_FOUND");
 
 assert.equal(normalizeContractNo("  HT-001  "), "HT-001");
 assert.equal(defaultCreditorUnitForContract(" wh19-001 "), "山西省地球物理化学勘查院有限公司");
