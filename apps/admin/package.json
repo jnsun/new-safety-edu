@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",
+    "@safety/contracts": "workspace:*",
     "@tanstack/react-query": "^5.90.2",
     "antd": "^5.27.4",
     "react": "^19.1.1",

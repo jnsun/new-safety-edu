@@ -33,6 +33,9 @@ importers:
       '@ant-design/icons':
         specifier: ^6.0.0
         version: 6.3.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@safety/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@tanstack/react-query':
         specifier: ^5.90.2
         version: 5.102.8(react@19.3.0)
