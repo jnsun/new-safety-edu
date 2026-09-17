@@ -47,6 +47,7 @@
     "check:training-governance": "pnpm --filter @safety/api check:training-governance",
     "check:courseware-learning": "pnpm --filter @safety/api check:courseware-learning",
     "check:training-todo-priority": "pnpm --filter @safety/api check:training-todo-priority",
+    "check:exam-public-attempt": "pnpm --filter @safety/api check:exam-public-attempt",
     "check:auth-security-policy": "pnpm --filter @safety/api check:auth-security-policy",
     "check:wechat-identity-policy": "pnpm --filter @safety/api check:wechat-identity-policy",
     "check:csrf-policy": "pnpm --filter @safety/api check:csrf-policy",

@@ -76,10 +76,10 @@ const sameAnswer = (a: unknown, b: unknown) => JSON.stringify(normalize(a)) === 
 type SnapshotQuestion = { id: string; type: QuestionType; prompt: string; options: unknown; correct: unknown; score: number };
 type ExamSnapshot = { questions: SnapshotQuestion[]; totalScore: number };
 type BatchPaperSnapshot = { mode: "fixed" | "random"; questions: SnapshotQuestion[]; randomCount?: number };
-const publicAttempt = (attempt: { id: string; attemptNumber: number; startedAt: Date; expiresAt: Date; status: string; snapshot: Prisma.JsonValue; answers?: Array<{ questionId: string; answer: Prisma.JsonValue }> }) => {
+export const publicAttempt = (attempt: { id: string; attemptNumber: number; startedAt: Date; expiresAt: Date; status: string; snapshot: Prisma.JsonValue; answers?: Array<{ questionId: string; answer: Prisma.JsonValue }> }) => {
   const snapshot = attempt.snapshot as unknown as ExamSnapshot;
   return { id: attempt.id, attemptNumber: attempt.attemptNumber, startedAt: attempt.startedAt, expiresAt: attempt.expiresAt, status: attempt.status,
-    questions: snapshot.questions.map(({ correct: _correct, ...question }) => question), answers: attempt.answers ?? [] };
+    questions: snapshot.questions.map(({ id, type, prompt, options }) => ({ id, type, prompt, options })), answers: attempt.answers ?? [] };
 };
 
 const learnerAssignmentInclude = {
