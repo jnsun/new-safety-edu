@@ -17,6 +17,7 @@ import {
   receivablesDashboardActionModel,
   receivablesLedgerInitialFilters,
   receivablesNavigation,
+  receivablesPortalMode,
   resolveReceivablesRoute,
 } from "../../admin/src/receivables-types.js";
 import { buildReceivablesDashboardStatements, normalizeStoredReceivablesColumnPreference } from "../src/receivables-query.js";
@@ -83,6 +84,8 @@ assert.throws(() => assertTransition("voided", "update"), /VOIDED_FACT_IMMUTABLE
 assert.doesNotThrow(() => assertTransition("active", "update"));
 
 assert.equal(resolveReceivablesRoute("/receivables/data"), "data");
+assert.equal(receivablesPortalMode({ state: "unconfigured", canEnter: false, canRecover: true }), "recover");
+assert.deepEqual(receivablesNavigation({ canRecover: true } as never), [{ path: "/receivables", label: "初始化状态" }]);
 assert.equal(receivablesNavigation({ canEnter: true, canReadLedger: true, canCreateLedger: true, canImport: false, canExport: false, canManageAccess: false, canManageConfiguration: false } as never).some((item) => item.path === "/receivables/data"), true);
 assert.equal(normalizeReceivablesColumnPreference({ order: defaultReceivablesColumnPreference.order, visible: defaultReceivablesColumnPreference.visible, frozen: defaultReceivablesColumnPreference.frozen }).widths.projectName, defaultReceivablesColumnPreference.widths.projectName);
 assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, widths: { ...defaultReceivablesColumnPreference.widths, projectName: 99999 } }).widths.projectName, 600);

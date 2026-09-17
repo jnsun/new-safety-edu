@@ -49,6 +49,12 @@ export function peopleInOrganization<T extends { organizations: Array<{ organiza
   return rows.filter((row) => row.organizations.some(({ organization }) => organization.id === organizationId));
 }
 
+export function primaryOrganizationName(row: {
+  organizations: Array<{ primary: boolean; organization: { name: string } }>;
+}) {
+  return row.organizations.find(({ primary }) => primary)?.organization.name ?? null;
+}
+
 export function readPeopleListState(search: URLSearchParams): PeopleListState {
   const page = Number.parseInt(search.get("page") ?? "1", 10);
   return {

@@ -26,6 +26,7 @@ import { assertMembershipTransition } from "../project-membership.js";
 import { changeRequestKey } from "../request-policy.js";
 import { prepareBulkPrimaryOrganizationAssignment } from "../person-bulk-organization-policy.js";
 import { previewBulkPersonDisable } from "../person-bulk-lifecycle-policy.js";
+import { authMeProfile } from "../auth-me-profile.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -173,7 +174,26 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     return reply.code(204).send();
   });
 
-  app.get("/api/auth/me", authenticated, async (request) => ({ data: principalOf(request) }));
+  app.get("/api/auth/me", authenticated, async (request) => {
+    const principal = principalOf(request);
+    const account = await prisma.account.findUniqueOrThrow({
+      where: { id: principal.accountId },
+      select: {
+        username: true,
+        person: {
+          select: {
+            name: true,
+            organizations: {
+              where: { active: true, primary: true },
+              take: 1,
+              select: { organization: { select: { id: true, name: true } } },
+            },
+          },
+        },
+      },
+    });
+    return { data: { ...principal, ...authMeProfile(account) } };
+  });
   app.get("/api/auth/csrf", authenticated, async (_request, reply) => ({ data: { token: setCsrfCookie(reply, deps.env) } }));
   app.post("/api/auth/refresh", async (request, reply) => {
     const body = z.object({ refreshToken: z.string().min(20).optional() }).parse(request.body ?? {});

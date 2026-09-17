@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { filterPeopleRows, peopleInOrganization, readPeopleListState, readPeopleView, writePeopleListState } from "../src/people-organization/people-list.ts";
+import { filterPeopleRows, peopleInOrganization, primaryOrganizationName, readPeopleListState, readPeopleView, writePeopleListState } from "../src/people-organization/people-list.ts";
 
 const rows = [
   { id: "1", name: "张三", phone: "13800001111", status: "active", type: "employee", organizationIds: ["finance"], organizationNames: ["财务资产部"], accountStatus: "active", username: "zhangsan", roles: ["org_leader"] },
@@ -17,6 +17,8 @@ const organizationRows = [
 ];
 assert.deepEqual(peopleInOrganization(organizationRows, "finance").map((row) => row.id), ["1"]);
 assert.deepEqual(peopleInOrganization(organizationRows, "missing"), []);
+assert.equal(primaryOrganizationName({ organizations: [{ primary: false, organization: { name: "兼任组织" } }, { primary: true, organization: { name: "财务资产部" } }] }), "财务资产部");
+assert.equal(primaryOrganizationName({ organizations: [] }), null);
 assert.equal(readPeopleView(null), "list");
 assert.equal(readPeopleView("grouped"), "grouped");
 assert.equal(readPeopleView("unexpected"), "list");

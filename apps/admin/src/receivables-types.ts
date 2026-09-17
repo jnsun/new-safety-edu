@@ -347,6 +347,7 @@ export function resolveReceivablesRoute(pathname: string): ReceivablesRoute {
 }
 
 export const receivablesNavigation = (access: ReceivablesAccess) => [
+  ...(access.canRecover ? [{ path: "/receivables", label: "初始化状态" }] : []),
   ...(access.canEnter && access.canReadLedger ? [
     { path: "/receivables", label: "应收账款看板" },
     { path: "/receivables/ledger", label: "应收账款台账" },

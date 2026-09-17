@@ -19,6 +19,7 @@ type GrantFacts = {
 export type ReceivablesAccessFacts = {
   accountActive: boolean;
   personActive: boolean;
+  isCompanyAdmin?: boolean;
   isFinanceOrganizationMember?: boolean;
   configured?: boolean;
   configurationConfirmed?: boolean;
@@ -59,7 +60,13 @@ export type ReceivablesAction =
   | "confirmSetup"
   | "recover";
 
-type AccessDb = Pick<Prisma.TransactionClient, "account" | "receivableSetting" | "roleAssignment" | "receivableAccessGrant">;
+type AccessDb = Pick<Prisma.TransactionClient, "account" | "organization" | "receivableSetting" | "roleAssignment" | "receivableAccessGrant">;
+
+export const receivablesFinanceOrganizationName = "财务资产部";
+
+export function selectReceivablesFinanceOrganization<T extends { id: string; type: string }>(organizations: readonly T[]): T | null {
+  return organizations.length === 1 && organizations[0]!.type === "department" ? organizations[0]! : null;
+}
 
 export function selectSingleReceivablesGrant<T>(grants: readonly T[]): T | null {
   return grants.length === 1 ? grants[0]! : null;
@@ -91,7 +98,6 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   const hasBoundOrgLeader = facts.hasBoundOrgLeader ?? configured;
   const configurationConfirmed = facts.configurationConfirmed ?? true;
   const activeIdentity = facts.accountActive && facts.personActive;
-  const canRecover = false;
   const state: ReceivablesAccessState = !configured
     ? "unconfigured"
     : !hasBoundOrgLeader
@@ -99,6 +105,7 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       : !configurationConfirmed
         ? "pending_confirmation"
         : "ready";
+  const canRecover = activeIdentity && !!facts.isCompanyAdmin && state !== "ready";
   const denied = emptyAccess(state, canRecover);
 
   if (!activeIdentity) return denied;
@@ -113,16 +120,9 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       role: "owner",
       canEnter: true,
       canReadLedger: true,
-      canWriteLedger: true,
-      canManageAll: true,
-      canCreateLedger: true,
-      canManageMoney: true,
       canManageConfiguration: true,
       canManageAccess: true,
-      canImport: true,
-      canExport: true,
       canViewAll: true,
-      canMaintainCollection: true,
     };
   }
 
@@ -182,7 +182,13 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   };
 }
 
-export async function resolveReceivablesAccess(principal: Pick<Principal, "accountId">, db: AccessDb = prisma): Promise<ReceivablesAccess> {
+export function assertReceivablesFinanceOrganization(organization: { type: string } | null): asserts organization is { type: "department" } {
+  if (!organization || organization.type !== "department") {
+    throw Object.assign(new Error("应收账款主管组织必须是现有部门"), { statusCode: 409, code: "RECEIVABLES_FINANCE_ORGANIZATION_INVALID" });
+  }
+}
+
+export async function resolveReceivablesAccess(principal: Pick<Principal, "accountId"> & Partial<Pick<Principal, "roles">>, db: AccessDb = prisma): Promise<ReceivablesAccess> {
   const [account, setting] = await Promise.all([
     db.account.findUnique({
       where: { id: principal.accountId },
@@ -207,16 +213,33 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
   ]);
   const accountActive = account?.status === "active";
   const personActive = !!account?.personId && account.person?.status === "active";
-  const configured = !!setting?.financeOrganizationId && setting.financeOrganization?.type === "department";
+  const isCompanyAdmin = principal.roles
+    ? principal.roles.some(({ role }) => role === "company_admin")
+    : !!(accountActive && await db.roleAssignment.findFirst({
+        where: {
+          role: "company_admin",
+          scopeType: "company",
+          active: true,
+          OR: [{ accountId: principal.accountId }, ...(account?.personId ? [{ personId: account.personId }] : [])],
+        },
+        select: { id: true },
+      }));
+  const inferredFinanceOrganization = setting?.financeOrganizationId ? null : selectReceivablesFinanceOrganization(await db.organization.findMany({
+    where: { name: receivablesFinanceOrganizationName, type: "department" },
+    select: { id: true, type: true },
+    take: 2,
+  }));
+  const financeOrganizationId = setting?.financeOrganizationId ?? inferredFinanceOrganization?.id ?? null;
+  const configured = !!financeOrganizationId && (setting?.financeOrganization?.type === "department" || inferredFinanceOrganization?.type === "department");
   const isFinanceOrganizationMember = Boolean(configured
-    && account?.person?.organizations.some(({ organizationId }) => organizationId === setting.financeOrganizationId));
+    && account?.person?.organizations.some(({ organizationId }) => organizationId === financeOrganizationId));
   const [leaderRoles, grants] = await Promise.all([
     configured
       ? db.roleAssignment.findMany({
           where: {
             role: "org_leader",
             scopeType: "organization",
-            scopeId: setting!.financeOrganizationId,
+            scopeId: financeOrganizationId!,
             active: true,
             activationPending: false,
             personId: { not: null },
@@ -250,6 +273,7 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
   return decideReceivablesAccess({
     accountActive,
     personActive,
+    isCompanyAdmin,
     isFinanceOrganizationMember,
     configured,
     configurationConfirmed: !!setting?.configurationConfirmedAt,
