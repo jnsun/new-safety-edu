@@ -922,7 +922,7 @@ model PhoneVerificationCode {
 
 model Courseware {
   id        String              @id @default(uuid()) @db.Uuid
-  code      String?             @unique @db.VarChar(120)
+  code      String?             @db.VarChar(120)
   title     String              @db.VarChar(180)
   type      CoursewareType
   scopeType ScopeType           @map("scope_type")
@@ -931,6 +931,7 @@ model Courseware {
   createdAt DateTime            @default(now()) @map("created_at")
   updatedAt DateTime            @updatedAt @map("updated_at")
 
+  @@unique([scopeType, scopeId, code], map: "coursewares_scope_type_scope_id_code_key")
   @@map("coursewares")
 }
 
@@ -969,6 +970,12 @@ model CoursewareImportSession {
   originalFilename String                   @map("original_filename") @db.VarChar(240)
   sourceHash        String                   @map("source_hash") @db.Char(64)
   templateVersion   Int                      @map("template_version")
+  parserVersion     Int                      @map("parser_version")
+  scopeType         ScopeType                @map("scope_type")
+  scopeId           String?                  @map("scope_id") @db.Uuid
+  actionPlan        Json                     @map("action_plan")
+  hasGlobalErrors   Boolean                  @map("has_global_errors")
+  containsAssets    Boolean                  @map("contains_assets")
   parsedResult      Json                     @map("parsed_result")
   previewResult     Json                     @map("preview_result")
   confirmationKey  String                   @unique @map("confirmation_key") @db.Char(64)
@@ -986,6 +993,7 @@ model CoursewareImportSession {
   @@index([createdBy, status, expiresAt])
   @@index([sourceHash, createdAt])
   @@index([sourceFileId])
+  @@index([scopeType, scopeId])
   @@map("courseware_import_sessions")
 }
 

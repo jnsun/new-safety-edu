@@ -52,6 +52,26 @@ function imageMime(path: string, buffer: Buffer) {
   return mime;
 }
 
+async function readEntry(file: unzipper.File, path: string, limit: number, total: { bytes: number }) {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  try {
+    for await (const chunk of file.stream()) {
+      const value = Buffer.from(chunk as Uint8Array);
+      bytes += value.length;
+      total.bytes += value.length;
+      if (bytes > limit) reject("ZIP_ENTRY_SIZE_LIMIT", `ZIP 条目实际解压大小超过限制：${path}`);
+      if (total.bytes > MAX_TOTAL_BYTES) reject("ZIP_TOTAL_SIZE_LIMIT", "ZIP 实际总解压大小超过限制");
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof CoursewarePackageError) throw error;
+    return reject("INVALID_ZIP_ENTRY", `无法读取 ZIP 条目：${path}`);
+  }
+  if (bytes !== file.uncompressedSize) reject("ZIP_ENTRY_SIZE_MISMATCH", `ZIP 条目大小不一致：${path}`);
+  return Buffer.concat(chunks, bytes);
+}
+
 export async function parseCoursewarePackage(buffer: Buffer): Promise<CoursewarePackage> {
   if (!buffer.length || buffer.length > MAX_ARCHIVE_BYTES) reject("ZIP_SIZE_LIMIT", "ZIP 文件大小超过限制");
   let directory: unzipper.CentralDirectory;
@@ -89,13 +109,12 @@ export async function parseCoursewarePackage(buffer: Buffer): Promise<Courseware
   const manifests = files.filter(({ path }) => path === "courseware.json" || path === "courseware.xlsx");
   if (manifests.length !== 1) reject("INVALID_ZIP_MANIFEST", "ZIP 必须且只能包含一个 courseware.json 或 courseware.xlsx");
   const manifestEntry = manifests[0]!;
-  const manifestBuffer = await manifestEntry.file.buffer();
-  if (manifestBuffer.length !== manifestEntry.file.uncompressedSize) reject("ZIP_ENTRY_SIZE_MISMATCH", `ZIP 条目大小不一致：${manifestEntry.path}`);
+  const actualTotal = { bytes: 0 };
+  const manifestBuffer = await readEntry(manifestEntry.file, manifestEntry.path, MAX_ENTRY_BYTES, actualTotal);
 
   const assets = new Map<string, PackageAsset>();
   for (const entry of files.filter(({ path }) => path.startsWith("assets/"))) {
-    const assetBuffer = await entry.file.buffer();
-    if (assetBuffer.length !== entry.file.uncompressedSize) reject("ZIP_ENTRY_SIZE_MISMATCH", `ZIP 条目大小不一致：${entry.path}`);
+    const assetBuffer = await readEntry(entry.file, entry.path, MAX_ENTRY_BYTES, actualTotal);
     assets.set(entry.path, { path: entry.path, buffer: assetBuffer, mimeType: imageMime(entry.path, assetBuffer) });
   }
   return { manifest: { filename: manifestEntry.path, buffer: manifestBuffer }, assets };
