@@ -203,6 +203,7 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-table-region:focus-visible { outline: 3px solid rgba(0, 113, 227, .35); outline-offset: 3px; }
 .receivables-table-region .ant-table-cell { font-variant-numeric: tabular-nums; }
 .receivables-ledger-table .ant-table-tbody > tr > td { background-clip: padding-box; }
+.receivables-ledger-table .ant-table-placeholder > td { height: 260px; }
 .receivables-ledger-table .ant-table-cell-fix-left, .receivables-ledger-table .ant-table-cell-fix-right { background: #fff; }
 .receivables-ledger-table .ant-table-row:hover .ant-table-cell-fix-left, .receivables-ledger-table .ant-table-row:hover .ant-table-cell-fix-right { background: #f5faff !important; }
 .receivables-column-list { max-height: min(58vh, 560px); overflow-y: auto; border: 1px solid rgba(0, 0, 0, .08); border-radius: 14px; }
@@ -274,6 +275,33 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-dashboard-metric { min-height: 100%; display: grid; align-content: center; justify-items: center; }
 .receivables-dashboard-metric strong { font-size: clamp(34px, 4vw, 56px); line-height: 1; font-variant-numeric: tabular-nums; }
 .receivables-dashboard-metric span { margin-top: 8px; color: #86868b; }
+.receivables-dashboard-bars { display: grid; gap: 8px; }
+.receivables-dashboard-bars > div, .receivables-dashboard-bars > button { min-width: 0; padding: 2px 0; display: grid; grid-template-columns: minmax(92px, 1fr) minmax(80px, 3fr) max-content; align-items: center; gap: 10px; border: 0; background: transparent; color: inherit; text-align: left; }
+.receivables-dashboard-bars > button { width: 100%; cursor: pointer; }
+.receivables-dashboard-bars > button:hover span { color: #0066cc; }
+.receivables-dashboard-bars span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receivables-dashboard-bars i { height: 8px; overflow: hidden; border-radius: 4px; background: #eef1f5; }
+.receivables-dashboard-bars em { display: block; min-width: 2px; height: 100%; border-radius: inherit; background: #2f66a8; }
+.receivables-dashboard-bars b { display: flex; align-items: baseline; justify-content: flex-end; gap: 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.receivables-dashboard-bars small { color: #86868b; font-size: 11px; font-weight: 400; }
+.receivables-cashflow-chart { height: 100%; min-height: 150px; display: grid; grid-template-rows: auto 1fr; gap: 8px; }
+.receivables-chart-legend { display: flex; justify-content: flex-end; gap: 14px; color: #6e6e73; font-size: 12px; }
+.receivables-chart-legend span::before { width: 8px; height: 8px; margin-right: 5px; display: inline-block; border-radius: 2px; background: #2f66a8; content: ""; }
+.receivables-chart-legend .is-receipt::before { background: #198754; }
+.receivables-cashflow-columns { min-height: 0; display: grid; grid-template-columns: repeat(12, minmax(24px, 1fr)); gap: 6px; align-items: end; }
+.receivables-cashflow-columns > div { height: 100%; min-width: 0; display: grid; grid-template-rows: 1fr auto; gap: 5px; text-align: center; }
+.receivables-cashflow-columns i { min-height: 100px; display: flex; align-items: flex-end; justify-content: center; gap: 2px; border-bottom: 1px solid #d2d2d7; }
+.receivables-cashflow-columns em { width: min(11px, 42%); min-height: 1px; background: #2f66a8; }
+.receivables-cashflow-columns em.is-receipt { background: #198754; }
+.receivables-cashflow-columns span { color: #86868b; font-size: 11px; font-variant-numeric: tabular-nums; }
+.receivables-followup-list { min-width: 720px; display: grid; }
+.receivables-followup-list > button { min-height: 38px; padding: 5px 8px; display: grid; grid-template-columns: minmax(180px, 2fr) minmax(110px, 1fr) 110px 92px 96px 90px; align-items: center; gap: 10px; border: 0; border-bottom: 1px solid #ececf0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.receivables-followup-list > button:hover { background: #f5faff; }
+.receivables-followup-list > button > span:first-child { min-width: 0; display: grid; }
+.receivables-followup-list strong, .receivables-followup-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receivables-followup-list small, .receivables-followup-list time { color: #86868b; font-size: 11px; }
+.receivables-followup-list b { color: #b42318; text-align: right; font-variant-numeric: tabular-nums; }
+.receivables-grant-cards { display: none; }
 .receivables-dashboard-grid.is-editing .receivables-dashboard-card { outline: 1px dashed rgba(0, 113, 227, .42); cursor: grab; }
 .receivables-dashboard-grid.is-editing .receivables-dashboard-card:active { cursor: grabbing; }
 .receivables-dashboard-resize { position: absolute; right: 3px; bottom: 3px; z-index: 2; width: 24px; height: 24px; border: 0; border-radius: 6px; background: linear-gradient(135deg, transparent 42%, #0071e3 43%, #0071e3 50%, transparent 51%, transparent 62%, #0071e3 63%, #0071e3 70%, transparent 71%); cursor: nwse-resize; }
@@ -372,6 +400,14 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
   .receivables-dashboard-toolbar { align-items: flex-start; flex-direction: column; }
   .receivables-dashboard-card { grid-column: 1 / -1 !important; min-height: auto !important; }
   .receivables-dashboard-resize { display: none; }
+  .receivables-ledger-table .ant-table-placeholder > td { height: 180px; }
+  .receivables-grant-table { display: none; }
+  .receivables-grant-cards { display: grid; gap: 8px; }
+  .receivables-grant-cards article { padding: 12px; border: 1px solid #dedee2; border-radius: 12px; background: #fff; }
+  .receivables-grant-cards article > div:first-child { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .receivables-grant-cards strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .receivables-grant-cards p { margin: 10px 0; display: flex; align-items: center; gap: 6px; color: #6e6e73; }
+  .receivables-grant-empty { min-height: 180px; display: grid; place-items: center; color: #86868b; }
   .receivables-dictionary-layout { min-height: 0; grid-template-columns: 1fr; }
   .receivables-dictionary-nav { display: flex; overflow-x: auto; }
   .receivables-dictionary-nav button { min-width: 140px; border-right: 1px solid #d2d2d7; border-bottom: 0; }

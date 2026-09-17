@@ -63,7 +63,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
       if (section === "grants") {
         const role = values.role as ReceivablesGrant["role"];
         const normalized = normalizeReceivablesGrantDraft(role, { canCreate: !!values.canCreate, canExport: !!values.canExport, canViewAll: !!values.canViewAll, canMaintainCollection: !!values.canMaintainCollection, departments: (values.departmentScopes as Array<{ departmentId: string; canRead: boolean; canWrite: boolean }> | undefined) ?? [] });
-        const body = { ...(editor === "create" ? { accountId: values.accountId } : {}), role, ...normalized, departments: normalized.departments.filter((item) => item.canRead || item.canWrite), reason: values.reason, ...(editor !== "create" ? { revision: (editor as ReceivablesGrant).revision } : {}) };
+        const body = { ...(editor === "create" ? { personId: values.personId } : {}), role, ...normalized, departments: normalized.departments.filter((item) => item.canRead || item.canWrite), reason: values.reason, ...(editor !== "create" ? { revision: (editor as ReceivablesGrant).revision } : {}) };
         return api(editor === "create" ? path : `${path}/${(editor as ReceivablesGrant).id}`, json(editor === "create" ? "POST" : "PATCH", body));
       }
       if (section === "departments") {
@@ -130,7 +130,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
   const openEditor = (row?: ReceivablesGrant | ReceivablesDepartment | ReceivablesDictionaryOption) => {
     setEditor(row ?? "create");
     setConflict(undefined);
-    if (!row) { form.resetFields(); if (section === "grants") form.setFieldsValue({ accountId: undefined, role: undefined, canCreate: false, canExport: false, canViewAll: false, canMaintainCollection: false, departmentIds: [], departmentScopes: [], reason: undefined }); }
+    if (!row) { form.resetFields(); if (section === "grants") form.setFieldsValue({ personId: undefined, role: undefined, canCreate: false, canExport: false, canViewAll: false, canMaintainCollection: false, departmentIds: [], departmentScopes: [], reason: undefined }); }
     else if (section === "grants") { const grant = row as ReceivablesGrant; const scopes = grant.departments.map((item) => ({ departmentId: item.financeDepartmentId, canRead: item.canRead, canWrite: item.canWrite })); const normalized = normalizeReceivablesGrantDraft(grant.role, { canCreate: grant.canCreate, canExport: grant.canExport, canViewAll: grant.canViewAll, canMaintainCollection: grant.canMaintainCollection, departments: scopes }); form.setFieldsValue({ ...grant, ...normalized, departmentIds: normalized.departments.map((item) => item.departmentId), departmentScopes: normalized.departments }); }
     else form.setFieldsValue(row);
   };
@@ -179,14 +179,14 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     {section !== "departments" && <div className="receivables-compact-toolbar"><Typography.Text type="secondary">配置与授权变更均记录原因、修订号和审计信息。</Typography.Text><Button type="primary" onClick={() => openEditor()}>{createLabel}</Button></div>}
     {rows.isFetching && <Card loading />}
     {rows.isError && <Alert type="error" showIcon message="数据加载失败，已隐藏缓存内容" action={<Button onClick={() => void rows.refetch()}>重试</Button>} />}
-    {currentRows && section === "grants" && <Table size="small" rowKey="id" dataSource={currentRows as ReceivablesGrant[]} pagination={{ pageSize: 20, hideOnSinglePage: true }} scroll={{ x: 760 }} locale={{ emptyText: "暂无财务授权" }} columns={[
-      { title: "账号", dataIndex: "accountId", ellipsis: true },
-      { title: "角色", width: 120, render: (_: unknown, row: ReceivablesGrant) => <Tag>{roleLabels[row.role]}</Tag> },
-      { title: "部门范围", width: 160, render: (_: unknown, row: ReceivablesGrant) => row.role === "admin" ? "全模块管理" : row.canViewAll ? <Tag color="blue">查看全部</Tag> : `${row.departments.filter((item) => item.canRead || item.canWrite).length} 个部门` },
+    {currentRows && section === "grants" && <><Table className="receivables-grant-table" tableLayout="fixed" size="small" rowKey="id" dataSource={currentRows as ReceivablesGrant[]} pagination={{ pageSize: 20, hideOnSinglePage: true }} locale={{ emptyText: "暂无财务授权" }} columns={[
+      { title: "账号", dataIndex: "accountId", ellipsis: true, width: "22%" },
+      { title: "角色", width: 112, render: (_: unknown, row: ReceivablesGrant) => <Tag>{roleLabels[row.role]}</Tag> },
+      { title: "部门范围", width: 150, render: (_: unknown, row: ReceivablesGrant) => row.role === "admin" ? "全模块管理" : row.canViewAll ? <Tag color="blue">查看全部</Tag> : `${row.departments.filter((item) => item.canRead || item.canWrite).length} 个部门` },
       { title: "附加权限", render: (_: unknown, row: ReceivablesGrant) => <Space wrap size={[4, 4]}>{row.canCreate && <Tag>新建台账</Tag>}{row.canMaintainCollection && <Tag>催收维护</Tag>}{row.canExport && <Tag>导出</Tag>}{!row.canCreate && !row.canMaintainCollection && !row.canExport && "—"}</Space> },
-      { title: "状态", width: 90, render: (_: unknown, row: ReceivablesGrant) => <Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "已撤销"}</Tag> },
-      { title: "操作", width: 150, fixed: "right", render: (_: unknown, row: ReceivablesGrant) => rowActions(row) },
-    ]} />}
+      { title: "状态", width: 84, render: (_: unknown, row: ReceivablesGrant) => <Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "已撤销"}</Tag> },
+      { title: "操作", width: 132, render: (_: unknown, row: ReceivablesGrant) => rowActions(row) },
+    ]} /><div className="receivables-grant-cards">{(currentRows as ReceivablesGrant[]).length === 0 ? <div className="receivables-grant-empty">暂无财务授权</div> : (currentRows as ReceivablesGrant[]).map((row) => <article key={row.id}><div><strong title={row.accountId}>{row.accountId}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "已撤销"}</Tag></div><p><Tag>{roleLabels[row.role]}</Tag><span>{row.role === "admin" ? "全模块管理" : row.canViewAll ? "查看全部" : `${row.departments.filter((item) => item.canRead || item.canWrite).length} 个部门`}</span></p><div>{rowActions(row)}</div></article>)}</div></>}
 
     {currentRows && section === "departments" && <>
       <div className="receivables-department-toolbar">
@@ -228,7 +228,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     <Modal title={`${editor === "create" ? "新建" : "编辑"}${title}`} open={!!editor} footer={null} destroyOnClose width={section === "grants" ? 720 : 520} onCancel={closeEditor}>
       <Form form={form} layout="vertical" onFinish={(values) => void submitEditor(values)}>
         {section === "grants" && <>
-          <Form.Item name="accountId" label="财务候选账号" rules={[{ required: true }]} extra={editor === "create" ? "输入姓名或用户名至少 2 个字符；仅显示全公司有效账号及人员。" : undefined}><Select showSearch filterOption={false} disabled={editor !== "create"} onSearch={setCandidateSearch} notFoundContent={candidates.isFetching ? "搜索中…" : candidates.isError ? "搜索失败，已关闭候选数据" : "请输入至少 2 个字符"} options={currentCandidates.map((item) => ({ value: item.accountId, disabled: item.hasActiveGrant, label: `${item.name} · ${item.username ?? "无用户名"}${item.hasActiveGrant ? "（已有授权）" : ""}` }))} /></Form.Item>
+          <Form.Item name={editor === "create" ? "personId" : "accountId"} label={editor === "create" ? "搜索正式员工" : "账号"} rules={[{ required: true }]} extra={editor === "create" ? "输入姓名或用户名至少 2 个字符；待激活或尚无账号的员工也可提前授权。" : undefined}><Select showSearch filterOption={false} placeholder={editor === "create" ? "输入姓名或用户名，至少 2 个字符" : undefined} disabled={editor !== "create"} onSearch={setCandidateSearch} notFoundContent={candidates.isFetching ? "搜索中…" : candidates.isError ? "搜索失败，已关闭候选数据" : "请输入至少 2 个字符"} options={currentCandidates.map((item) => ({ value: item.personId, disabled: item.hasActiveGrant, label: `${item.name} · ${item.username ?? (item.accountStatus === "pending" ? "账号待激活" : "尚无账号")}${item.hasActiveGrant ? "（已有授权）" : ""}` }))} /></Form.Item>
           <Form.Item name="role" label="角色" rules={[{ required: true }]}><Select onChange={changeGrantRole} options={roleOptions} /></Form.Item>
           <Form.Item noStyle shouldUpdate>{({ getFieldValue, setFieldValue }) => { const role = getFieldValue("role") as ReceivablesGrant["role"] | undefined; return role && role !== "admin" ? <>
             <Form.Item name="departmentIds" label="授权部门" extra="可搜索并多选；下方只显示已选部门。"><Select mode="multiple" showSearch optionFilterProp="label" placeholder="选择财务归属部门" options={currentDepartments.map((item) => ({ value: item.id, label: `${item.name}${item.code ? ` · ${item.code}` : ""}${item.active ? "" : "（已停用）"}`, disabled: !item.active }))} onChange={(ids: string[]) => { const scopes = updateReceivablesSelectedScopes(role, ids, getFieldValue("departmentScopes") ?? []); setFieldValue("departmentScopes", scopes); }} /></Form.Item>

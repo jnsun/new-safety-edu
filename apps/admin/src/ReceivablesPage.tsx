@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { Alert, Button, Card, Checkbox, Form, Input, message, Modal, Result, Select, Space, Spin, Tabs, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Form, Input, message, Modal, Result, Select, Space, Spin, Tabs, Tag, Typography } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { api, json } from "./api";
@@ -117,6 +117,8 @@ function ReceivablesDashboard({ accountId, scopeFingerprint, access }: { account
   const cardLabels: Record<ReceivablesDashboardCardId, string> = {
     balance: "应收余额", amounts: "金额概览", ledgerCount: "台账数量", anomalies: "异常提醒",
     collection: "催收工作", debtStatuses: "债权状态", creditorUnits: "单位分布",
+    monthlyCashflow: "月度开票／回款趋势", departmentBalances: "财务归属部门应收余额 TOP8",
+    customerBalances: "客户应收余额 TOP10", customerTypes: "客户属性构成", collectionFollowups: "催收跟踪 TOP10",
   };
   const visibleLayout = editingDashboard ? draftLayout : savedLayout;
   const updateCard = (id: ReceivablesDashboardCardId, patch: Partial<ReceivablesDashboardCardPreference>) => setDraftLayout((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
@@ -139,6 +141,13 @@ function ReceivablesDashboard({ accountId, scopeFingerprint, access }: { account
     const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop, { once: true });
   };
+  const amountBars = (values: ReceivablesDashboardResponse["departmentBalances"], filterName?: "debtStatus" | "creditorUnit") => {
+    const maximum = Math.max(1, ...values.map((item) => Math.max(0, Number(item.amount))));
+    return <div className="receivables-dashboard-bars">{values.length === 0 && <Typography.Text type="secondary">当前范围暂无数据</Typography.Text>}{values.map((item) => {
+      const content = <><span title={item.value ?? "未设置"}>{item.value ?? "未设置"}</span><i><em style={{ width: `${Math.max(2, Math.max(0, Number(item.amount)) / maximum * 100)}%` }} /></i><b>{formatReceivablesMoney(item.amount)}<small>{item.count} 笔</small></b></>;
+      return filterName && item.value ? <button type="button" key={item.value} onClick={() => navigate(ledgerPath({ [filterName]: item.value! }))}>{content}</button> : <div key={item.value ?? "未设置"}>{content}</div>;
+    })}</div>;
+  };
   const renderCardContent = (id: ReceivablesDashboardCardId) => {
     if (!currentDashboard) return null;
     if (id === "balance") return <><div className="receivables-balance-value">{formatReceivablesMoney(currentDashboard.amounts.balance)}</div><Typography.Text type="secondary">当前筛选范围</Typography.Text><Button className="receivables-balance-action" onClick={() => navigate(ledgerPath())}>查看当前范围台账</Button></>;
@@ -146,9 +155,16 @@ function ReceivablesDashboard({ accountId, scopeFingerprint, access }: { account
     if (id === "ledgerCount") return <div className="receivables-dashboard-metric"><strong>{currentDashboard.amounts.activeLedgerCount}</strong><span>条有效台账</span></div>;
     if (id === "anomalies") return <div className="receivables-action-list">{anomalyItems.map((item) => <button type="button" className="receivables-action-row" key={item.key} onClick={() => navigate(item.target)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b className={item.count ? "is-active" : ""}>{item.count}</b></button>)}</div>;
     if (id === "collection") return <div className="receivables-action-list">{collectionItems.map((item) => <button type="button" className="receivables-action-row" key={item.key} onClick={() => navigate(item.target)}><span><strong>{item.label}</strong><small>{item.detail}</small></span><b className="receivables-action-enter">进入</b></button>)}</div>;
-    const values = id === "debtStatuses" ? currentDashboard.debtStatuses : currentDashboard.creditorUnits;
-    const filterName = id === "debtStatuses" ? "debtStatus" : "creditorUnit";
-    return <div className="receivables-facet-list">{values.length === 0 && <Typography.Text type="secondary">当前范围暂无数据</Typography.Text>}{values.map((item) => item.value ? <button type="button" key={item.value} onClick={() => navigate(ledgerPath({ [filterName]: item.value! }))}><span>{item.value}</span><b>{item.count}</b></button> : <div className="receivables-facet-row" key="未设置"><span>未设置</span><b>{item.count}</b></div>)}</div>;
+    if (id === "debtStatuses") return amountBars(currentDashboard.debtStatuses, "debtStatus");
+    if (id === "creditorUnits") return amountBars(currentDashboard.creditorUnits, "creditorUnit");
+    if (id === "departmentBalances") return amountBars(currentDashboard.departmentBalances);
+    if (id === "customerBalances") return amountBars(currentDashboard.customerBalances);
+    if (id === "customerTypes") return amountBars(currentDashboard.customerTypes);
+    if (id === "monthlyCashflow") {
+      const maximum = Math.max(1, ...currentDashboard.monthlyCashflow.flatMap((item) => [Number(item.invoicedAmount), Number(item.receivedAmount)]));
+      return <div className="receivables-cashflow-chart" aria-label="最近十二个月开票与回款趋势"><div className="receivables-chart-legend"><span className="is-invoice">开票</span><span className="is-receipt">回款</span></div><div className="receivables-cashflow-columns">{currentDashboard.monthlyCashflow.map((item) => <div key={item.month} title={`${item.month} 开票 ${formatReceivablesMoney(item.invoicedAmount)}，回款 ${formatReceivablesMoney(item.receivedAmount)}`}><i><em className="is-invoice" style={{ height: `${Number(item.invoicedAmount) / maximum * 100}%` }} /><em className="is-receipt" style={{ height: `${Number(item.receivedAmount) / maximum * 100}%` }} /></i><span>{item.month.slice(5)}</span></div>)}</div></div>;
+    }
+    return <div className="receivables-followup-list">{currentDashboard.collectionFollowups.length === 0 && <Typography.Text type="secondary">当前范围暂无待跟进账款</Typography.Text>}{currentDashboard.collectionFollowups.map((item) => <button type="button" key={item.id} onClick={() => navigate(`/receivables/ledger?ledgerId=${encodeURIComponent(item.id)}`)}><span><strong>{item.contractNo}</strong><small title={item.projectName ?? ""}>{item.projectName || "未填写项目名称"}</small></span><span>{item.financeDepartmentName}</span><b>{formatReceivablesMoney(item.balance)}</b><Tag color={item.debtStatus === "逾期" ? "red" : "default"}>{item.debtStatus || "未设置"}</Tag><time>{item.dunningDate || "未催收"}</time><span>{item.collectionOwner || "—"}</span></button>)}</div>;
   };
 
   return (
@@ -223,7 +239,7 @@ function ReceivablesDashboard({ accountId, scopeFingerprint, access }: { account
             </Card>)}
           </section>}
           <Modal title="添加看板卡片" open={catalogOpen} footer={null} onCancel={() => setCatalogOpen(false)} width={460}>
-            <div className="receivables-dashboard-catalog">{receivablesDashboardCardIds.filter((id) => !draftLayout.some((item) => item.id === id)).map((id) => <Button key={id} onClick={() => { const fallback = defaultReceivablesDashboardPreference.find((item) => item.id === id)!; setDraftLayout((items) => [...items, { ...fallback }]); }}>{cardLabels[id]}</Button>)}{receivablesDashboardCardIds.every((id) => draftLayout.some((item) => item.id === id)) && <Typography.Text type="secondary">全部卡片均已添加</Typography.Text>}</div>
+            <div className="receivables-dashboard-catalog">{receivablesDashboardCardIds.filter((id) => !draftLayout.some((item) => item.id === id)).map((id) => <Button key={id} onClick={() => { const fallback = defaultReceivablesDashboardPreference.find((item) => item.id === id) ?? { id, w: id === "monthlyCashflow" || id === "collectionFollowups" ? 12 : 6, h: id === "collectionFollowups" ? 6 : 4 }; setDraftLayout((items) => [...items, { ...fallback }]); }}>{cardLabels[id]}</Button>)}{receivablesDashboardCardIds.every((id) => draftLayout.some((item) => item.id === id)) && <Typography.Text type="secondary">全部卡片均已添加</Typography.Text>}</div>
           </Modal>
         </>
       )}

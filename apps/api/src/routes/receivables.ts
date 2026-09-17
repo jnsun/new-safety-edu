@@ -31,7 +31,7 @@ const grantFields = z.object({
   canMaintainCollection: z.boolean().default(false),
   departments: z.array(departmentScopeInput).max(200).default([]),
 }).strict();
-const grantCreateInput = grantFields.extend({ accountId: z.string().uuid(), reason: reasonInput }).strict();
+const grantCreateInput = grantFields.extend({ personId: z.string().uuid(), reason: reasonInput }).strict();
 const grantUpdateInput = grantFields.extend({ revision: z.number().int().positive(), reason: reasonInput }).strict();
 const grantRevokeInput = z.object({ revision: z.number().int().positive(), revoke: z.literal(true), reason: reasonInput }).strict();
 const grantPatchInput = z.union([grantRevokeInput, grantUpdateInput]);

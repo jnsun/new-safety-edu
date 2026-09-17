@@ -73,5 +73,13 @@ assert.match(pageSource, /编辑看板/);
 assert.match(pageSource, /onDragStart/);
 assert.match(pageSource, /onPointerDown/);
 assert.match(pageSource, /preferences\/dashboard/);
+for (const label of ["月度开票／回款趋势", "财务归属部门应收余额 TOP8", "客户应收余额 TOP10", "客户属性构成", "催收跟踪 TOP10"]) {
+  assert.match(pageSource, new RegExp(label), `dashboard catalog includes ${label}`);
+}
+assert.match(styles, /\.receivables-ledger-table \.ant-table-placeholder[^\{]*\{[^}]*height:\s*260px/s, "empty ledger keeps a stable desktop body height");
+assert.doesNotMatch(adminSource, /scroll=\{\{\s*x:\s*760\s*\}\}/, "grant table does not force desktop horizontal scrolling");
+assert.doesNotMatch(adminSource, /fixed:\s*["']right["']/, "grant actions are not pinned into a forced overflow table");
+assert.match(adminSource, /receivables-grant-cards/, "narrow screens use grant cards instead of a horizontal table");
+assert.doesNotMatch(pageSource, /defaultReceivablesDashboardPreference\.find\([^\n]+\)!/, "optional cards have a real catalog fallback size");
 
 console.log("RECEIVABLES_ADMIN_UI_OK");

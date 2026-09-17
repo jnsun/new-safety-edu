@@ -46,12 +46,29 @@ export type ReceivablesAmounts = {
 };
 
 export type ReceivablesFacet = { value: string | null; count: number };
+export type ReceivablesAmountFacet = ReceivablesFacet & { amount: string };
+export type ReceivablesMonthlyCashflow = { month: string; invoicedAmount: string; receivedAmount: string };
+export type ReceivablesCollectionFollowup = {
+  id: string;
+  contractNo: string;
+  projectName: string | null;
+  financeDepartmentName: string;
+  balance: string | null;
+  debtStatus: string | null;
+  dunningDate: string | null;
+  collectionOwner: string | null;
+};
 export type ReceivablesDashboardResponse = {
   amounts: ReceivablesAmounts;
   statuses: ReceivablesFacet[];
   anomalies: ReceivablesFacet[];
-  debtStatuses: ReceivablesFacet[];
-  creditorUnits: ReceivablesFacet[];
+  debtStatuses: ReceivablesAmountFacet[];
+  creditorUnits: ReceivablesAmountFacet[];
+  monthlyCashflow: ReceivablesMonthlyCashflow[];
+  departmentBalances: ReceivablesAmountFacet[];
+  customerBalances: ReceivablesAmountFacet[];
+  customerTypes: ReceivablesAmountFacet[];
+  collectionFollowups: ReceivablesCollectionFollowup[];
 };
 
 export type ReceivablesLedgerRow = {
@@ -137,7 +154,7 @@ export type ReceivablesReferenceData = {
   departments: Array<{ id: string; name: string; canRead: boolean; canWrite: boolean }>;
   dictionaries: Record<ReceivablesReferenceCategory, Array<{ id: string; value: string }>>;
 };
-export type ReceivablesGrantCandidate = { accountId: string; name: string; username: string | null; hasActiveGrant: boolean };
+export type ReceivablesGrantCandidate = { personId: string; accountId: string | null; accountStatus: "pending" | "active" | null; name: string; username: string | null; hasActiveGrant: boolean };
 
 export type ReceivablesGrant = {
   id: string;
@@ -281,7 +298,7 @@ export const receivablesColumnIds = [
   "collectionOwner", "openingChargeDate", "dunningDate", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan", "anomaly", "updatedAt",
 ] as const;
 
-export const receivablesDashboardCardIds = ["balance", "amounts", "ledgerCount", "anomalies", "collection", "debtStatuses", "creditorUnits"] as const;
+export const receivablesDashboardCardIds = ["balance", "amounts", "ledgerCount", "anomalies", "collection", "debtStatuses", "creditorUnits", "monthlyCashflow", "departmentBalances", "customerBalances", "customerTypes", "collectionFollowups"] as const;
 export type ReceivablesDashboardCardId = typeof receivablesDashboardCardIds[number];
 export type ReceivablesDashboardCardPreference = { id: ReceivablesDashboardCardId; w: number; h: number; title?: string };
 export const defaultReceivablesDashboardPreference: ReceivablesDashboardCardPreference[] = [

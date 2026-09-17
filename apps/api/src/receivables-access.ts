@@ -122,6 +122,8 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       canReadLedger: true,
       canManageConfiguration: true,
       canManageAccess: true,
+      canImport: true,
+      canExport: true,
       canViewAll: true,
     };
   }

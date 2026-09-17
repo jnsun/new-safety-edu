@@ -96,7 +96,7 @@ export function normalizeStoredReceivablesColumnPreference(value: unknown): Rece
   return { order, visible: effectiveVisible, frozen, widths };
 }
 const receivablesColumnPreferenceKey = "receivables.columns.v1";
-export const receivablesDashboardCardIds = ["balance", "amounts", "ledgerCount", "anomalies", "collection", "debtStatuses", "creditorUnits"] as const;
+export const receivablesDashboardCardIds = ["balance", "amounts", "ledgerCount", "anomalies", "collection", "debtStatuses", "creditorUnits", "monthlyCashflow", "departmentBalances", "customerBalances", "customerTypes", "collectionFollowups"] as const;
 export type ReceivablesDashboardCardPreference = { id: typeof receivablesDashboardCardIds[number]; w: number; h: number; title?: string | undefined };
 export const defaultReceivablesDashboardPreference: ReceivablesDashboardCardPreference[] = [
   { id: "balance", w: 8, h: 4 }, { id: "anomalies", w: 4, h: 4 },
@@ -156,6 +156,12 @@ export type ReceivablesExportScopeSnapshot = {
 type QueryTx = Prisma.TransactionClient;
 type Facet = { value: string | null; count: number };
 type RawFacet = { value: string | null; count: number };
+type RawAmountFacet = RawFacet & { amount: Prisma.Decimal };
+type RawMonthlyCashflow = { month: string; invoiced_amount: Prisma.Decimal; received_amount: Prisma.Decimal };
+type RawCollectionFollowup = {
+  id: string; contract_no: string; project_name: string | null; finance_department_name: string;
+  balance: Prisma.Decimal | null; debt_status: string | null; dunning_date: Date | null; collection_owner: string | null;
+};
 type RawDepartmentFacet = { value: string; name: string; count: number };
 type RawAmounts = {
   active_ledger_count: number;
@@ -408,6 +414,20 @@ function facetStatement(cte: Prisma.Sql, column: Prisma.Sql) {
     SELECT ${column} AS value, COUNT(*)::int AS count FROM filtered f GROUP BY ${column} ORDER BY ${column} ASC NULLS FIRST`;
 }
 
+function amountFacetStatement(cte: Prisma.Sql, column: Prisma.Sql, limit?: number) {
+  return Prisma.sql`${cte}
+    SELECT ${column} AS value, COUNT(*)::int AS count,
+      COALESCE(SUM(f.balance) FILTER (WHERE f.status = 'active' AND f.balance IS NOT NULL), 0::numeric) AS amount
+    FROM filtered f
+    GROUP BY ${column}
+    ORDER BY amount DESC, ${column} ASC NULLS LAST
+    ${limit ? Prisma.sql`LIMIT ${limit}` : Prisma.empty}`;
+}
+
+function mapAmountFacets(rows: RawAmountFacet[]) {
+  return rows.map((row) => ({ value: row.value, count: row.count, amount: money(row.amount)! }));
+}
+
 function statusFacetStatement(cte: Prisma.Sql) {
   return facetStatement(cte, Prisma.sql`f.status::text`);
 }
@@ -446,8 +466,38 @@ export function buildReceivablesDashboardStatements(scope: ReceivablesQueryScope
     totals: amountsStatement(cte),
     statuses: statusFacetStatement(cte),
     anomalies: anomalyFacetStatement(cte, true),
-    debtStatuses: facetStatement(cte, Prisma.sql`f.debt_status`),
-    creditorUnits: facetStatement(cte, Prisma.sql`f.creditor_unit`),
+    debtStatuses: amountFacetStatement(cte, Prisma.sql`f.debt_status`),
+    creditorUnits: amountFacetStatement(cte, Prisma.sql`f.creditor_unit`),
+    monthlyCashflow: Prisma.sql`${cte},
+      months AS (
+        SELECT generate_series(date_trunc('month', CURRENT_DATE) - interval '11 months', date_trunc('month', CURRENT_DATE), interval '1 month') AS month
+      ), invoice_totals AS (
+        SELECT date_trunc('month', i.invoice_date) AS month, SUM(i.amount) AS amount
+        FROM receivable_invoices i JOIN filtered f ON f.id = i.ledger_id
+        WHERE i.status = 'active' AND f.status = 'active' AND i.invoice_date >= date_trunc('month', CURRENT_DATE) - interval '11 months'
+        GROUP BY date_trunc('month', i.invoice_date)
+      ), receipt_totals AS (
+        SELECT date_trunc('month', r.receipt_date) AS month, SUM(r.amount) AS amount
+        FROM receivable_receipts r JOIN filtered f ON f.id = r.ledger_id
+        WHERE r.status = 'active' AND f.status = 'active' AND r.receipt_date >= date_trunc('month', CURRENT_DATE) - interval '11 months'
+        GROUP BY date_trunc('month', r.receipt_date)
+      )
+      SELECT to_char(m.month, 'YYYY-MM') AS month,
+        COALESCE(i.amount, 0::numeric) AS invoiced_amount,
+        COALESCE(r.amount, 0::numeric) AS received_amount
+      FROM months m LEFT JOIN invoice_totals i ON i.month = m.month LEFT JOIN receipt_totals r ON r.month = m.month
+      ORDER BY m.month`,
+    departmentBalances: amountFacetStatement(cte, Prisma.sql`f.finance_department_name`, 8),
+    customerBalances: amountFacetStatement(cte, Prisma.sql`f.customer_name`, 10),
+    customerTypes: amountFacetStatement(cte, Prisma.sql`f.customer_type`),
+    collectionFollowups: Prisma.sql`${cte}
+      SELECT f.id, f.contract_no, f.project_name, f.finance_department_name, f.balance, f.debt_status,
+        f.dunning_date, f.collection_owner
+      FROM filtered f
+      WHERE f.status = 'active' AND (f.balance IS NULL OR f.balance <> 0)
+      ORDER BY CASE WHEN f.debt_status = '逾期' THEN 0 ELSE 1 END,
+        f.dunning_date ASC NULLS FIRST, f.balance DESC NULLS LAST, f.id
+      LIMIT 10`,
   };
 }
 
@@ -472,14 +522,28 @@ async function listLedgers(tx: QueryTx, scope: QueryScope, input: ReceivablesLis
 
 async function dashboard(tx: QueryTx, scope: QueryScope) {
   const statements = buildReceivablesDashboardStatements(scope);
-  const [dashboardAmounts, statuses, anomalies, debtStatuses, creditorUnits] = await Promise.all([
+  const [dashboardAmounts, statuses, anomalies, debtStatuses, creditorUnits, monthlyCashflow, departmentBalances, customerBalances, customerTypes, collectionFollowups] = await Promise.all([
     amounts(tx, statements.totals),
     tx.$queryRaw<RawFacet[]>(statements.statuses),
     tx.$queryRaw<RawFacet[]>(statements.anomalies),
-    tx.$queryRaw<RawFacet[]>(statements.debtStatuses),
-    tx.$queryRaw<RawFacet[]>(statements.creditorUnits),
+    tx.$queryRaw<RawAmountFacet[]>(statements.debtStatuses),
+    tx.$queryRaw<RawAmountFacet[]>(statements.creditorUnits),
+    tx.$queryRaw<RawMonthlyCashflow[]>(statements.monthlyCashflow),
+    tx.$queryRaw<RawAmountFacet[]>(statements.departmentBalances),
+    tx.$queryRaw<RawAmountFacet[]>(statements.customerBalances),
+    tx.$queryRaw<RawAmountFacet[]>(statements.customerTypes),
+    tx.$queryRaw<RawCollectionFollowup[]>(statements.collectionFollowups),
   ]);
-  return { amounts: dashboardAmounts, statuses, anomalies, debtStatuses, creditorUnits };
+  return {
+    amounts: dashboardAmounts, statuses, anomalies,
+    debtStatuses: mapAmountFacets(debtStatuses), creditorUnits: mapAmountFacets(creditorUnits),
+    monthlyCashflow: monthlyCashflow.map((row) => ({ month: row.month, invoicedAmount: money(row.invoiced_amount)!, receivedAmount: money(row.received_amount)! })),
+    departmentBalances: mapAmountFacets(departmentBalances), customerBalances: mapAmountFacets(customerBalances), customerTypes: mapAmountFacets(customerTypes),
+    collectionFollowups: collectionFollowups.map((row) => ({
+      id: row.id, contractNo: row.contract_no, projectName: row.project_name, financeDepartmentName: row.finance_department_name,
+      balance: money(row.balance), debtStatus: row.debt_status, dunningDate: row.dunning_date?.toISOString().slice(0, 10) ?? null, collectionOwner: row.collection_owner,
+    })),
+  };
 }
 
 async function ledgerDetail(tx: QueryTx, access: ReceivablesAccess, scope: QueryScope, id: string, accountId: string) {

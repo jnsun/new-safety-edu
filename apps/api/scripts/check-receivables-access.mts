@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { assertReceivablesFinanceOrganization, decideReceivablesAccess, requireReceivables, selectReceivablesFinanceOrganization, selectSingleReceivablesGrant } from "../src/receivables-access.js";
-import { assertReceivablesGrantManagement } from "../src/receivables-admin.js";
+import { assertReceivablesGrantManagement, receivablesGrantSubjectDisposition } from "../src/receivables-admin.js";
 import { receivableSettingBinding, selectFinanceOrganizationId } from "../../../prisma/receivables-defaults.js";
 
 assert.equal(selectFinanceOrganizationId([{ id: "finance-org" }]), "finance-org");
@@ -14,6 +14,11 @@ assert.throws(() => assertReceivablesFinanceOrganization({ type: "business_entit
 assert.equal(selectReceivablesFinanceOrganization([{ id: "finance", type: "department" }])?.id, "finance");
 assert.equal(selectReceivablesFinanceOrganization([]), null);
 assert.equal(selectReceivablesFinanceOrganization([{ id: "a", type: "department" }, { id: "b", type: "department" }]), null);
+assert.equal(receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: "active" }), "existing");
+assert.equal(receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: "pending" }), "existing");
+assert.equal(receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: null }), "create_pending");
+assert.throws(() => receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: "disabled" }), { code: "RECEIVABLES_GRANT_SUBJECT_INACTIVE", statusCode: 409 });
+assert.throws(() => receivablesGrantSubjectDisposition({ personType: "contractor", personStatus: "active", accountStatus: null }), { code: "RECEIVABLES_GRANT_SUBJECT_INACTIVE", statusCode: 409 });
 
 const unconfiguredAdmin = decideReceivablesAccess({
   accountActive: true,
@@ -62,6 +67,8 @@ assert.equal(owner.canManageAll, false);
 assert.equal(owner.canViewAll, true);
 assert.equal(owner.canManageAccess, true);
 assert.equal(owner.canManageConfiguration, true);
+assert.equal(owner.canImport, true);
+assert.equal(owner.canExport, true);
 assert.equal(owner.canManageMoney, false);
 assert.equal(owner.canMaintainCollection, false);
 

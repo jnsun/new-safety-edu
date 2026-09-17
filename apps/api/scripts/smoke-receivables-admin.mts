@@ -31,7 +31,7 @@ type GrantResponse = { id: string; accountId: string; role: "admin" | "reporter"
 type DepartmentResponse = { id: string; name: string; code: string | null; sortOrder: number; active: boolean; revision: number };
 type DictionaryResponse = { id: string; category: string; value: string; sortOrder: number; active: boolean; revision: number };
 type PreviewResponse = { impactCount: number; token: string; expiresAt: string };
-type CandidateResponse = { accountId: string; name: string; username: string | null; hasActiveGrant: boolean };
+type CandidateResponse = { personId: string; accountId: string | null; accountStatus: "pending" | "active" | null; name: string; username: string | null; hasActiveGrant: boolean };
 
 const delay = (ms: number) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
@@ -198,6 +198,8 @@ try {
   const inactiveAccount = await createIdentity({ label: "inactive-account", accountStatus: "disabled" });
   const inactivePerson = await createIdentity({ label: "inactive-person", personStatus: "disabled" });
   const pendingAccount = await createIdentity({ label: "pending-account", accountStatus: "pending" });
+  const noAccountPerson = await prisma.person.create({ data: { name: `${marker}-no-account`, phone: `1960000${String(phoneCounter++).padStart(4, "0")}`, type: "employee", status: "active" } });
+  ids.people.push(noAccountPerson.id);
   const crossOrganizationCandidate = await createIdentity({ label: "cross-candidate" });
   await prisma.organizationMembership.create({ data: { personId: crossOrganizationCandidate.personId!, organizationId: crossOrganization.id, primary: true } });
   const inactiveAfterGrant = await createIdentity({ label: "inactive-after-grant" });
@@ -210,32 +212,43 @@ try {
   ids.departments.push(departmentA.id);
   const departmentB = (await expectStatus<DepartmentResponse>("/api/receivables/departments", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ name: `${marker}-department-b`, code: `${marker.slice(-8)}B`, sortOrder: 1 }) })).data!;
   ids.departments.push(departmentB.id);
-  const adminGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ accountId: financeAdmin.id, role: "admin", canCreate: false, canExport: false, canViewAll: false, departments: [], reason: "appoint finance admin" }) })).data!;
+  const adminGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ personId: financeAdmin.personId, role: "admin", canCreate: false, canExport: false, canViewAll: false, departments: [], reason: "appoint finance admin" }) })).data!;
   ids.grants.push(adminGrant.id);
   assert.equal((await expectStatus<AccessResponse>("/api/receivables/access", tokens.financeAdmin!, 200)).data?.role, "admin");
 
   const candidates = (await expectStatus<CandidateResponse[]>(`/api/receivables/grant-candidates?search=${encodeURIComponent(marker)}`, tokens.owner!, 200)).data!;
   assert.ok(candidates.length <= 50, "candidate search must be capped at 50");
-  assert.deepEqual(Object.keys(candidates[0] ?? {}).sort(), ["accountId", "hasActiveGrant", "name", "username"]);
-  assert.ok(candidates.some((candidate) => candidate.accountId === crossOrganizationCandidate.id), "owner must see active candidates outside the finance organization scope");
-  assert.equal(candidates.find((candidate) => candidate.accountId === financeAdmin.id)?.hasActiveGrant, true);
-  assert.ok(!candidates.some((candidate) => [inactiveAccount.id, inactivePerson.id, pendingAccount.id].includes(candidate.accountId)), "inactive/pending account or person must be excluded");
+  assert.deepEqual(Object.keys(candidates[0] ?? {}).sort(), ["accountId", "accountStatus", "hasActiveGrant", "name", "personId", "username"]);
+  assert.ok(candidates.some((candidate) => candidate.personId === crossOrganizationCandidate.personId), "owner must see active employees outside the finance organization scope");
+  assert.equal(candidates.find((candidate) => candidate.personId === financeAdmin.personId)?.hasActiveGrant, true);
+  assert.equal(candidates.find((candidate) => candidate.personId === pendingAccount.personId)?.accountStatus, "pending", "pending accounts must be eligible for advance authorization");
+  assert.deepEqual(candidates.find((candidate) => candidate.personId === noAccountPerson.id), { personId: noAccountPerson.id, accountId: null, accountStatus: null, name: noAccountPerson.name, username: null, hasActiveGrant: false });
+  assert.ok(!candidates.some((candidate) => [inactiveAccount.personId, inactivePerson.personId].includes(candidate.personId)), "disabled accounts or people must be excluded");
   await expectStatus("/api/receivables/grant-candidates?search=x", tokens.owner!, 400);
   await expectStatus(`/api/receivables/grant-candidates?search=${"x".repeat(81)}`, tokens.owner!, 400);
   await expectStatus(`/api/receivables/grant-candidates?search=${encodeURIComponent(marker)}`, tokens.financeAdmin!, 200);
 
   for (const actor of [tokens.reporter!, tokens.readonly!, tokens.companyAdmin!]) {
-    await expectStatus("/api/receivables/grants", actor, 403, { method: "POST", body: JSON.stringify({ accountId: reporter.id, role: "reporter", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "forbidden grant" }) });
+    await expectStatus("/api/receivables/grants", actor, 403, { method: "POST", body: JSON.stringify({ personId: reporter.personId, role: "reporter", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "forbidden grant" }) });
   }
-  await expectStatus("/api/receivables/grants", tokens.financeAdmin!, 403, { method: "POST", body: JSON.stringify({ accountId: replacementOwner.id, role: "admin", departments: [], reason: "admin cannot appoint admin" }) });
+  await expectStatus("/api/receivables/grants", tokens.financeAdmin!, 403, { method: "POST", body: JSON.stringify({ personId: replacementOwner.personId, role: "admin", departments: [], reason: "admin cannot appoint admin" }) });
   await expectStatus(`/api/receivables/grants/${adminGrant.id}`, tokens.financeAdmin!, 403, { method: "PATCH", body: JSON.stringify({ revision: adminGrant.revision, revoke: true, reason: "admin cannot revoke admin" }) });
-  await expectStatus("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ accountId: reporter.id, role: "owner", departments: [], reason: "owner cannot be granted" }) });
-  await expectStatus("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ accountId: replacementOwner.id, role: "admin", canViewAll: true, departments: [], reason: "invalid admin flags" }) });
-  await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ accountId: inactiveAccount.id, role: "reporter", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "inactive account" }) });
-  await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ accountId: inactivePerson.id, role: "readonly", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "inactive person" }) });
-  await expectStatus("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ accountId: readonly.id, role: "readonly", canCreate: true, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: true }], reason: "readonly escalation" }) });
+  await expectStatus("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ personId: reporter.personId, role: "owner", departments: [], reason: "owner cannot be granted" }) });
+  await expectStatus("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ personId: replacementOwner.personId, role: "admin", canViewAll: true, departments: [], reason: "invalid admin flags" }) });
+  await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ personId: inactiveAccount.personId, role: "reporter", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "disabled account" }) });
+  await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ personId: inactivePerson.personId, role: "readonly", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "inactive person" }) });
+  await expectStatus("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ personId: readonly.personId, role: "readonly", canCreate: true, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: true }], reason: "readonly escalation" }) });
 
-  let reporterGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.financeAdmin!, 201, { method: "POST", body: JSON.stringify({ accountId: reporter.id, role: "reporter", canCreate: true, canExport: true, canViewAll: false, canMaintainCollection: true, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: true }, { departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "reporting coverage" }) })).data!;
+  const pendingGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.financeAdmin!, 201, { method: "POST", body: JSON.stringify({ personId: pendingAccount.personId, role: "readonly", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "authorize before activation" }) })).data!;
+  ids.grants.push(pendingGrant.id);
+  const noAccountGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.financeAdmin!, 201, { method: "POST", body: JSON.stringify({ personId: noAccountPerson.id, role: "readonly", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "preauthorize employee" }) })).data!;
+  ids.grants.push(noAccountGrant.id);
+  const generatedAccount = await prisma.account.findUniqueOrThrow({ where: { personId: noAccountPerson.id } });
+  ids.accounts.push(generatedAccount.id);
+  assert.equal(generatedAccount.status, "pending");
+  assert.equal(noAccountGrant.accountId, generatedAccount.id);
+
+  let reporterGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.financeAdmin!, 201, { method: "POST", body: JSON.stringify({ personId: reporter.personId, role: "reporter", canCreate: true, canExport: true, canViewAll: false, canMaintainCollection: true, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: true }, { departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "reporting coverage" }) })).data!;
   ids.grants.push(reporterGrant.id);
   let reporterAccess = (await expectStatus<AccessResponse>("/api/receivables/access", tokens.reporter!, 200)).data!;
   assert.deepEqual(reporterAccess.readDepartmentIds, [departmentA.id, departmentB.id].sort());
@@ -259,8 +272,8 @@ try {
   assert.deepEqual(reporterAccess.readDepartmentIds, [departmentB.id]);
   assert.deepEqual(reporterAccess.writeDepartmentIds, []);
   reporterGrant = (await expectStatus<GrantResponse>(`/api/receivables/grants/${reporterGrant.id}`, tokens.financeAdmin!, 200, { method: "PATCH", body: JSON.stringify({ revision: reporterGrant.revision, role: "reporter", canCreate: false, canExport: false, canViewAll: false, canMaintainCollection: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "admin updates reporter scope" }) })).data!;
-  await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ accountId: reporter.id, role: "reporter", canCreate: false, canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "duplicate active grant" }) });
-  const readonlyGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.financeAdmin!, 201, { method: "POST", body: JSON.stringify({ accountId: readonly.id, role: "readonly", canExport: true, canViewAll: false, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }, { departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "readonly coverage" }) })).data!;
+  await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ personId: reporter.personId, role: "reporter", canCreate: false, canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "duplicate active grant" }) });
+  const readonlyGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.financeAdmin!, 201, { method: "POST", body: JSON.stringify({ personId: readonly.personId, role: "readonly", canExport: true, canViewAll: false, departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }, { departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "readonly coverage" }) })).data!;
   ids.grants.push(readonlyGrant.id);
   const readonlyAccess = (await expectStatus<AccessResponse>("/api/receivables/access", tokens.readonly!, 200)).data!;
   assert.deepEqual(readonlyAccess.readDepartmentIds, [departmentA.id, departmentB.id].sort());
@@ -300,11 +313,11 @@ try {
   assert.equal(deactivatedDepartment.active, false);
   const deactivatedOption = (await expectStatus<DictionaryResponse>(`/api/receivables/dictionary-options/${sourceOption.id}`, tokens.financeAdmin!, 200, { method: "PATCH", body: JSON.stringify({ revision: sourceOption.revision, active: false, reason: "historical option" }) })).data!;
   assert.equal(deactivatedOption.active, false);
-  await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ accountId: replacementOwner.id, role: "readonly", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "inactive department scope" }) });
-  await expectRejectedWithoutMutation("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ accountId: replacementOwner.id, role: "readonly", canCreate: false, canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "strict grant create", canManageAccess: true }) }, "grant");
+  await expectStatus("/api/receivables/grants", tokens.owner!, 409, { method: "POST", body: JSON.stringify({ personId: replacementOwner.personId, role: "readonly", departments: [{ departmentId: departmentA.id, canRead: true, canWrite: false }], reason: "inactive department scope" }) });
+  await expectRejectedWithoutMutation("/api/receivables/grants", tokens.owner!, 400, { method: "POST", body: JSON.stringify({ personId: replacementOwner.personId, role: "readonly", canCreate: false, canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "strict grant create", canManageAccess: true }) }, "grant");
   await expectRejectedWithoutMutation(`/api/receivables/grants/${reporterGrant.id}`, tokens.owner!, 400, { method: "PATCH", body: JSON.stringify({ revision: reporterGrant.revision, role: "reporter", canCreate: false, canExport: true, canViewAll: true, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "strict grant update", canManageAccess: true }) });
 
-  const inactiveSubjectGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ accountId: inactiveAfterGrant.id, role: "readonly", canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "grant before identity deactivation" }) })).data!;
+  const inactiveSubjectGrant = (await expectStatus<GrantResponse>("/api/receivables/grants", tokens.owner!, 201, { method: "POST", body: JSON.stringify({ personId: inactiveAfterGrant.personId, role: "readonly", canExport: false, canViewAll: false, departments: [{ departmentId: departmentB.id, canRead: true, canWrite: false }], reason: "grant before identity deactivation" }) })).data!;
   ids.grants.push(inactiveSubjectGrant.id);
   await prisma.account.update({ where: { id: inactiveAfterGrant.id }, data: { status: "disabled" } });
   const inactiveSubjectRevocation = (await expectStatus<GrantResponse>(`/api/receivables/grants/${inactiveSubjectGrant.id}`, tokens.owner!, 200, { method: "PATCH", body: JSON.stringify({ revision: inactiveSubjectGrant.revision, revoke: true, reason: "identity disabled" }) })).data!;

@@ -123,5 +123,20 @@ assert.deepEqual(receivablesLedgerInitialFilters("?status=bad&settlement=bad&ano
 const dashboardStatements = buildReceivablesDashboardStatements({ filters: {}, readDepartmentIds: null } as never);
 assert.ok("debtStatuses" in dashboardStatements);
 assert.ok("creditorUnits" in dashboardStatements);
+assert.ok("monthlyCashflow" in dashboardStatements);
+assert.ok("departmentBalances" in dashboardStatements);
+assert.ok("customerBalances" in dashboardStatements);
+assert.ok("customerTypes" in dashboardStatements);
+assert.ok("collectionFollowups" in dashboardStatements);
+assert.deepEqual(
+  normalizeReceivablesDashboardPreference([
+    { id: "monthlyCashflow", w: 12, h: 4 },
+    { id: "collectionFollowups", w: 12, h: 6 },
+  ]),
+  [
+    { id: "monthlyCashflow", w: 12, h: 4 },
+    { id: "collectionFollowups", w: 12, h: 6 },
+  ],
+);
 
 console.log("RECEIVABLES_CORE_OK");
