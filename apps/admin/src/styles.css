@@ -25,7 +25,7 @@ button, input, textarea, select { font: inherit; }
 .receivables-cell-two-line { -webkit-line-clamp: 2; }
 .receivables-resizable-title { min-height: 22px; padding-right: 8px; }
 .receivables-resizable-header { position: relative; }
-.receivables-resizable-header .receivables-resize-handle { position: absolute; z-index: 3; top: 0; right: 0; bottom: 0; width: 14px; cursor: col-resize; touch-action: none; transform: translateX(50%); }
+.receivables-resizable-header::after { content: ""; position: absolute; z-index: 3; top: 0; right: -5px; bottom: 0; width: 10px; cursor: col-resize; touch-action: none; }
 html.receivables-column-resizing, html.receivables-column-resizing * { cursor: col-resize !important; user-select: none !important; }
 .brand { height: 96px; padding: 24px 22px 18px; display: flex; align-items: center; gap: 12px; color: #1d1d1f; line-height: 1.2; }
 .brand-mark, .login-mark {
@@ -203,6 +203,7 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-table-region:focus-visible { outline: 3px solid rgba(0, 113, 227, .35); outline-offset: 3px; }
 .receivables-table-region .ant-table-cell { font-variant-numeric: tabular-nums; }
 .receivables-ledger-table .ant-table-tbody > tr > td { background-clip: padding-box; }
+.receivables-ledger-table .ant-table-tbody > tr > td { padding: 4px 8px !important; vertical-align: middle; }
 .receivables-ledger-table .ant-table-placeholder > td { height: 260px; }
 .receivables-ledger-table .ant-table-cell-fix-left, .receivables-ledger-table .ant-table-cell-fix-right { background: #fff; }
 .receivables-ledger-table .ant-table-row:hover .ant-table-cell-fix-left, .receivables-ledger-table .ant-table-row:hover .ant-table-cell-fix-right { background: #f5faff !important; }
@@ -226,11 +227,11 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-operation-modal .ant-modal-body { max-height: min(72vh, 720px); overflow-y: auto; padding-right: 4px; }
 .receivables-row-voided { color: #86868b; background: #fafafa; }
 .receivables-row-voided td { text-decoration-color: rgba(0, 0, 0, .28); }
-.receivables-transfer-card .ant-steps { margin-bottom: 26px; }
-.receivables-transfer-stage { min-height: 120px; padding-top: 4px; }
+.receivables-transfer-card .ant-steps { margin-bottom: 16px; overflow-x: auto; overflow-y: hidden; }
+.receivables-transfer-stage { padding-top: 0; }
 .receivables-transfer-stage .ant-alert { margin-bottom: 16px; }
 .receivables-transfer-stage .ant-descriptions { margin-bottom: 16px; }
-.receivables-transfer-actions { width: 100%; display: flex; justify-content: flex-end; }
+.receivables-transfer-actions { display: flex; justify-content: flex-start; }
 .receivables-reset { margin-top: 18px; }
 .receivables-export-filter-row { width: 100%; gap: 10px 14px !important; }
 .receivables-export-filter-row .ant-form-item { margin-bottom: 8px; }
@@ -247,15 +248,15 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-department-toolbar > .ant-input-affix-wrapper { grid-column: 3; }
 .receivables-department-toolbar > .ant-typography strong { color: #1d1d1f; font-size: 18px; font-variant-numeric: tabular-nums; }
 .receivables-department-toolbar .ant-input-affix-wrapper, .receivables-department-toolbar .ant-select-single, .receivables-department-toolbar .ant-btn { height: 36px; }
-.receivables-department-grid { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 10px; }
-.receivables-department-item { min-width: 0; padding: 12px; border: 1px solid #dedee2; border-radius: 12px; background: #fff; }
+.receivables-department-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.receivables-department-item { min-width: 0; padding: 10px; border: 1px solid #dedee2; border-radius: 12px; background: #fff; }
 .receivables-department-item.is-inactive { background: #fafafa; }
 .receivables-department-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .receivables-department-heading > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
 .receivables-department-heading .ant-tag { flex: 0 0 auto; margin: 0; }
-.receivables-department-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; color: #86868b; font-size: 12px; }
+.receivables-department-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 3px 10px; color: #86868b; font-size: 12px; }
 .receivables-department-meta b { color: #3a3a3c; font-weight: 500; font-variant-numeric: tabular-nums; }
-.receivables-department-actions { margin-top: 10px; display: flex; gap: 6px; }
+.receivables-department-actions { margin-top: 7px; display: flex; gap: 5px; }
 .receivables-department-migration { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e8e8ed; }
 .receivables-department-migration .ant-select { width: 100%; }
 .receivables-department-empty { min-height: 180px; display: grid; place-items: center; color: #86868b; border: 1px dashed #d2d2d7; border-radius: 12px; background: #fff; }
@@ -268,6 +269,9 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-dashboard-card.card-balance .ant-card-head { color: #fff; border-bottom-color: rgba(255, 255, 255, .14); }
 .receivables-dashboard-card.card-balance .ant-typography { color: rgba(255, 255, 255, .7); }
 .receivables-dashboard-card .receivables-balance-value { margin-top: 0; font-size: clamp(30px, 3vw, 48px); }
+.receivables-balance-unavailable { min-height: 100%; display: grid; place-content: center; justify-items: center; gap: 10px; text-align: center; }
+.receivables-balance-unavailable > strong { font-size: clamp(28px, 3vw, 44px); line-height: 1.1; }
+.receivables-balance-unavailable .receivables-balance-action { align-self: center; margin-top: 4px; }
 .receivables-dashboard-card .receivables-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 0; padding-top: 0; }
 .receivables-dashboard-card .receivables-summary-grid > div { border-top-color: rgba(0, 0, 0, .08); }
 .receivables-dashboard-card .receivables-summary-grid .ant-typography { color: #86868b; }
@@ -326,7 +330,9 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-permission-options .ant-form-item { margin-bottom: 10px; }
 .receivables-conflict-detail { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .receivables-modal-alert { margin-top: 12px; }
-.receivables-import-upload { max-width: 680px; }
+.receivables-import-upload { width: 100%; }
+.receivables-import-start { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.receivables-import-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .receivables-import-upload .ant-form-item { max-width: 300px; margin-bottom: 14px; }
 .receivables-column-mapping { margin-top: 16px; }
 .receivables-mapping-heading { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
@@ -355,7 +361,7 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
   .receivables-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .receivables-filter-search { grid-column: span 2; }
   .receivables-dictionary-layout { grid-template-columns: 180px minmax(0, 1fr); gap: 14px; }
-  .receivables-department-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+  .receivables-department-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
 }
 @media (max-width: 768px) {
   .module-grid { grid-template-columns: 1fr; gap: 14px; }.module-card { min-height: 180px; }

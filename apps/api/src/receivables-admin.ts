@@ -38,9 +38,9 @@ const migrationStateChanged = () => httpError(409, "RECEIVABLES_MIGRATION_STATE_
 const auditMetadata = (before: unknown, after: unknown, impactCount: number) => JSON.parse(JSON.stringify({ before, after, impactCount })) as Prisma.InputJsonValue;
 
 export function assertReceivablesGrantManagement(actorRole: "owner" | "admin" | ReceivableGrantRole | null, existingRole: ReceivableGrantRole | null, requestedRole: ReceivableGrantRole | null): void {
-  if (actorRole === "owner" && existingRole !== "reporter" && existingRole !== "readonly" && requestedRole !== "reporter" && requestedRole !== "readonly") return;
+  if (actorRole === "owner") return;
   if (actorRole === "admin" && existingRole !== "admin" && requestedRole !== "admin") return;
-  throw httpError(403, "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", "负责人只管理财务管理员，财务管理员管理报账员和只读授权");
+  throw httpError(403, "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", "财务管理员只能管理报账员和只读授权");
 }
 
 export function receivablesGrantSubjectDisposition(input: { personType: string; personStatus: string; accountStatus: string | null }): "existing" | "create_pending" {
@@ -63,6 +63,7 @@ const grantSelect = {
   id: true, accountId: true, role: true, canCreate: true, canExport: true, canViewAll: true, canMaintainCollection: true, active: true, revision: true,
   grantedBy: true, grantedAt: true, revokedAt: true, revokedBy: true, revokeReason: true,
   departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true }, orderBy: { financeDepartmentId: "asc" as const } },
+  account: { select: { username: true, status: true, person: { select: { name: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { name: true } } } } } } } },
 } satisfies Prisma.ReceivableAccessGrantSelect;
 const departmentSelect = { id: true, name: true, code: true, sortOrder: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDepartmentSelect;
 const dictionarySelect = { id: true, category: true, value: true, sortOrder: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDictionaryOptionSelect;

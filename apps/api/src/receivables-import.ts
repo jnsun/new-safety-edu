@@ -5,7 +5,7 @@ import { Prisma } from "@prisma/client";
 import ExcelJS from "exceljs";
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
-import { normalizeContractNo } from "./receivables-core.js";
+import { defaultCreditorUnitForContract, normalizeContractNo } from "./receivables-core.js";
 import { requireReceivables, resolveReceivablesAccess, type ReceivablesAccess } from "./receivables-access.js";
 import { receivableAttachmentStoragePath, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, validateReceivableWorkbookShape } from "./receivables-files.js";
 import { writeCriticalAudit } from "./transaction-audit.js";
@@ -269,6 +269,10 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
     normalizedData.contractNo = contractNo || null;
     if (!contractNo) rowErrors.push(issue("CONTRACT_NO_REQUIRED", "合同编号不能为空", { rowNumber, field: "contractNo" }));
     const target = contractNo ? ledgerByContract.get(contractNo) : undefined;
+    if (!normalizedData.creditorUnit && contractNo) {
+      normalizedData.creditorUnit = defaultCreditorUnitForContract(contractNo);
+      if (normalizedData.creditorUnit && !normalizedData.presentFields.includes("creditorUnit")) normalizedData.presentFields.push("creditorUnit");
+    }
 
     const departmentName = raw.financeDepartmentId?.trim() ?? "";
     const departmentCandidates = departmentByName.get(departmentName) ?? [];
@@ -303,8 +307,8 @@ export function parseReceivablesImportWorkbook(workbook: ExcelJS.Workbook, refer
       else if (!target) openingBalanceDatePending = true;
     }
     const openingTotals = [normalizedData.openingInvoiceAmount, normalizedData.openingReceiptAmount].some((amount) => amount !== null && new Prisma.Decimal(amount).gt(0));
-    const rowWarnings = target && openingTotals ? [issue("EXISTING_OPENING_TOTALS_SKIP_ONLY", "已有合同含非零期初开票或到账金额，只能跳过", { rowNumber })] : [];
-    rows.push({ rowNumber, normalizedData, errors: rowErrors, ledgerId: target?.id ?? null, targetRevision: target?.revision ?? null, allowedDecisions: target ? openingTotals ? ["skip"] : ["skip", "update"] : ["create"], warnings: rowWarnings });
+    const rowWarnings = target && openingTotals ? [issue("EXISTING_OPENING_TOTALS_IGNORED", "重复导入只补充台账空字段，期初开票和到账明细不会重复写入", { rowNumber })] : [];
+    rows.push({ rowNumber, normalizedData, errors: rowErrors, ledgerId: target?.id ?? null, targetRevision: target?.revision ?? null, allowedDecisions: target ? ["skip", "update"] : ["create"], warnings: rowWarnings });
   }
   if (openingBalanceDatePending) warnings.push(issue("OPENING_BALANCE_DATE_PENDING", "检测到期初开票或到账金额，请在最终应用前填写期初余额日期", { field: "openingBalanceDate" }));
 
@@ -501,6 +505,16 @@ function ledgerData(data: ReceivablesImportData, mode: "create" | "update") {
   return Object.fromEntries(Object.entries(values).filter(([field]) => present.has(field) || field === "contractNoNormalized" && present.has("contractNo")));
 }
 
+const supplementableLedgerFields = ledgerFields.filter((field) => field !== "financeDepartmentId" && field !== "contractNo");
+export function mergeMissingReceivablesImportData(existing: Record<string, unknown>, data: ReceivablesImportData) {
+  const candidates = ledgerData(data, "update") as Record<string, unknown>;
+  return Object.fromEntries(supplementableLedgerFields.flatMap((field) => {
+    const current = existing[field];
+    const value = candidates[field];
+    return (current === null || current === undefined || current === "") && value !== null && value !== undefined && value !== "" ? [[field, value]] : [];
+  }));
+}
+
 async function importedDetail(tx: Tx, context: ReceivablesImportContext, access: ReceivablesAccess, ledgerId: string, batchId: string, kind: "invoice" | "receipt", amount: string, date: string) {
   const before = await tx.receivableLedger.findUniqueOrThrow({ where: { id: ledgerId } });
   const detail = kind === "invoice"
@@ -560,11 +574,6 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
       const choice = new Map(decisions.rows.map((row) => [row.rowNumber, row.decision]));
       if (choice.size !== decisions.rows.length || decisions.rows.some((row) => !batch.items.some((item) => item.rowNumber === row.rowNumber && item.ledgerId))) throw invalid("IMPORT_DECISION_INVALID", "重复决策无效");
       for (const item of batch.items) if (item.ledgerId && !choice.has(item.rowNumber)) throw invalid("IMPORT_DECISION_REQUIRED", "已有合同必须选择跳过或更新");
-      for (const item of batch.items) {
-        const data = item.normalizedData as unknown as ReceivablesImportData;
-        const hasOpeningTotals = [data.openingInvoiceAmount, data.openingReceiptAmount].some((amount) => amount !== null && new Prisma.Decimal(amount).gt(0));
-        if (item.ledgerId && choice.get(item.rowNumber) === "update" && hasOpeningTotals) throw invalid("IMPORT_OPENING_TOTALS_UPDATE_FORBIDDEN", "已有合同含非零期初金额，只能跳过");
-      }
       const batchOpeningBalanceDate = batch.openingBalanceDate?.toISOString().slice(0, 10) ?? suppliedOpeningBalanceDate;
       const needsOpeningBalanceDate = receivablesImportNeedsOpeningBalanceDate(batch.items);
       if (needsOpeningBalanceDate && !batchOpeningBalanceDate) throw invalid("OPENING_BALANCE_DATE_REQUIRED", "请在最终应用前填写期初余额日期");
@@ -591,9 +600,14 @@ export async function applyReceivablesImport(context: ReceivablesImportContext, 
         } else {
           const before = await tx.receivableLedger.findUnique({ where: { id: item.ledgerId } });
           if (!before || before.revision !== item.targetRevision || before.status !== "active") throw conflict("IMPORT_TARGET_CHANGED", "目标台账已变化");
+          const supplement = mergeMissingReceivablesImportData(before, data);
+          if (Object.keys(supplement).length === 0) {
+            await tx.receivableImportItem.update({ where: { id: item.id }, data: { decision: "update", result: "skipped", appliedRevision: before.revision } });
+            continue;
+          }
           ledgerBefore = snapshot(before);
           await tx.receivableLedgerRevision.create({ data: { ledgerId: before.id, revision: before.revision, beforeSnapshot: snapshot(before), reason: "批次导入更新", changedBy: context.principal.accountId, importBatchId: batchId } });
-          ledger = await tx.receivableLedger.update({ where: { id: before.id }, data: { ...ledgerData(data, "update"), updatedBy: context.principal.accountId, revision: { increment: 1 } } });
+          ledger = await tx.receivableLedger.update({ where: { id: before.id }, data: { ...supplement, updatedBy: context.principal.accountId, revision: { increment: 1 } } });
         }
         if (!item.ledgerId && data.openingInvoiceAmount && new Prisma.Decimal(data.openingInvoiceAmount).gt(0)) await importedDetail(tx, context, access, ledger.id, batchId, "invoice", data.openingInvoiceAmount, data.openingInvoiceDate ?? batchOpeningBalanceDate!);
         if (!item.ledgerId && data.openingReceiptAmount && new Prisma.Decimal(data.openingReceiptAmount).gt(0)) await importedDetail(tx, context, access, ledger.id, batchId, "receipt", data.openingReceiptAmount, data.openingReceiptDate ?? batchOpeningBalanceDate!);

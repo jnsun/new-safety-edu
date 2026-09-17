@@ -120,11 +120,16 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       role: "owner",
       canEnter: true,
       canReadLedger: true,
+      canWriteLedger: true,
+      canManageAll: true,
+      canCreateLedger: true,
+      canManageMoney: true,
       canManageConfiguration: true,
       canManageAccess: true,
       canImport: true,
       canExport: true,
       canViewAll: true,
+      canMaintainCollection: true,
     };
   }
 

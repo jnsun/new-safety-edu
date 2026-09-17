@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { classifyReceivablesImportDatabaseError, classifyReceivablesImportFileError, inspectReceivablesImportWorkbook, parseReceivablesImportWorkbook, receivablesImportBatchParseOptions, receivablesImportBatchTransactionOptions, receivablesImportNeedsOpeningBalanceDate } from "../src/receivables-import.js";
+import { classifyReceivablesImportDatabaseError, classifyReceivablesImportFileError, inspectReceivablesImportWorkbook, mergeMissingReceivablesImportData, parseReceivablesImportWorkbook, receivablesImportBatchParseOptions, receivablesImportBatchTransactionOptions, receivablesImportNeedsOpeningBalanceDate } from "../src/receivables-import.js";
 
 const references = {
   departments: [
@@ -11,6 +11,7 @@ const references = {
     { category: "final_method", value: "合同金额", active: true },
     { category: "final_method", value: "工作量", active: true },
     { category: "unit", value: "物化院", active: true },
+    { category: "unit", value: "山西省地球物理化学勘查院有限公司", active: true },
     { category: "project_status", value: "完工", active: true },
     { category: "project_status", value: "取消或作废", active: true },
     { category: "debt_status", value: "正常", active: true },
@@ -45,7 +46,7 @@ const valid = parseReceivablesImportWorkbook(workbook([
   "完工", "合同金额", "100.1234", "", "2026-09-01", "2026-09-16", "电话", "正在筹款，近期付", "已安排对账", "跟踪付款进度", "10.0000", "2026-09-01", "3.2000", "2026-09-02", "正常", "ignored",
 ]]), references);
 assert.deepEqual(codes(valid), []);
-assert.deepEqual(valid.warnings.map(({ code }) => code), ["UNKNOWN_COLUMN", "EXISTING_OPENING_TOTALS_SKIP_ONLY"]);
+assert.deepEqual(valid.warnings.map(({ code }) => code), ["UNKNOWN_COLUMN", "EXISTING_OPENING_TOTALS_IGNORED"]);
 assert.equal(valid.rows[0]?.rowNumber, 2);
 assert.equal(valid.rows[0]?.normalizedData.contractNo, "HT-EXISTING");
 assert.equal(valid.rows[0]?.normalizedData.financeDepartmentId, "department-active");
@@ -61,8 +62,20 @@ assert.equal(valid.rows[0]?.normalizedData.nextPlan, "跟踪付款进度");
 assert.equal(valid.rows[0]?.ledgerId, "existing-ledger");
 assert.equal(valid.rows[0]?.targetRevision, 7);
 assert.deepEqual(valid.rows[0]?.normalizedData.presentFields, ["financeDepartmentId", "contractNo", "projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "contractAmount", "finalAmount", "openingChargeDate", "dunningDate", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan", "openingInvoiceAmount", "openingInvoiceDate", "openingReceiptAmount", "openingReceiptDate", "debtStatus"]);
-assert.deepEqual(valid.rows[0]?.allowedDecisions, ["skip"], "existing opening totals must be skip-only");
-assert.ok(valid.rows[0]?.warnings.some(({ code }) => code === "EXISTING_OPENING_TOTALS_SKIP_ONLY"));
+assert.deepEqual(valid.rows[0]?.allowedDecisions, ["skip", "update"], "repeat imports may supplement missing ledger fields");
+assert.ok(valid.rows[0]?.warnings.some(({ code }) => code === "EXISTING_OPENING_TOTALS_IGNORED"));
+
+const prefixDefault = parseReceivablesImportWorkbook(workbook(
+  ["归属部门", "合同编号", "合同金额"],
+  [["一所", "wh19-001", "10"]],
+), references);
+assert.deepEqual(codes(prefixDefault), []);
+assert.equal(prefixDefault.rows[0]?.normalizedData.creditorUnit, "山西省地球物理化学勘查院有限公司");
+
+assert.deepEqual(mergeMissingReceivablesImportData(
+  { projectName: "已有项目", customerName: null, finalAmount: "0.0000", creditorUnit: null },
+  { ...prefixDefault.rows[0]!.normalizedData, presentFields: ["projectName", "customerName", "finalAmount", "creditorUnit"], projectName: "不得覆盖", customerName: "补充客户", finalAmount: "99.0000" },
+), { customerName: "补充客户", creditorUnit: "山西省地球物理化学勘查院有限公司" });
 
 const workload = parseReceivablesImportWorkbook(workbook(
   ["财务归属部门", "合同编号", "决算方式", "合同金额", "决算金额"],

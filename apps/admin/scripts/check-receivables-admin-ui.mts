@@ -7,6 +7,7 @@ import {
   receivablesImportNeedsOpeningBalanceDate,
   receivablesPageTitle,
   receivablesReferenceCategoryLabels,
+  receivablesCreditorUnitLabel,
   updateReceivablesSelectedScopes,
 } from "../src/receivables-types.js";
 
@@ -16,6 +17,8 @@ assert.equal(receivablesImportNeedsOpeningBalanceDate({ errors: [], rows: [{ row
 assert.equal(receivablesPageTitle("/receivables/access"), "账号与权限");
 assert.equal(receivablesPageTitle("/receivables/data"), "数据处理");
 assert.equal(receivablesPageTitle("/receivables/ledger"), "台账总览");
+assert.equal(receivablesCreditorUnitLabel("山西省地球物理化学勘查院有限公司"), "物化院");
+assert.equal(receivablesCreditorUnitLabel("其他单位"), "其他单位");
 
 const dictionaryRows = [
   { id: "status-2", category: "project_status", value: "完工", sortOrder: 2, active: true, revision: 1, deactivatedAt: null, deactivateReason: null },
@@ -63,12 +66,19 @@ const mainSource = readFileSync(new URL("../src/main.tsx", import.meta.url), "ut
 const adminPackage = readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 assert.match(ledgerSource, /className: "receivables-resizable-header"/, "resize handles are anchored to the table header cell");
+assert.doesNotMatch(ledgerSource, /receivables-resize-handle/, "resize uses the real th boundary instead of a displaced nested handle");
+assert.match(ledgerSource, /getBoundingClientRect\(\)/, "resize measures the rendered header boundary");
+assert.match(ledgerSource, /moneyDecimals/, "column settings control monetary display precision");
 assert.match(ledgerSource, /pointercancel/, "column resizing cleans up cancelled pointer gestures");
 assert.doesNotMatch(styles, /\.receivables-filter-grid \.ant-input-group \.ant-input[^\{]*\{[^}]*height:/s, "the inner search input must not be forced to the wrapper height");
 assert.match(styles, /\.receivables-filter-grid \.ant-input-affix-wrapper > \.ant-input\s*\{[^}]*height:\s*auto/s, "the inner search input stays inside its affix wrapper");
 assert.match(styles, /\.receivables-filter-grid \.ant-select-single[^\{]*\{[^}]*height:\s*36px/s, "select and search controls use equal outer desktop heights");
 assert.doesNotMatch(styles, /\.receivables-filter-grid \.ant-select-selector[^\{]*\{[^}]*height:/s, "the select inner selector must not overflow its outer layout box");
 assert.match(styles, /\.receivables-resizable-header\s*\{[^}]*position:\s*relative/s, "the resize hit target uses the real header boundary");
+assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\{[^}]*vertical-align:\s*middle/s, "ledger cells are vertically centered");
+assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\{[^}]*padding:\s*4px 8px/s, "ledger rows stay compact when long cells wrap");
+assert.match(ledgerSource, /决算金额（万元）/, "ledger amount headings state the authoritative unit");
+assert.match(transfersSource, /合同金额（万元）/, "data entry states the authoritative unit");
 assert.match(adminSource, /receivables-department-toolbar/, "department controls share one compact toolbar");
 assert.match(adminSource, /receivables-department-grid/, "departments use a dense unpaginated grid");
 assert.doesNotMatch(adminSource, /visibleDepartments[^\n]*pagination=/, "department results are not paginated");
@@ -85,8 +95,18 @@ assert.match(styles, /\.receivables-ledger-table \.ant-table-placeholder[^\{]*\{
 assert.doesNotMatch(adminSource, /scroll=\{\{\s*x:\s*760\s*\}\}/, "grant table does not force desktop horizontal scrolling");
 assert.doesNotMatch(adminSource, /fixed:\s*["']right["']/, "grant actions are not pinned into a forced overflow table");
 assert.match(adminSource, /receivables-grant-cards/, "narrow screens use grant cards instead of a horizontal table");
+assert.match(adminSource, /row\.account\.person\?\.name/, "grant list shows the employee name instead of only the account id");
 assert.doesNotMatch(pageSource, /defaultReceivablesDashboardPreference\.find\([^\n]+\)!/, "optional cards have a real catalog fallback size");
 assert.match(transfersSource, /openingBalanceDate:\s*openingBalanceDate\s*\|\|\s*undefined/, "final apply sends the date selected after preview");
 assert.match(transfersSource, /最终应用前填写/, "the preview explains when the pending date is required");
+assert.match(transfersSource, /receivables-import-start/, "initial import controls share one compact row");
+assert.match(transfersSource, /needsOpeningBalanceDate\s*&&/, "opening balance date stays hidden until opening amounts are detected");
+assert.match(styles, /\.receivables-import-start\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center/s, "initial import controls use a compact aligned row");
+assert.doesNotMatch(styles, /\.receivables-import-upload\s*\{[^}]*max-width:\s*680px/s, "initial import content does not leave a large empty right side");
+assert.match(pageSource, /暂无法计算/, "an unreliable balance is described instead of rendered as a dash");
+assert.match(pageSource, /查看待补充台账/, "unreliable balance links directly to missing final amounts");
+assert.match(pageSource, /finalAmountMissingCount\s*>\s*0/, "balance reliability is driven by the missing-final count");
+assert.match(styles, /\.receivables-balance-unavailable\s*\{[^}]*place-content:\s*center/s, "unavailable balance content remains centered when resized");
+assert.match(styles, /\.receivables-department-grid\s*\{[^}]*repeat\(auto-fill,\s*minmax\(/s, "department cards use an adaptive compact grid");
 
 console.log("RECEIVABLES_ADMIN_UI_OK");

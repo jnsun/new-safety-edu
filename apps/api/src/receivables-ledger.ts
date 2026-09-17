@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
-import { assertLedgerPatchAllowed, assertTransition } from "./receivables-core.js";
+import { assertLedgerPatchAllowed, assertTransition, defaultCreditorUnitForContract } from "./receivables-core.js";
 import { requireReceivables, resolveReceivablesAccess, type ReceivablesAccess } from "./receivables-access.js";
 import { writeCriticalAudit } from "./transaction-audit.js";
 
@@ -99,6 +99,10 @@ function normalizeFields(input: LedgerFields, current?: LedgerRow): Prisma.Recei
   }
   for (const field of textFields) {
     if (input[field] !== undefined) data[field] = input[field] === null ? null : input[field]!.trim() || null;
+  }
+  const effectiveContractNo = input.contractNo?.trim() || current?.contractNo || "";
+  if ((!current || current.creditorUnit === null) && (input.creditorUnit === undefined || input.creditorUnit === null || !input.creditorUnit.trim())) {
+    data.creditorUnit = defaultCreditorUnitForContract(effectiveContractNo);
   }
   if (input.contractAmount !== undefined) data.contractAmount = decimal18_4(input.contractAmount, "合同金额");
   if (input.finalAmount !== undefined) data.finalAmount = decimal18_4(input.finalAmount, "决算金额");

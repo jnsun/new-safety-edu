@@ -6,12 +6,14 @@ import {
   assertWriteoffAllowed,
   calculateReceivableAmounts,
   normalizeContractNo,
+  defaultCreditorUnitForContract,
   reporterCreateFields,
   reporterCollectionFields,
   reporterPatchFields,
 } from "../src/receivables-core.js";
 import {
   defaultReceivablesColumnPreference,
+  formatReceivablesMoney,
   defaultReceivablesDashboardPreference,
   normalizeReceivablesDashboardPreference,
   normalizeReceivablesColumnPreference,
@@ -25,6 +27,11 @@ import {
 import { buildReceivablesDashboardStatements, normalizeStoredReceivablesColumnPreference, normalizeStoredReceivablesDashboardPreference, receivablesDashboardPreferenceSchema } from "../src/receivables-query.js";
 
 assert.equal(normalizeContractNo("  HT-001  "), "HT-001");
+assert.equal(defaultCreditorUnitForContract(" wh19-001 "), "山西省地球物理化学勘查院有限公司");
+assert.equal(defaultCreditorUnitForContract("CH20-001"), "山西省地质测绘院有限公司");
+assert.equal(defaultCreditorUnitForContract("LK20-001"), "山西省第六地质工程勘察院有限公司");
+assert.equal(defaultCreditorUnitForContract("YD20-001"), "山西禹地基础工程有限公司");
+assert.equal(defaultCreditorUnitForContract("QT20-001"), null);
 assert.deepEqual(
   calculateReceivableAmounts({ finalAmount: "100", writeoffAmount: "0", invoiceAmounts: ["80"], receiptAmounts: ["30"] }),
   { invoicedAmount: "80.0000", receivedAmount: "30.0000", internalReceivable: "50.0000", externalReceivable: "20.0000", balance: "70.0000", anomaly: null },
@@ -96,6 +103,13 @@ assert.equal(defaultReceivablesColumnPreference.widths.balance, 128);
 assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, widths: { ...defaultReceivablesColumnPreference.widths, projectName: 99999 } }).widths.projectName, 600);
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).order[0], "contractNo");
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).widths.projectName, 220);
+assert.equal(defaultReceivablesColumnPreference.moneyDecimals, 2);
+assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, moneyDecimals: 4 }).moneyDecimals, 4);
+assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, moneyDecimals: 3 }).moneyDecimals, 2);
+assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"], moneyDecimals: 0 }).moneyDecimals, 0);
+assert.equal(formatReceivablesMoney("145.0000"), "145.00");
+assert.equal(formatReceivablesMoney("1234.5678", 0), "1,235");
+assert.equal(formatReceivablesMoney("1234.5678", 4), "1,234.5678");
 assert.deepEqual(normalizeReceivablesDashboardPreference([{ id: "balance", w: 99, h: 0, title: "  我的应收  " }, { id: "balance", w: 4, h: 3 }, { id: "bad" }]), [{ id: "balance", w: 12, h: 2, title: "我的应收" }]);
 assert.deepEqual(normalizeReceivablesDashboardPreference(null), defaultReceivablesDashboardPreference);
 assert.deepEqual(normalizeStoredReceivablesDashboardPreference([{ id: "balance", w: 99, h: 0, title: "  我的应收  " }, { id: "balance", w: 4, h: 3 }, { id: "bad" }]), [{ id: "balance", w: 12, h: 2, title: "我的应收" }]);

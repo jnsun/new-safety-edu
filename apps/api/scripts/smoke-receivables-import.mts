@@ -144,7 +144,7 @@ try {
   const reporterGrant = await prisma.receivableAccessGrant.create({ data: { accountId: reporter.id, grantedBy: owner.id, role: "reporter", departments: { create: { financeDepartmentId: department.id, canRead: true, canWrite: true } } } }); ids.grants.push(adminGrant.id, reporterGrant.id);
   const readonlyGrant = await prisma.receivableAccessGrant.create({ data: { accountId: readonly.id, grantedBy: owner.id, role: "readonly", departments: { create: { financeDepartmentId: department.id, canRead: true } } } });
   const viewAllGrant = await prisma.receivableAccessGrant.create({ data: { accountId: viewAll.id, grantedBy: owner.id, role: "readonly", canViewAll: true } }); ids.grants.push(readonlyGrant.id, viewAllGrant.id);
-  const existing = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-existing`, contractNoNormalized: `${marker}-existing`, projectName: "before", collectionNotes: "preserve", contractAmount: "5.0000", finalAmount: "5.0000", createdBy: owner.id } });
+  const existing = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-existing`, contractNoNormalized: `${marker}-existing`, projectName: null, collectionNotes: "preserve", contractAmount: "5.0000", finalAmount: "5.0000", createdBy: owner.id } });
   const inactiveExisting = await prisma.receivableLedger.create({ data: { financeDepartmentId: inactive.id, contractNo: `${marker}-inactive-existing`, contractNoNormalized: `${marker}-inactive-existing`, projectName: "inactive before", createdBy: owner.id } });
   const skipped = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-skipped`, contractNoNormalized: `${marker}-skipped`, projectName: "unchanged", createdBy: owner.id } });
   const openingExisting = await prisma.receivableLedger.create({ data: { financeDepartmentId: department.id, contractNo: `${marker}-opening-existing`, contractNoNormalized: `${marker}-opening-existing`, projectName: "opening-before", createdBy: owner.id } });
@@ -171,7 +171,7 @@ try {
   const inactiveHistoryApply = await post(`/api/receivables/imports/${inactiveHistoryPreview.body.data.batchId}/apply`, adminBearer, { revision: inactiveHistoryPreview.body.data.revision, decisions: [{ rowNumber: 2, decision: "update" }] });
   assert.equal(inactiveHistoryApply.response.status, 200, JSON.stringify(inactiveHistoryApply.body));
   const inactiveExistingAfter = await prisma.receivableLedger.findUniqueOrThrow({ where: { id: inactiveExisting.id } });
-  assert.deepEqual({ projectName: inactiveExistingAfter.projectName, financeDepartmentId: inactiveExistingAfter.financeDepartmentId }, { projectName: "inactive after", financeDepartmentId: inactive.id });
+  assert.deepEqual({ projectName: inactiveExistingAfter.projectName, financeDepartmentId: inactiveExistingAfter.financeDepartmentId }, { projectName: "inactive before", financeDepartmentId: inactive.id });
 
   const valid = await preview(adminBearer, await workbook([
     [department.name, `${marker}-new`, "new", "合同金额", "100.0000", "", "20.0000", "2026-09-01", "3.0000", "2026-09-02"],
@@ -198,21 +198,22 @@ try {
   const rollback = await post(`/api/receivables/imports/${valid.body.data.batchId}/rollback`, bearer, { revision: success.revision, reason: "整批更正" });
   assert.equal(rollback.response.status, 200, JSON.stringify(rollback.body));
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: newLedger.id } })).status, "voided");
-  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: existing.id } })).projectName, "before");
+  assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: existing.id } })).projectName, null);
 
   const itemAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.import.item.update", objectId: existing.id } });
-  assert.equal((itemAudit.metadata as any).before.projectName, "before"); assert.equal((itemAudit.metadata as any).after.projectName, "after"); assert.equal((itemAudit.metadata as any).batchId, valid.body.data.batchId); assert.equal((itemAudit.metadata as any).rowNumber, 3); assert.equal((itemAudit.metadata as any).targetRevision, 1); assert.equal((itemAudit.metadata as any).appliedRevision, 2);
+  assert.equal((itemAudit.metadata as any).before.projectName, null); assert.equal((itemAudit.metadata as any).after.projectName, "after"); assert.equal((itemAudit.metadata as any).batchId, valid.body.data.batchId); assert.equal((itemAudit.metadata as any).rowNumber, 3); assert.equal((itemAudit.metadata as any).targetRevision, 1); assert.equal((itemAudit.metadata as any).appliedRevision, 2);
   const rollbackAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.import.item.rollback", objectId: existing.id } });
-  assert.equal((rollbackAudit.metadata as any).before.projectName, "after"); assert.equal((rollbackAudit.metadata as any).after.projectName, "before"); assert.equal((rollbackAudit.metadata as any).rowNumber, 3); assert.equal((rollbackAudit.metadata as any).appliedRevision, 2); assert.equal((rollbackAudit.metadata as any).rollbackRevision, 3);
+  assert.equal((rollbackAudit.metadata as any).before.projectName, "after"); assert.equal((rollbackAudit.metadata as any).after.projectName, null); assert.equal((rollbackAudit.metadata as any).rowNumber, 3); assert.equal((rollbackAudit.metadata as any).appliedRevision, 2); assert.equal((rollbackAudit.metadata as any).rollbackRevision, 3);
   const createAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.import.item.create", objectId: newLedger.id } });
   assert.equal((createAudit.metadata as any).before, null); assert.equal((createAudit.metadata as any).after.id, newLedger.id); assert.equal((createAudit.metadata as any).rowNumber, 2);
 
   const openingPreview = await preview(bearer, await workbook([[department.name, openingExisting.contractNo, "drop", "合同金额", "1", "", "2", "2026-09-01", "", ""]]));
   assert.deepEqual(openingPreview.body.data.rows[0].normalizedData.presentFields.includes("openingInvoiceAmount"), true);
-  assert.ok(openingPreview.body.data.warnings.some((warning: any) => warning.code === "EXISTING_OPENING_TOTALS_SKIP_ONLY"));
+  assert.ok(openingPreview.body.data.warnings.some((warning: any) => warning.code === "EXISTING_OPENING_TOTALS_IGNORED"));
   const openingUpdate = await post(`/api/receivables/imports/${openingPreview.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [{ rowNumber: 2, decision: "update" }] });
-  assert.equal(openingUpdate.response.status, 422); assert.equal(openingUpdate.body.error?.code, "IMPORT_OPENING_TOTALS_UPDATE_FORBIDDEN");
-  const openingSkip = await post(`/api/receivables/imports/${openingPreview.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [{ rowNumber: 2, decision: "skip" }] });
+  assert.equal(openingUpdate.response.status, 200); assert.equal(openingUpdate.body.data.items[0].result, "skipped");
+  const openingSkipPreview = await preview(bearer, await workbook([[department.name, openingExisting.contractNo, "drop", "合同金额", "1", "", "2", "2026-09-01", "", ""]]));
+  const openingSkip = await post(`/api/receivables/imports/${openingSkipPreview.body.data.batchId}/apply`, bearer, { revision: 1, decisions: [{ rowNumber: 2, decision: "skip" }] });
   assert.equal(openingSkip.response.status, 200); assert.equal(openingSkip.body.data.items[0].result, "skipped");
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { id: openingExisting.id } })).projectName, "opening-before");
 

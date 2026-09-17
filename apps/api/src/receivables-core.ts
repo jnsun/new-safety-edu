@@ -45,6 +45,17 @@ export function normalizeContractNo(value: string): string {
   return value.trim();
 }
 
+const creditorUnitsByPrefix: Record<string, string> = {
+  WH: "山西省地球物理化学勘查院有限公司",
+  CH: "山西省地质测绘院有限公司",
+  LK: "山西省第六地质工程勘察院有限公司",
+  YD: "山西禹地基础工程有限公司",
+};
+
+export function defaultCreditorUnitForContract(contractNo: string): string | null {
+  return creditorUnitsByPrefix[normalizeContractNo(contractNo).slice(0, 2).toUpperCase()] ?? null;
+}
+
 export function calculateReceivableAmounts(input: {
   finalAmount: DecimalValue | null;
   writeoffAmount: DecimalValue;

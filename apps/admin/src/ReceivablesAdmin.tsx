@@ -116,7 +116,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
 
   if (!allowed) return <Alert type="error" showIcon message="当前账号没有此项管理权限" />;
   const title = section === "grants" ? "账号与权限" : section === "departments" ? "财务归属部门" : "业务字典";
-  const roleOptions = Object.entries(roleLabels).filter(([role]) => access.role === "owner" ? role === "admin" : role !== "admin").map(([value, label]) => ({ value, label }));
+  const roleOptions = Object.entries(roleLabels).filter(([role]) => access.role === "owner" || role !== "admin").map(([value, label]) => ({ value, label }));
   const changeGrantRole = (role: ReceivablesGrant["role"]) => {
     const currentScopes = (form.getFieldValue("departmentScopes") as Array<{ departmentId: string; canRead: boolean; canWrite: boolean }> | undefined) ?? [];
     const selectedIds = (form.getFieldValue("departmentIds") as string[] | undefined) ?? [];
@@ -166,8 +166,8 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
   const openDeactivate = (row: AdminRow) => { setDeactivateTarget(row); setDeactivateReason(""); setDeactivateReconfirm(false); setConflict(undefined); };
   const rowActions = (row: AdminRow) => {
     const grantRole = section === "grants" ? (row as ReceivablesGrant).role : null;
-    const lockedGrant = section === "grants" && (access.role === "owner" ? grantRole !== "admin" : grantRole === "admin");
-    const lockedTitle = lockedGrant ? access.role === "owner" ? "报账员和只读授权由财务管理员管理" : "只有财务资产部负责人可以管理财务管理员" : undefined;
+    const lockedGrant = section === "grants" && access.role !== "owner" && grantRole === "admin";
+    const lockedTitle = lockedGrant ? "只有财务资产部负责人可以管理财务管理员" : undefined;
     return <Space wrap size={6}>
       <Button size="small" title={lockedTitle} disabled={!row.active || lockedGrant} onClick={() => openEditor(row)}>编辑</Button>
       <Button size="small" danger title={lockedTitle} disabled={!row.active || lockedGrant} onClick={() => openDeactivate(row)}>{section === "grants" ? "撤销" : "停用"}</Button>
@@ -180,13 +180,13 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     {rows.isFetching && <Card loading />}
     {rows.isError && <Alert type="error" showIcon message="数据加载失败，已隐藏缓存内容" action={<Button onClick={() => void rows.refetch()}>重试</Button>} />}
     {currentRows && section === "grants" && <><Table className="receivables-grant-table" tableLayout="fixed" size="small" rowKey="id" dataSource={currentRows as ReceivablesGrant[]} pagination={{ pageSize: 20, hideOnSinglePage: true }} locale={{ emptyText: "暂无财务授权" }} columns={[
-      { title: "账号", dataIndex: "accountId", ellipsis: true, width: "22%" },
+      { title: "人员", ellipsis: true, width: "24%", render: (_: unknown, row: ReceivablesGrant) => <div><strong>{row.account.person?.name ?? "未关联人员"}</strong><br/><Typography.Text type="secondary">{row.account.username ?? "账号待激活"} · {row.account.person?.organizations[0]?.organization.name ?? "未设置主部门"}</Typography.Text></div> },
       { title: "角色", width: 112, render: (_: unknown, row: ReceivablesGrant) => <Tag>{roleLabels[row.role]}</Tag> },
       { title: "部门范围", width: 150, render: (_: unknown, row: ReceivablesGrant) => row.role === "admin" ? "全模块管理" : row.canViewAll ? <Tag color="blue">查看全部</Tag> : `${row.departments.filter((item) => item.canRead || item.canWrite).length} 个部门` },
       { title: "附加权限", render: (_: unknown, row: ReceivablesGrant) => <Space wrap size={[4, 4]}>{row.canCreate && <Tag>新建台账</Tag>}{row.canMaintainCollection && <Tag>催收维护</Tag>}{row.canExport && <Tag>导出</Tag>}{!row.canCreate && !row.canMaintainCollection && !row.canExport && "—"}</Space> },
       { title: "状态", width: 84, render: (_: unknown, row: ReceivablesGrant) => <Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "已撤销"}</Tag> },
       { title: "操作", width: 132, render: (_: unknown, row: ReceivablesGrant) => rowActions(row) },
-    ]} /><div className="receivables-grant-cards">{(currentRows as ReceivablesGrant[]).length === 0 ? <div className="receivables-grant-empty">暂无财务授权</div> : (currentRows as ReceivablesGrant[]).map((row) => <article key={row.id}><div><strong title={row.accountId}>{row.accountId}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "已撤销"}</Tag></div><p><Tag>{roleLabels[row.role]}</Tag><span>{row.role === "admin" ? "全模块管理" : row.canViewAll ? "查看全部" : `${row.departments.filter((item) => item.canRead || item.canWrite).length} 个部门`}</span></p><div>{rowActions(row)}</div></article>)}</div></>}
+    ]} /><div className="receivables-grant-cards">{(currentRows as ReceivablesGrant[]).length === 0 ? <div className="receivables-grant-empty">暂无财务授权</div> : (currentRows as ReceivablesGrant[]).map((row) => <article key={row.id}><div><strong>{row.account.person?.name ?? "未关联人员"}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "已撤销"}</Tag></div><p><span>{row.account.person?.organizations[0]?.organization.name ?? "未设置主部门"}</span><Tag>{roleLabels[row.role]}</Tag><span>{row.role === "admin" ? "全模块管理" : row.canViewAll ? "查看全部" : `${row.departments.filter((item) => item.canRead || item.canWrite).length} 个部门`}</span></p><div>{rowActions(row)}</div></article>)}</div></>}
 
     {currentRows && section === "departments" && <>
       <div className="receivables-department-toolbar">
