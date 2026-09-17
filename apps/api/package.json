@@ -36,6 +36,7 @@
     "check:project-membership-policy": "tsx scripts/check-project-membership-policy.mts",
     "check:training-governance": "tsx scripts/check-training-governance.mts",
     "check:courseware-learning": "tsx scripts/check-courseware-learning.mts",
+    "check:daily-challenge-policy": "tsx scripts/check-daily-challenge-policy.mts",
     "check:training-todo-priority": "tsx scripts/check-training-todo-priority.mts",
     "check:exam-public-attempt": "tsx scripts/check-exam-public-attempt.mts",
     "check:auth-security-policy": "tsx scripts/check-auth-security-policy.mts",
