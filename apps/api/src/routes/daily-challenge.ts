@@ -3,7 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
-import { challengeAnswersEqual, challengeDayRange, challengeMonthRange, scoreFirstAnswer, selectDailyQuestions } from "../daily-challenge-policy.js";
+import { challengeAnswersEqual, challengeDayRange, challengeMonthRange, challengeMonthRangeFromKey, scoreFirstAnswer, selectDailyQuestions } from "../daily-challenge-policy.js";
+import { personalLeaderboardView, rankOrganizationScores, rankPersonalScores, type OrganizationRank, type PersonalScore } from "../challenge-leaderboard.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type SnapshotQuestion = { questionId: string; questionVersionId: string; type: QuestionType; prompt: string; options: unknown; category: string | null; difficulty: string | null };
@@ -52,6 +53,75 @@ async function serializeAttempt(attemptId: string) {
     todayPoints,
     completedAt: attempt.completedAt
   };
+}
+
+type MonthRange = { month: string; start: Date; end: Date };
+
+async function personalScores(range: MonthRange): Promise<PersonalScore[]> {
+  const ledgers = await prisma.challengePointLedger.findMany({
+    where: { voidedAt: null, occurredAt: { gte: range.start, lt: range.end } },
+    orderBy: { occurredAt: "asc" },
+    select: { personId: true, points: true, occurredAt: true, person: { select: { name: true } }, organizationSnapshot: { select: { name: true } } }
+  });
+  const scores = new Map<string, PersonalScore>();
+  for (const ledger of ledgers) {
+    const current = scores.get(ledger.personId);
+    scores.set(ledger.personId, {
+      personId: ledger.personId,
+      name: ledger.person.name,
+      organizationName: ledger.organizationSnapshot?.name ?? current?.organizationName ?? null,
+      points: (current?.points ?? 0) + ledger.points,
+      reachedAt: ledger.occurredAt
+    });
+  }
+  return [...scores.values()];
+}
+
+function previousMonth(month: string) {
+  const [year, value] = month.split("-").map(Number) as [number, number];
+  const date = new Date(Date.UTC(year, value - 2, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+async function currentOrganizationRanks(range: MonthRange): Promise<OrganizationRank[]> {
+  const [organizations, ledgers] = await Promise.all([
+    prisma.organization.findMany({
+      where: { type: { in: ["department", "business_entity"] } },
+      select: { id: true, name: true, type: true, memberships: { where: { active: true, primary: true, person: { status: "active" } }, select: { personId: true } } }
+    }),
+    prisma.challengePointLedger.findMany({ where: { voidedAt: null, organizationIdSnapshot: { not: null }, occurredAt: { gte: range.start, lt: range.end } }, select: { organizationIdSnapshot: true, personId: true, points: true } })
+  ]);
+  const points = new Map<string, number>();
+  const participants = new Map<string, Set<string>>();
+  for (const ledger of ledgers) {
+    const organizationId = ledger.organizationIdSnapshot!;
+    points.set(organizationId, (points.get(organizationId) ?? 0) + ledger.points);
+    if (!participants.has(organizationId)) participants.set(organizationId, new Set());
+    participants.get(organizationId)!.add(ledger.personId);
+  }
+  return rankOrganizationScores(organizations.map((organization) => ({
+    organizationId: organization.id,
+    name: organization.name,
+    type: organization.type,
+    activePersonCount: new Set(organization.memberships.map(({ personId }) => personId)).size,
+    participantCount: participants.get(organization.id)?.size ?? 0,
+    totalPoints: points.get(organization.id) ?? 0
+  })));
+}
+
+async function finalizedOrganizationRanks(range: MonthRange) {
+  let snapshots = await prisma.challengeMonthlyOrganizationSnapshot.findMany({ where: { month: new Date(`${range.month}-01T00:00:00.000Z`) }, include: { organization: { select: { name: true, type: true } } }, orderBy: { rank: "asc" } });
+  if (!snapshots.length) {
+    const ranks = await currentOrganizationRanks(range);
+    await prisma.challengeMonthlyOrganizationSnapshot.createMany({ data: ranks.map((entry) => ({ month: new Date(`${range.month}-01T00:00:00.000Z`), organizationId: entry.organizationId, activePersonCount: entry.activePersonCount, participantCount: entry.participantCount, totalPoints: entry.totalPoints, averagePoints: entry.averagePoints, rank: entry.rank, rewardEligible: entry.rewardEligible, finalizedAt: new Date() })), skipDuplicates: true });
+    snapshots = await prisma.challengeMonthlyOrganizationSnapshot.findMany({ where: { month: new Date(`${range.month}-01T00:00:00.000Z`) }, include: { organization: { select: { name: true, type: true } } }, orderBy: { rank: "asc" } });
+  }
+  return snapshots.map((entry) => ({ organizationId: entry.organizationId, name: entry.organization.name, type: entry.organization.type, activePersonCount: entry.activePersonCount, participantCount: entry.participantCount, totalPoints: entry.totalPoints, averagePoints: Number(entry.averagePoints), participationRate: entry.activePersonCount ? entry.participantCount / entry.activePersonCount : 0, rewardEligible: entry.rewardEligible, rank: entry.rank }));
+}
+
+export async function finalizePreviousChallengeMonth(now = new Date()) {
+  const current = challengeMonthRange(now, TIME_ZONE);
+  return finalizedOrganizationRanks(challengeMonthRangeFromKey(previousMonth(current.month), TIME_ZONE));
 }
 
 export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard }) {
@@ -137,5 +207,22 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
       prisma.challengePointLedger.aggregate({ where: { personId: principal.personId, voidedAt: null, occurredAt: { gte: day.start, lt: day.end } }, _sum: { points: true } })
     ]);
     return { data: { total: total._sum.points ?? 0, month: month.month, monthPoints: monthTotal._sum.points ?? 0, todayPoints: today._sum.points ?? 0 } };
+  });
+
+  app.get("/api/challenge/leaderboards", authenticated, async (request) => {
+    const principal = principalOf(request);
+    const query = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(), type: z.enum(["person", "organization"]) }).strict().parse(request.query);
+    const current = challengeMonthRange(new Date(), TIME_ZONE);
+    const range = query.month ? challengeMonthRangeFromKey(query.month, TIME_ZONE) : current;
+    if (range.start >= current.end) throw Object.assign(new Error("不能查询未来月份"), { statusCode: 400, code: "FUTURE_CHALLENGE_MONTH" });
+    if (query.type === "organization") {
+      const rows = range.end <= current.start ? await finalizedOrganizationRanks(range) : await currentOrganizationRanks(range);
+      return { data: { month: range.month, type: query.type, rows } };
+    }
+    const priorRange = challengeMonthRangeFromKey(previousMonth(range.month), TIME_ZONE);
+    const [scores, previousScores] = await Promise.all([personalScores(range), personalScores(priorRange)]);
+    const previousRanks = new Map(rankPersonalScores(previousScores).map((entry) => [entry.personId, entry.rank]));
+    const view = personalLeaderboardView(rankPersonalScores(scores, previousRanks), principal.personId);
+    return { data: { month: range.month, type: query.type, ...view, self: view.self ?? { personId: principal.personId, rank: null, rankChange: null, points: 0 } } };
   });
 }

@@ -62,5 +62,16 @@ export function challengeMonthRange(date: Date, timeZone: string) {
   return { month: `${year}-${String(month).padStart(2, "0")}`, start: zonedMidnight(year, month, 1, timeZone), end: zonedMidnight(nextYear, nextMonth, 1, timeZone) };
 }
 
+export function challengeMonthRangeFromKey(monthKey: string, timeZone: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
+  if (!match) throw new Error("INVALID_CHALLENGE_MONTH");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (year < 2000 || year > 2200 || month < 1 || month > 12) throw new Error("INVALID_CHALLENGE_MONTH");
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  return { month: monthKey, start: zonedMidnight(year, month, 1, timeZone), end: zonedMidnight(nextYear, nextMonth, 1, timeZone) };
+}
+
 const normalizedAnswer = (answer: unknown) => Array.isArray(answer) ? answer.map(String).sort() : [String(answer)].sort();
 export const challengeAnswersEqual = (actual: unknown, expected: unknown) => JSON.stringify(normalizedAnswer(actual)) === JSON.stringify(normalizedAnswer(expected));

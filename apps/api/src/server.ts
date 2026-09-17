@@ -28,7 +28,7 @@ import { cleanupExpiredSensitiveExports } from "./sensitive-export.js";
 import { cleanupExpiredReceivablesExports, processPendingReceivablesExports } from "./receivables-export.js";
 import { assertCsrfRequest } from "./csrf.js";
 import { registerCoursewareAuthoringRoutes } from "./routes/courseware-authoring.js";
-import { registerDailyChallengeRoutes } from "./routes/daily-challenge.js";
+import { finalizePreviousChallengeMonth, registerDailyChallengeRoutes } from "./routes/daily-challenge.js";
 
 const env = loadEnv();
 const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.newPassword", "body.code", "body.refreshToken", "body.token", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
@@ -86,6 +86,9 @@ if (existsSync(adminDist)) {
 const reminderTimer = setInterval(() => void generateScheduledReminders(env).catch((error) => app.log.error({ err: error }, "reminder_generation_failed")), 6 * 60 * 60 * 1000);
 reminderTimer.unref();
 void generateScheduledReminders(env).catch((error) => app.log.error({ err: error }, "reminder_generation_failed"));
+const challengeSnapshotTimer = setInterval(() => void finalizePreviousChallengeMonth().catch((error) => app.log.error({ err: error }, "challenge_month_snapshot_failed")), 6 * 60 * 60 * 1000);
+challengeSnapshotTimer.unref();
+void finalizePreviousChallengeMonth().catch((error) => app.log.error({ err: error }, "challenge_month_snapshot_failed"));
 const outboxTimer = setInterval(() => void processNotificationOutbox(env).catch(() => app.log.error("wechat_delivery_failed")), 60 * 1000);
 outboxTimer.unref();
 void processNotificationOutbox(env).catch(() => app.log.error("wechat_delivery_failed"));
@@ -118,6 +121,7 @@ let shutdownRun: Promise<void> | null = null;
 const shutdown = () => {
   if (shutdownRun) return shutdownRun;
   clearInterval(reminderTimer);
+  clearInterval(challengeSnapshotTimer);
   clearInterval(outboxTimer);
   clearInterval(sensitiveExportCleanupTimer);
   clearInterval(receivablesExportProcessorTimer);
