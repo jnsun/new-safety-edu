@@ -16,6 +16,7 @@ import { nextQuestionVersion, questionVersionSnapshot } from "../question-versio
 import { canPublishCourseware } from "../courseware-publish-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 import { decorateTodoPriority, sortTodoAssignments } from "../training-todo-priority.js";
+import { completionEvidenceError, latestLearningProgress, resumeUpdateData } from "../learning-progress-policy.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -55,6 +56,19 @@ async function assertAssignment(principal: Principal, assignmentId: string, mana
   if (!manager && principal.personId === assignment.personId) return assignment;
   if (await canAccessPerson(principal, assignment.personId) && (!assignment.batch.projectId || await canAccessProject(principal, assignment.batch.projectId))) return assignment;
   forbidden();
+}
+
+async function currentLearnerProgress(tx: Prisma.TransactionClient, assignmentId: string, versionId: string, personId: string) {
+  const rows = await tx.learningProgress.findMany({
+    where: { assignmentId, coursewareVersionId: versionId, assignment: { personId } },
+    select: { id: true, remediationRound: true, openedAt: true, reachedEndAt: true, completedAt: true, resumeState: true }
+  });
+  return latestLearningProgress(rows);
+}
+
+async function lockLearnerAssignment(tx: Prisma.TransactionClient, assignmentId: string, personId: string) {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM training_assignments WHERE id = ${assignmentId}::uuid AND person_id = ${personId}::uuid FOR UPDATE`;
+  if (!rows.length) forbidden("课件只能由本人学习");
 }
 
 const normalize = (value: unknown) => Array.isArray(value) ? [...value].map(String).sort() : [String(value)].sort();
@@ -390,19 +404,35 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     if (!progress.openedAt) await prisma.learningProgress.update({ where: { id: progress.id }, data: { openedAt: new Date() } });
     if (assignment.status === "pending_learning") await prisma.$executeRaw`UPDATE training_assignments SET status = 'learning'::"AssignmentStatus", updated_at = now() WHERE id = ${id}::uuid AND status = 'pending_learning'::"AssignmentStatus"`;
     const version = progress.coursewareVersion;
-    if (version.courseware.type === "rich_text") return { data: { title: version.courseware.title, type: version.courseware.type, richText: version.richText, resumeState: progress.resumeState } };
+    if (version.courseware.type === "rich_text") return { data: { title: version.courseware.title, type: version.courseware.type, richText: version.richText, resumeState: progress.resumeState, reachedEndAt: progress.reachedEndAt } };
     const token = await new SignJWT({ assignmentId: id, versionId, accountId: principal.accountId }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("5m").sign(new TextEncoder().encode(deps.env.UPLOAD_SIGNING_SECRET));
-    return { data: { title: version.courseware.title, type: version.courseware.type, viewerUrl: `${deps.env.PUBLIC_BASE_URL}/api/courseware-viewer?token=${encodeURIComponent(token)}`, resumeState: progress.resumeState } };
+    return { data: { title: version.courseware.title, type: version.courseware.type, viewerUrl: `${deps.env.PUBLIC_BASE_URL}/api/courseware-viewer?token=${encodeURIComponent(token)}`, resumeState: progress.resumeState, reachedEndAt: progress.reachedEndAt } };
   });
   app.patch("/api/assignments/:id/coursewares/:versionId/resume", authenticated, async (request) => {
     const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
     if (!principal.personId) forbidden("课件只能由本人学习");
-    const resumeState = resumeSchema.parse(request.body);
-    const progress = await prisma.learningProgress.findFirst({ where: { assignmentId: id, coursewareVersionId: versionId, assignment: { personId: principal.personId } }, orderBy: { remediationRound: "desc" }, select: { id: true } });
-    if (!progress) forbidden("课件只能由本人学习");
-    const updated = await prisma.learningProgress.updateMany({ where: { id: progress.id, assignment: { personId: principal.personId } }, data: { resumeState } });
-    if (!updated.count) forbidden("课件只能由本人学习");
+    const incoming = resumeSchema.parse(request.body);
+    const resumeState = await prisma.$transaction(async (tx) => {
+      await lockLearnerAssignment(tx, id, principal.personId!);
+      const progress = await currentLearnerProgress(tx, id, versionId, principal.personId!);
+      if (!progress) forbidden("课件只能由本人学习");
+      const updated = await tx.learningProgress.update({ where: { id: progress.id }, data: resumeUpdateData(progress.resumeState, incoming), select: { resumeState: true } });
+      return updated.resumeState;
+    });
     return { data: { resumeState } };
+  });
+  app.post("/api/assignments/:id/coursewares/:versionId/reached-end", authenticated, async (request) => {
+    const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
+    if (!principal.personId) forbidden("课件只能由本人学习");
+    const reachedEndAt = await prisma.$transaction(async (tx) => {
+      await lockLearnerAssignment(tx, id, principal.personId!);
+      const progress = await currentLearnerProgress(tx, id, versionId, principal.personId!);
+      if (!progress) forbidden("课件只能由本人学习");
+      if (!progress.openedAt) throw Object.assign(new Error("请先打开并浏览课件"), { statusCode: 409, code: "COURSEWARE_NOT_OPENED" });
+      if (progress.reachedEndAt) return progress.reachedEndAt;
+      return (await tx.learningProgress.update({ where: { id: progress.id }, data: { reachedEndAt: new Date() }, select: { reachedEndAt: true } })).reachedEndAt;
+    });
+    return { data: { reachedEndAt } };
   });
   app.get("/api/courseware-viewer", { logLevel: "silent" }, async (request, reply) => {
     const token = z.object({ token: z.string().min(1) }).parse(request.query).token;
@@ -417,18 +447,22 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     return reply.send(content);
   });
   app.post("/api/assignments/:id/learning/:versionId/complete", authenticated, async (request) => {
-    const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params); const assignment = await assertAssignment(principal, id);
-    if (principal.personId !== assignment.personId) forbidden("学习只能由本人完成");
-    if (!["pending_learning", "learning", "remediation_required"].includes(assignment.status)) throw Object.assign(new Error("当前任务不可完成学习"), { statusCode: 409, code: "INVALID_ASSIGNMENT_STATE" });
-    const progress = await prisma.learningProgress.findFirst({ where: { assignmentId: id, coursewareVersionId: versionId }, orderBy: { remediationRound: "desc" } });
-    if (!progress || progress.completedAt) throw Object.assign(new Error("课件不属于当前任务或已完成"), { statusCode: 409, code: "INVALID_PROGRESS" });
-    if (!progress.openedAt) throw Object.assign(new Error("请先打开并浏览课件"), { statusCode: 409, code: "COURSEWARE_NOT_OPENED" });
-    const now = new Date(); await prisma.learningProgress.update({ where: { id: progress.id }, data: { reachedEndAt: now, completedAt: now } });
-    const remaining = await prisma.learningProgress.count({ where: { assignmentId: id, completedAt: null } });
-    if (!remaining) {
-      const withBatch = await prisma.trainingAssignment.findUniqueOrThrow({ where: { id }, select: { batch: { select: { paperId: true } } } });
-      await prisma.trainingAssignment.update({ where: { id }, data: { status: withBatch.batch.paperId ? "pending_exam" : "pending_signature" } });
-    }
+    const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
+    if (!principal.personId) forbidden("学习只能由本人完成");
+    const remaining = await prisma.$transaction(async (tx) => {
+      await lockLearnerAssignment(tx, id, principal.personId!);
+      const assignment = await tx.trainingAssignment.findUniqueOrThrow({ where: { id }, select: { status: true, batch: { select: { paperId: true } } } });
+      if (!["pending_learning", "learning", "remediation_required"].includes(assignment.status)) throw Object.assign(new Error("当前任务不可完成学习"), { statusCode: 409, code: "INVALID_ASSIGNMENT_STATE" });
+      const progress = await currentLearnerProgress(tx, id, versionId, principal.personId!);
+      if (!progress || progress.completedAt) throw Object.assign(new Error("课件不属于当前任务或已完成"), { statusCode: 409, code: "INVALID_PROGRESS" });
+      const evidenceError = completionEvidenceError(progress);
+      if (evidenceError === "COURSEWARE_NOT_OPENED") throw Object.assign(new Error("请先打开并浏览课件"), { statusCode: 409, code: evidenceError });
+      if (evidenceError === "COURSEWARE_END_NOT_REACHED") throw Object.assign(new Error("请先浏览到课件末尾或确认已完成全部互动内容"), { statusCode: 409, code: evidenceError });
+      await tx.learningProgress.update({ where: { id: progress.id }, data: { completedAt: new Date() } });
+      const count = await tx.learningProgress.count({ where: { assignmentId: id, completedAt: null } });
+      if (!count) await tx.trainingAssignment.update({ where: { id }, data: { status: assignment.batch.paperId ? "pending_exam" : "pending_signature" } });
+      return count;
+    });
     return { data: { remaining } };
   });
 

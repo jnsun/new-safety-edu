@@ -9,7 +9,9 @@
 .reader-content { padding: 38rpx 34rpx; }
 .reader-content rich-text { color: #2c2c2e; font-size: 31rpx; line-height: 1.9; word-break: break-word; }
 .section-title { display: block; margin-bottom: 10rpx; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
-.html-button, .finish-button { width: 100%; }
+.html-button, .attestation-button, .finish-button { width: 100%; }
+.attestation-button { margin-top: 18rpx; }
+.attestation-success { display: block; margin-top: 18rpx; color: var(--success); font-size: 28rpx; line-height: 1.5; font-weight: 550; }
 .sync-warning { display: block; margin-top: 18rpx; color: var(--warning); font-size: 28rpx; line-height: 1.5; }
 .success-copy { color: var(--success); }
 .action-error { margin-top: 18rpx; }

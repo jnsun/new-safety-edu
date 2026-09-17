@@ -26,17 +26,21 @@
     <view wx:else class="html-panel">
       <text class="section-title">打开受控课件</text>
       <text class="section-copy">链接五分钟内有效。完成阅读后返回本页确认；系统无法读取或恢复 HTML 页面内部的滚动位置。</text>
-      <button class="secondary html-button" bindtap="openHtml">{{htmlOpened ? '再次打开 HTML 课件' : '打开 HTML 课件'}}</button>
+      <button class="secondary html-button" bindtap="openHtml">{{htmlNavigationSucceeded ? '再次打开 HTML 课件' : '打开 HTML 课件'}}</button>
+      <button wx:if="{{htmlNavigationSucceeded && !atEnd}}" class="secondary attestation-button" loading="{{reachingEnd}}" disabled="{{reachingEnd}}" bindtap="attestHtmlComplete">本人确认已完成全部互动内容</button>
+      <text wx:if="{{atEnd}}" class="attestation-success">已记录本人完成确认。</text>
     </view>
 
     <view class="finish-panel">
       <text class="section-title">完成本次学习</text>
       <text wx:if="{{content.type === 'rich_text' && !atEnd}}" class="section-copy">继续向下阅读，到达课件末尾后即可完成。</text>
       <text wx:elif="{{content.type === 'rich_text'}}" class="section-copy success-copy">已到达课件末尾，可以完成本次学习。</text>
-      <text wx:else class="section-copy">打开并完成 HTML 课件后，返回这里确认。</text>
+      <text wx:elif="{{!htmlNavigationSucceeded}}" class="section-copy">请先打开 HTML 课件并完成互动内容。</text>
+      <text wx:elif="{{!atEnd}}" class="section-copy">返回后点击“本人确认已完成全部互动内容”。</text>
+      <text wx:else class="section-copy success-copy">本人完成确认已记录，可以完成本次学习。</text>
       <text wx:if="{{syncWarning}}" class="sync-warning">{{syncWarning}}</text>
       <text wx:if="{{error}}" class="error action-error">{{error}}</text>
-      <button class="primary finish-button" loading="{{busy}}" disabled="{{content.type === 'rich_text' ? !atEnd : !htmlOpened}}" bindtap="complete">完成本次学习</button>
+      <button class="primary finish-button" loading="{{busy}}" disabled="{{!atEnd}}" bindtap="complete">完成本次学习</button>
     </view>
   </block>
 </view>

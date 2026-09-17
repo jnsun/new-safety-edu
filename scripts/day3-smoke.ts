@@ -42,6 +42,8 @@ async function main() {
   await call(`/api/me/assignments/${assignments[1]!.id}`, { headers: headers(token) }, 404);
   await call(`/api/assignments/${assignments[0]!.id}/learning/${version.id}/complete`, { method: "POST", headers: headers(token) }, 409);
   await call(`/api/assignments/${assignments[0]!.id}/coursewares/${version.id}`, { headers: headers(token) });
+  await call(`/api/assignments/${assignments[0]!.id}/learning/${version.id}/complete`, { method: "POST", headers: headers(token) }, 409);
+  await call(`/api/assignments/${assignments[0]!.id}/coursewares/${version.id}/reached-end`, { method: "POST", headers: headers(token) });
   await call(`/api/assignments/${assignments[0]!.id}/learning/${version.id}/complete`, { method: "POST", headers: headers(token) });
 
   const [first, concurrentStart] = await Promise.all([call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) }), call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) })]);
@@ -54,6 +56,7 @@ async function main() {
   assert.ok(submissions.every((result) => result.assignmentStatus === "remediation_required"));
   await assert.rejects(() => prisma.examAttempt.update({ where: { id: first.id }, data: { score: 100 } }));
   await call(`/api/assignments/${assignments[0]!.id}/coursewares/${version.id}`, { headers: headers(token) });
+  await call(`/api/assignments/${assignments[0]!.id}/coursewares/${version.id}/reached-end`, { method: "POST", headers: headers(token) });
   await call(`/api/assignments/${assignments[0]!.id}/learning/${version.id}/complete`, { method: "POST", headers: headers(token) });
   const second = await call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) });
   await call(`/api/attempts/${second.id}/answers`, { method: "PUT", headers: headers(token), body: JSON.stringify({ answers: [{ questionId: question.id, answer: ["错误"] }] }) });
@@ -63,6 +66,7 @@ async function main() {
   assert.equal(adminLogin.status, 200); const managerCookie = adminLogin.headers.get("set-cookie")?.split(";", 1)[0]; assert.ok(managerCookie);
   await call(`/api/assignments/${assignments[0]!.id}/unlock`, { method: "POST", headers: { cookie: managerCookie, "content-type": "application/json" }, body: JSON.stringify({ reason: "Day3 smoke unlock" }) });
   await call(`/api/assignments/${assignments[0]!.id}/coursewares/${version.id}`, { headers: headers(token) });
+  await call(`/api/assignments/${assignments[0]!.id}/coursewares/${version.id}/reached-end`, { method: "POST", headers: headers(token) });
   await call(`/api/assignments/${assignments[0]!.id}/learning/${version.id}/complete`, { method: "POST", headers: headers(token) });
   const third = await call(`/api/assignments/${assignments[0]!.id}/attempts/start`, { method: "POST", headers: headers(token) });
   await call(`/api/attempts/${third.id}/answers`, { method: "PUT", headers: headers(token), body: JSON.stringify({ answers: [{ questionId: question.id, answer: ["正确"] }] }) });
