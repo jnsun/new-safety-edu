@@ -1,6 +1,6 @@
 import { DeleteOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Input, InputNumber, Select, Space, Typography } from "antd";
-import { useReducer, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { BlockEditor } from "./BlockEditor";
 import { MobilePreview } from "./MobilePreview";
 import {
@@ -19,24 +19,37 @@ import "./courseware.css";
 type Props = {
   initialDocument?: StructuredCoursewareDocument;
   initiallyDirty?: boolean;
+  coursewareTitle: string;
   onSave: (document: StructuredCoursewareDocument) => Promise<void>;
   onClose: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 };
 
 const blockOptions = Object.entries(COURSEWARE_BLOCK_LABELS).map(([value, label]) => ({ value, label }));
 
-export function CoursewareEditor({ initialDocument, initiallyDirty = false, onSave, onClose }: Props) {
+export function CoursewareEditor({ initialDocument, initiallyDirty = false, coursewareTitle, onSave, onClose, onDirtyChange }: Props) {
   const [state, dispatch] = useReducer(editorReducer, {
-    document: initialDocument ?? createEmptyCoursewareDocument(),
-    dirty: initiallyDirty || initialDocument === undefined
+    document: { ...(initialDocument ?? createEmptyCoursewareDocument()), title: coursewareTitle },
+    dirty: initiallyDirty || initialDocument === undefined,
+    revision: 0,
+    savedRevision: initiallyDirty || initialDocument === undefined ? null : 0
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>();
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
-  const [saved, setSaved] = useState(false);
+
+  useEffect(() => { onDirtyChange?.(state.dirty); }, [onDirtyChange, state.dirty]);
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent) => {
+      if (!state.dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [state.dirty]);
 
   const change = (action: EditorAction) => {
-    setSaved(false);
     setSaveError(undefined);
     setValidationErrors([]);
     dispatch(action);
@@ -44,9 +57,9 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, onSa
   const blockKeys = state.document.units.flatMap((unit) => unit.blocks.map((block) => block.key));
 
   const save = async () => {
-    const parsed = validateCoursewareDocument(state.document);
+    const revision = state.revision;
+    const parsed = validateCoursewareDocument({ ...state.document, title: coursewareTitle });
     if (!parsed.success) {
-      setSaved(false);
       setValidationErrors(parsed.error.issues.slice(0, 8).map((issue) => `${issue.path.join(" → ") || "课程"}：${issue.message}`));
       return;
     }
@@ -54,8 +67,7 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, onSa
     setSaveError(undefined);
     try {
       await onSave(parsed.data);
-      dispatch({ type: "saved" });
-      setSaved(true);
+      dispatch({ type: "saved", revision });
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "草稿保存失败，请稍后重试");
     } finally {
@@ -70,7 +82,7 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, onSa
         <Typography.Text type="secondary">纵向组织内容块，右侧同步预览员工手机上的阅读效果。</Typography.Text>
       </div>
       <Space wrap>
-        <Typography.Text type={state.dirty ? "warning" : "secondary"}>{saving ? "正在保存…" : saved ? "草稿已保存" : state.dirty ? "有未保存更改" : "草稿无更改"}</Typography.Text>
+        <Typography.Text type={state.dirty ? "warning" : "secondary"}>{saving ? "正在保存…" : !state.dirty && state.savedRevision === state.revision ? "草稿已保存" : state.dirty ? "有未保存更改" : "草稿无更改"}</Typography.Text>
         <Button onClick={onClose}>返回版本列表</Button>
         <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存草稿</Button>
       </Space>
@@ -83,7 +95,8 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, onSa
       <main className="courseware-editor-main">
         <section className="courseware-document-fields" aria-labelledby="courseware-basic-heading">
           <div className="courseware-section-heading"><div><Typography.Title level={5} id="courseware-basic-heading">课程基本信息</Typography.Title><Typography.Text type="secondary">用于任务详情和课程封面。</Typography.Text></div></div>
-          <label>课程标题<Input value={state.document.title} maxLength={180} showCount onChange={(event) => change({ type: "document", patch: { title: event.target.value } })} /></label>
+          <label>课程标题<Input value={coursewareTitle} readOnly aria-readonly="true" /></label>
+          <Typography.Text type="secondary">课程标题以课件主档为准，当前内容编辑器不会修改课件名称。</Typography.Text>
           <label>课程摘要<Input.TextArea value={state.document.summary} rows={3} maxLength={2000} showCount onChange={(event) => change({ type: "document", patch: { summary: event.target.value } })} /></label>
           <label>学习目标（每行一项）<Input.TextArea value={state.document.learningObjectives.join("\n")} rows={3} onChange={(event) => change({ type: "document", patch: { learningObjectives: event.target.value.split("\n") } })} /></label>
           <label>预计总时长（分钟）<InputNumber min={1} max={480} value={state.document.estimatedMinutes} onChange={(value) => change({ type: "document", patch: { estimatedMinutes: value ?? 1 } })} /></label>
@@ -121,7 +134,7 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, onSa
           />
         </section>) : <Empty description="课程至少需要一个单元" />}
       </main>
-      <MobilePreview document={state.document} />
+      <MobilePreview document={{ ...state.document, title: coursewareTitle }} />
     </div>
   </div>;
 }

@@ -4,11 +4,8 @@ import { DownloadOutlined, UploadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UploadProps } from "antd";
 import { api, json } from "./api";
-import { CoursewareEditor } from "./courseware/CoursewareEditor";
-import { createEmptyCoursewareDocument, validateCoursewareDocument, type StructuredCoursewareDocument } from "./courseware/types";
+export { CoursewarePage } from "./courseware/CoursewarePage";
 
-type Version = { id: string; version: number; status: string; structuredContent?: unknown };
-type Courseware = { id: string; title: string; type: string; versions: Version[] };
 type Template = { id: string; name: string; type: string; items: Array<{ coursewareVersion: { courseware: { title: string }; version: number } }> };
 type Question = { id: string; prompt: string; type: string; options: string[]; correct: string[]; explanation?: string | null; currentVersion: number; active: boolean };
 type Bank = { id: string; name: string; questions: Question[] };
@@ -18,55 +15,11 @@ type Batch = { id: string; name: string; type: string; assignments: unknown[]; p
 type Organization = { id: string; name: string; type: string };
 type Principal = { roles: Array<{ role: string; scopeType: string; scopeId?: string | null }> };
 type AutomationConfig = { id: string; type: "three_level" | "project_induction"; scopeType: string; scopeId?: string | null; active: boolean; template: { name: string }; paper: { name: string } };
-type PublishGrant = { id: string; person: { id: string; name: string }; scopeType: "organization" | "project"; scopeId: string; createdAt: string };
-type PersonOption = { id: string; name: string };
 type ImportResult = { created: number; valid: number; failed: number; errors: Array<{ rowNumber: number; reason: string }> };
 const typeNames: Record<string, string> = { three_level: "三级安全教育", project_induction: "项目入场教育", routine: "日常/年度培训", change_update: "变化内容培训" };
 const questionTypeNames: Record<string, string> = { single_choice: "单选题", multiple_choice: "多选题", true_false: "判断题" };
 const types = Object.entries(typeNames).map(([value, label]) => ({ value, label }));
 const scope = { scopeType: "company", scopeId: null };
-
-export function CoursewarePage() {
-  const qc = useQueryClient(); const coursewares = useQuery({ queryKey: ["coursewares"], queryFn: () => api<Courseware[]>("/api/coursewares") }); const templates = useQuery({ queryKey: ["training-templates"], queryFn: () => api<Template[]>("/api/training-templates") });
-  const me = useQuery({ queryKey: ["me"], queryFn: () => api<Principal>("/api/auth/me") }); const companyAdmin = me.data?.roles.some(({ role }) => role === "company_admin") ?? false;
-  const people = useQuery({ queryKey: ["persons"], queryFn: () => api<PersonOption[]>("/api/persons"), enabled: companyAdmin });
-  const organizations = useQuery({ queryKey: ["organizations"], queryFn: () => api<Organization[]>("/api/organizations"), enabled: companyAdmin });
-  const projects = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects"), enabled: companyAdmin });
-  const grants = useQuery({ queryKey: ["courseware-publish-grants"], queryFn: () => api<PublishGrant[]>("/api/courseware-publish-grants"), enabled: companyAdmin });
-  const [courseOpen, setCourseOpen] = useState(false); const [templateOpen, setTemplateOpen] = useState(false); const [grantOpen, setGrantOpen] = useState(false); const [grantScopeType, setGrantScopeType] = useState<"organization" | "project">("organization"); const [kind, setKind] = useState<"rich_text" | "single_html" | "structured">("rich_text"); const [fileId, setFileId] = useState<string>();
-  const [structuredEditor, setStructuredEditor] = useState<{ mode: "create"; document: StructuredCoursewareDocument } | { mode: "edit"; versionId: string; document: StructuredCoursewareDocument }>();
-  const createCourse = useMutation({ mutationFn: (v: Record<string, unknown>) => api<Courseware>("/api/coursewares", json("POST", { ...scope, ...v, type: kind, fileId })), onSuccess: () => { setCourseOpen(false); void qc.invalidateQueries({ queryKey: ["coursewares"] }); }, onError: (e) => message.error(e.message) });
-  const createTemplate = useMutation({ mutationFn: (v: unknown) => api("/api/training-templates", json("POST", { ...scope, ...(v as object) })), onSuccess: () => { setTemplateOpen(false); void qc.invalidateQueries({ queryKey: ["training-templates"] }); }, onError: (e) => message.error(e.message) });
-  const upload: NonNullable<UploadProps["customRequest"]> = async ({ file, onSuccess, onError }) => { try { const body = new FormData(); body.append("file", file as Blob); const result = await api<{ id: string }>("/api/files?kind=courseware", { method: "POST", body }); setFileId(result.id); onSuccess?.(result); } catch (e) { onError?.(e as Error); } };
-  const versionOptions = (coursewares.data ?? []).flatMap((c) => c.versions.filter((v) => v.status === "published").map((v) => ({ value: v.id, label: `${c.title} v${v.version}` })));
-  const saveStructured = async (document: StructuredCoursewareDocument) => {
-    if (!structuredEditor) return;
-    if (structuredEditor.mode === "create") {
-      const created = await api<Courseware>("/api/coursewares", json("POST", { ...scope, title: document.title, type: "structured", structuredContent: document }));
-      const version = created.versions[0];
-      if (!version) throw new Error("草稿已创建，但未返回课件版本");
-      setStructuredEditor({ mode: "edit", versionId: version.id, document });
-    } else {
-      await api(`/api/courseware-versions/${structuredEditor.versionId}/draft`, json("PUT", { structuredContent: document }));
-      setStructuredEditor({ ...structuredEditor, document });
-    }
-    message.success("结构化课件草稿已保存");
-    void qc.invalidateQueries({ queryKey: ["coursewares"] });
-  };
-  const editStructured = (version: Version) => {
-    const parsed = validateCoursewareDocument(version.structuredContent);
-    if (!parsed.success) { message.error("该草稿内容不符合当前结构化课件规范，无法安全编辑"); return; }
-    setStructuredEditor({ mode: "edit", versionId: version.id, document: parsed.data });
-  };
-  return <><Space className="page-title"><Typography.Title level={3}>课件与模板</Typography.Title><Button onClick={() => { setKind("rich_text"); setFileId(undefined); setCourseOpen(true); }}>新建课件</Button><Button type="primary" onClick={() => setTemplateOpen(true)}>新建模板</Button>{companyAdmin && <Button onClick={() => setGrantOpen(true)}>发布权限</Button>}</Space><Tabs items={[
-    { key: "course", label: "课件版本", children: <Table rowKey="id" dataSource={coursewares.data} columns={[{ title: "名称", dataIndex: "title" }, { title: "类型", dataIndex: "type", render: (v: string) => ({ rich_text: "图文课件", single_html: "HTML 交互课件", structured: "结构化互动课件" })[v] ?? v }, { title: "版本", render: (_, row: Courseware) => <Space wrap>{row.versions.map((v) => <Tag key={v.id} color={v.status === "published" ? "green" : "default"}>v{v.version} {v.status === "published" ? "已发布" : "草稿"}{row.type === "structured" && v.status === "draft" && <Button type="link" size="small" onClick={() => editStructured(v)}>编辑草稿</Button>}<Button type="link" size="small" disabled={v.status === "published"} onClick={async () => { await api(`/api/courseware-versions/${v.id}/publish`, { method: "POST" }); void coursewares.refetch(); }}>发布</Button></Tag>)}</Space> }]} /> },
-    { key: "template", label: "培训模板", children: <Table rowKey="id" dataSource={templates.data} columns={[{ title: "名称", dataIndex: "name" }, { title: "培训类型", dataIndex: "type", render: (v: string) => typeNames[v] ?? v }, { title: "课件顺序", render: (_, row: Template) => row.items.map((i) => `${i.coursewareVersion.courseware.title} v${i.coursewareVersion.version}`).join(" → ") }]} /> }
-  ]} />
-  <Modal title="新建课件" open={courseOpen} footer={null} onCancel={() => setCourseOpen(false)}><Form layout="vertical" onFinish={(values) => { if (kind !== "structured") { createCourse.mutate(values); return; } const document = createEmptyCoursewareDocument(); document.title = String(values.title); setCourseOpen(false); setStructuredEditor({ mode: "create", document }); }}><Form.Item name="title" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item label="类型"><Select value={kind} onChange={setKind} options={[{ value: "rich_text", label: "图文课件" }, { value: "single_html", label: "单文件 HTML" }, { value: "structured", label: "结构化互动课件" }]} /></Form.Item>{kind === "rich_text" && <Form.Item name="richText" label="图文内容" rules={[{ required: true }]}><Input.TextArea rows={8} /></Form.Item>}{kind === "single_html" && <Form.Item label="HTML 文件" required><Upload accept=".html,text/html" maxCount={1} customRequest={upload}><Button icon={<UploadOutlined />}>上传</Button></Upload></Form.Item>}<Button type="primary" htmlType="submit" loading={createCourse.isPending}>{kind === "structured" ? "进入内容编辑器" : "创建草稿"}</Button></Form></Modal>
-  <Modal title="编辑结构化课件" open={!!structuredEditor} footer={null} width="calc(100vw - 48px)" destroyOnHidden onCancel={() => setStructuredEditor(undefined)}>{structuredEditor && <CoursewareEditor key={structuredEditor.mode === "create" ? "new" : structuredEditor.versionId} initialDocument={structuredEditor.document} initiallyDirty={structuredEditor.mode === "create"} onSave={saveStructured} onClose={() => setStructuredEditor(undefined)} />}</Modal>
-  <Modal title="新建培训模板" open={templateOpen} footer={null} onCancel={() => setTemplateOpen(false)}><Form layout="vertical" onFinish={(v) => createTemplate.mutate(v)}><Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="type" label="培训类型" rules={[{ required: true }]}><Select options={types} /></Form.Item><Form.Item name="coursewareVersionIds" label="已发布课件（选择顺序即展示顺序）" rules={[{ required: true }]}><Select mode="multiple" options={versionOptions} /></Form.Item><Button type="primary" htmlType="submit">保存模板</Button></Form></Modal>
-  <Modal title="课件发布权限" open={grantOpen} footer={null} width={760} onCancel={() => setGrantOpen(false)}><Table size="small" rowKey="id" pagination={false} dataSource={grants.data} columns={[{ title: "人员", render: (_, row: PublishGrant) => row.person.name }, { title: "范围", render: (_, row: PublishGrant) => `${row.scopeType === "organization" ? "组织" : "项目"} · ${[...(organizations.data ?? []), ...(projects.data ?? [])].find((item) => item.id === row.scopeId)?.name ?? row.scopeId}` }, { title: "操作", render: (_, row: PublishGrant) => <Button danger size="small" onClick={() => { let reason = ""; Modal.confirm({ title: "取消发布权限", content: <Input.TextArea placeholder="请输入取消原因" onChange={(event) => { reason = event.target.value; }} />, onOk: async () => { if (reason.trim().length < 2) throw new Error("请输入至少 2 个字的原因"); await api(`/api/courseware-publish-grants/${row.id}`, json("DELETE", { reason: reason.trim() })); message.success("发布权限已取消"); void grants.refetch(); } }); }}>取消</Button> }]} /><Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => { await api("/api/courseware-publish-grants", json("POST", values)); message.success("发布权限已授予"); void grants.refetch(); }} initialValues={{ scopeType: "organization" }}><Form.Item name="personId" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" placeholder="选择管理员" style={{ width: 180 }} options={(people.data ?? []).map((person) => ({ value: person.id, label: person.name }))} /></Form.Item><Form.Item name="scopeType" rules={[{ required: true }]}><Select style={{ width: 120 }} options={[{ value: "organization", label: "组织" }, { value: "project", label: "项目" }]} onChange={setGrantScopeType} /></Form.Item><Form.Item name="scopeId" rules={[{ required: true }]}><Select placeholder="选择范围" style={{ width: 180 }} options={(grantScopeType === "organization" ? organizations.data ?? [] : projects.data ?? []).map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="reason" rules={[{ required: true, min: 2 }]}><Input placeholder="授权原因" /></Form.Item><Button type="primary" htmlType="submit">授予</Button></Form></Modal></>;
-}
 
 export function QuestionsPage() {
   const qc = useQueryClient(); const banks = useQuery({ queryKey: ["question-banks"], queryFn: () => api<Bank[]>("/api/question-banks") }); const papers = useQuery({ queryKey: ["exam-papers"], queryFn: () => api<Paper[]>("/api/exam-papers") }); const [bankOpen, setBankOpen] = useState(false); const [questionOpen, setQuestionOpen] = useState(false); const [editingQuestion, setEditingQuestion] = useState<Question>(); const [paperOpen, setPaperOpen] = useState(false); const [importOpen, setImportOpen] = useState(false); const [importBankId, setImportBankId] = useState<string>(); const [importResult, setImportResult] = useState<ImportResult>(); const [mode, setMode] = useState("fixed");

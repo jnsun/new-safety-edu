@@ -46,9 +46,14 @@ export async function assertCoursewareFile(principal: Principal, fileId: string)
 
 async function visibleScope(principal: Principal) {
   if (isCompanyAdmin(principal)) return {};
+  const organizationIds = await accessibleOrganizationIds(principal);
+  const organizationProjectIds = organizationIds.length
+    ? (await prisma.project.findMany({ where: { responsibleOrganizationId: { in: organizationIds } }, select: { id: true } })).map(({ id }) => id)
+    : [];
+  const visibleProjectIds = [...new Set([...projectScopeIds(principal), ...organizationProjectIds])];
   return { OR: [
-    { scopeType: "organization" as const, scopeId: { in: await accessibleOrganizationIds(principal) } },
-    { scopeType: "project" as const, scopeId: { in: projectScopeIds(principal) } }
+    { scopeType: "organization" as const, scopeId: { in: organizationIds } },
+    { scopeType: "project" as const, scopeId: { in: visibleProjectIds } }
   ] };
 }
 

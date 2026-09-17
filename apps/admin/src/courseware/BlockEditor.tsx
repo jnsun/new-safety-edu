@@ -11,7 +11,7 @@ import { Button, Input, message, Select, Space, Typography, Upload } from "antd"
 import type { UploadProps } from "antd";
 import { api } from "../api";
 import type { CoursewareBlock } from "./types";
-import { COURSEWARE_BLOCK_LABELS } from "./types";
+import { COURSEWARE_BLOCK_LABELS, normalizeCheckpointQuestionType } from "./types";
 
 type Props = {
   block: CoursewareBlock;
@@ -71,9 +71,12 @@ export function BlockEditor({ block, first, last, onChange, onDuplicate, onRemov
 
       {block.type === "checkpoint" && <>
         <label>题目<Input.TextArea value={block.prompt} rows={3} maxLength={2000} onChange={(event) => onChange({ prompt: event.target.value })} /></label>
-        <label>题型<Select value={block.questionType} options={[{ value: "single_choice", label: "单选" }, { value: "multiple_choice", label: "多选" }, { value: "true_false", label: "判断" }]} onChange={(questionType) => onChange(questionType === "true_false" ? { questionType, options: ["正确", "错误"], correctIndexes: [0] } : { questionType })} /></label>
-        <label>选项（每行一个）<Input.TextArea value={block.options.join("\n")} rows={4} disabled={block.questionType === "true_false"} onChange={(event) => onChange({ options: lines(event.target.value) })} /></label>
-        <label>正确选项<Select mode="multiple" value={block.correctIndexes} options={block.options.map((option, index) => ({ value: index, label: `${index + 1}. ${option || "未填写"}` }))} onChange={(correctIndexes) => onChange({ correctIndexes })} /></label>
+        <label>题型<Select value={block.questionType} options={[{ value: "single_choice", label: "单选" }, { value: "multiple_choice", label: "多选" }, { value: "true_false", label: "判断" }]} onChange={(questionType) => onChange(normalizeCheckpointQuestionType(block, questionType))} /></label>
+        <label>选项（每行一个）<Input.TextArea value={block.options.join("\n")} rows={4} disabled={block.questionType === "true_false"} onChange={(event) => { const options = lines(event.target.value); const validIndexes = block.correctIndexes.filter((index) => index < options.length); onChange({ options, correctIndexes: block.questionType === "multiple_choice" ? (validIndexes.length ? validIndexes : [0]) : [validIndexes[0] ?? 0] }); }} /></label>
+        <label>正确选项{block.questionType === "multiple_choice"
+          ? <Select mode="multiple" value={block.correctIndexes} options={block.options.map((option, index) => ({ value: index, label: `${index + 1}. ${option || "未填写"}` }))} onChange={(correctIndexes) => onChange({ correctIndexes })} />
+          : <Select<number> value={block.correctIndexes[0] ?? null} options={block.options.map((option, index) => ({ value: index, label: `${index + 1}. ${option || "未填写"}` }))} onChange={(correctIndex) => onChange({ correctIndexes: [correctIndex] })} />}
+        </label>
         <label>答题解析<Input.TextArea value={block.explanation} rows={3} maxLength={4000} onChange={(event) => onChange({ explanation: event.target.value })} /></label>
       </>}
 

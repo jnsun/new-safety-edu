@@ -20,10 +20,12 @@ export const COURSEWARE_BLOCK_LABELS: Record<CoursewareBlockType, string> = {
 export type CoursewareEditorState = {
   document: StructuredCoursewareDocument;
   dirty: boolean;
+  revision: number;
+  savedRevision: number | null;
 };
 
 export type EditorAction =
-  | { type: "document"; patch: Partial<Pick<StructuredCoursewareDocument, "title" | "summary" | "learningObjectives" | "estimatedMinutes">> }
+  | { type: "document"; patch: Partial<Pick<StructuredCoursewareDocument, "summary" | "learningObjectives" | "estimatedMinutes">> }
   | { type: "add_unit" }
   | { type: "update_unit"; unitKey: string; patch: { title?: string; estimatedMinutes?: number } }
   | { type: "remove_unit"; unitKey: string }
@@ -32,7 +34,19 @@ export type EditorAction =
   | { type: "duplicate"; unitKey: string; key: string }
   | { type: "remove"; unitKey: string; key: string }
   | { type: "move"; unitKey: string; key: string; direction: -1 | 1 }
-  | { type: "saved" };
+  | { type: "saved"; revision: number };
+
+type CheckpointBlock = Extract<CoursewareBlock, { type: "checkpoint" }>;
+
+export function normalizeCheckpointQuestionType(block: CheckpointBlock, questionType: CheckpointBlock["questionType"]) {
+  const options = questionType === "true_false" ? ["正确", "错误"] : block.options;
+  const validIndexes = [...new Set(block.correctIndexes)].filter((index) => index < options.length);
+  return {
+    questionType,
+    options,
+    correctIndexes: questionType === "multiple_choice" ? (validIndexes.length ? validIndexes : [0]) : [validIndexes[0] ?? 0]
+  };
+}
 
 function nextKey(prefix: string, usedKeys: Iterable<string>) {
   const used = new Set(usedKeys);
@@ -78,21 +92,21 @@ function updateUnit(
 }
 
 export function editorReducer(state: CoursewareEditorState, action: EditorAction): CoursewareEditorState {
-  if (action.type === "saved") return { ...state, dirty: false };
-  if (action.type === "document") return { document: { ...state.document, ...action.patch }, dirty: true };
+  if (action.type === "saved") return action.revision === state.revision ? { ...state, dirty: false, savedRevision: action.revision } : state;
+  const changed = (document: StructuredCoursewareDocument): CoursewareEditorState => ({ document, dirty: true, revision: state.revision + 1, savedRevision: state.savedRevision });
+  if (action.type === "document") return changed({ ...state.document, ...action.patch });
   if (action.type === "add_unit") {
     const key = nextKey("unit", state.document.units.map((unit) => unit.key));
-    return { document: { ...state.document, units: [...state.document.units, { key, title: `第${state.document.units.length + 1}单元`, estimatedMinutes: 5, blocks: [] }] }, dirty: true };
+    return changed({ ...state.document, units: [...state.document.units, { key, title: `第${state.document.units.length + 1}单元`, estimatedMinutes: 5, blocks: [] }] });
   }
   if (action.type === "update_unit") {
-    return { document: updateUnit(state.document, action.unitKey, (unit) => ({ ...unit, ...action.patch })), dirty: true };
+    return changed(updateUnit(state.document, action.unitKey, (unit) => ({ ...unit, ...action.patch })));
   }
   if (action.type === "remove_unit") {
-    return { document: { ...state.document, units: state.document.units.filter((unit) => unit.key !== action.unitKey) }, dirty: true };
+    return changed({ ...state.document, units: state.document.units.filter((unit) => unit.key !== action.unitKey) });
   }
 
-  return {
-    document: updateUnit(state.document, action.unitKey, (unit) => {
+  return changed(updateUnit(state.document, action.unitKey, (unit) => {
       if (action.type === "add") {
         const blocks = [...unit.blocks];
         blocks.splice(action.index ?? blocks.length, 0, action.block);
@@ -118,9 +132,7 @@ export function editorReducer(state: CoursewareEditorState, action: EditorAction
       const current = unit.blocks[index]!;
       const replacement = { ...current, ...action.patch, key: current.key, type: current.type } as CoursewareBlock;
       return { ...unit, blocks: unit.blocks.map((block, blockIndex) => blockIndex === index ? replacement : block) };
-    }),
-    dirty: true
-  };
+    }));
 }
 
 export function validateCoursewareDocument(input: unknown) {

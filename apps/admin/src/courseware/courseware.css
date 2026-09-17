@@ -242,11 +242,30 @@
   gap: 8px;
 }
 
-.preview-options span {
+.preview-options button {
+  width: 100%;
+  text-align: left;
+  color: #1d1d1f;
   padding: 10px 12px;
   border: 1px solid #d2d2d7;
   border-radius: 10px;
   background: #fff;
+  cursor: pointer;
+}
+
+.preview-options button:hover,
+.preview-options button:focus-visible,
+.preview-options button.selected {
+  border-color: #0071e3;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, .14);
+}
+
+.preview-choice-result {
+  padding: 12px;
+  border-radius: 10px;
+  background: #e8f2ff;
+  color: #12385d;
 }
 
 .preview-label {
