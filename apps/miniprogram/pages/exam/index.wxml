@@ -1,1 +1,84 @@
-<view class="page"><view class="exam-head"><text>第 {{attempt.attemptNumber || '-'}} 次考试</text><text class="timer">剩余 {{remaining}}</text></view><view wx:if="{{error}}" class="card error">{{error}}</view><view wx:for="{{questions}}" wx:key="id" class="card question"><text class="title">{{index + 1}}. {{item.prompt}}</text><text class="muted">{{item.type === 'multiple_choice' ? '多选题' : (item.type === 'true_false' ? '判断题' : '单选题')}}</text><checkbox-group wx:if="{{item.type === 'multiple_choice'}}" data-id="{{item.id}}" bindchange="chooseMany"><label wx:for="{{item.options}}" wx:for-item="option" wx:key="label" class="option"><checkbox value="{{option.label}}" checked="{{option.checked}}"/>{{option.label}}</label></checkbox-group><radio-group wx:else data-id="{{item.id}}" bindchange="chooseOne"><label wx:for="{{item.options}}" wx:for-item="option" wx:key="label" class="option"><radio value="{{option.label}}" checked="{{option.checked}}"/>{{option.label}}</label></radio-group></view><button wx:if="{{attempt}}" class="primary submit" loading="{{busy}}" bindtap="submit">确认交卷</button></view>
+<view class="page exam-page">
+  <view wx:if="{{loading}}" class="state-panel">
+    <text class="state-title">正在进入考试</text>
+    <text class="state-copy">正在恢复本次考试和已保存答案，请稍候。</text>
+  </view>
+
+  <view wx:elif="{{!attempt && error}}" class="state-panel state-error">
+    <text class="state-title">考试加载失败</text>
+    <text class="state-copy">{{error}}</text>
+    <button class="secondary retry-button" bindtap="loadAttempt">重新加载</button>
+  </view>
+
+  <view wx:elif="{{attempt && !questions.length}}" class="state-panel">
+    <text class="state-title">试卷暂无题目</text>
+    <text class="state-copy">请联系培训管理员检查试卷配置。</text>
+  </view>
+
+  <block wx:else>
+    <view class="exam-head">
+      <view class="head-row">
+        <view class="head-copy">
+          <text class="attempt-label">第 {{attempt.attemptNumber}} 次考试</text>
+          <text class="question-count">{{reviewing ? '答题检查' : ('第 ' + (currentIndex + 1) + ' / ' + questions.length + ' 题')}}</text>
+        </view>
+        <view class="timer-box">
+          <text class="timer-label">剩余时间</text>
+          <text class="timer-value">{{remaining}}</text>
+        </view>
+      </view>
+      <view class="progress-copy">
+        <text>已答 {{answeredCount}} / {{questions.length}}</text>
+        <text>{{answeredPercent}}%</text>
+      </view>
+      <view class="progress" aria-label="已答 {{answeredPercent}}%"><view class="progress-bar" style="width: {{answeredPercent}}%"></view></view>
+    </view>
+
+    <view wx:if="{{error}}" class="inline-error">
+      <text>{{error}}</text>
+      <button wx:if="{{saveState === 'error'}}" class="retry-save" bindtap="retrySave">重试保存</button>
+    </view>
+
+    <view wx:if="{{!reviewing && currentQuestion}}" class="question-surface">
+      <text class="question-type">{{currentQuestion.typeText}}</text>
+      <text class="question-title">{{currentIndex + 1}}. {{currentQuestion.prompt}}</text>
+      <text wx:if="{{currentQuestion.type === 'multiple_choice'}}" class="question-tip">可选择多个答案</text>
+
+      <checkbox-group wx:if="{{currentQuestion.type === 'multiple_choice'}}" data-id="{{currentQuestion.id}}" bindchange="chooseMany" class="option-list">
+        <label wx:for="{{currentQuestion.options}}" wx:key="label" class="option-row {{item.checked ? 'option-selected' : ''}}">
+          <checkbox value="{{item.label}}" checked="{{item.checked}}" disabled="{{expired}}"/>
+          <text class="option-label">{{item.label}}</text>
+        </label>
+      </checkbox-group>
+      <radio-group wx:else data-id="{{currentQuestion.id}}" bindchange="chooseOne" class="option-list">
+        <label wx:for="{{currentQuestion.options}}" wx:key="label" class="option-row {{item.checked ? 'option-selected' : ''}}">
+          <radio value="{{item.label}}" checked="{{item.checked}}" disabled="{{expired}}"/>
+          <text class="option-label">{{item.label}}</text>
+        </label>
+      </radio-group>
+
+      <view class="save-row" aria-live="polite">
+        <text class="save-state save-{{saveState}}">{{saveStateText}}</text>
+      </view>
+
+      <view class="question-actions">
+        <button class="secondary nav-button" disabled="{{!canGoPrevious}}" bindtap="previous">上一题</button>
+        <button class="primary nav-button" disabled="{{expired}}" bindtap="next">{{nextLabel}}</button>
+      </view>
+    </view>
+
+    <view wx:if="{{reviewing}}" class="review-surface">
+      <text class="review-title">答题检查</text>
+      <text class="review-copy">已答 {{answeredCount}} 题，未答 {{questions.length - answeredCount}} 题。点击题号可以返回修改。</text>
+      <view class="review-grid">
+        <button wx:for="{{reviewItems}}" wx:key="number" class="review-item {{item.answered ? 'review-answered' : 'review-unanswered'}}" data-index="{{item.index}}" bindtap="openQuestion">
+          <text class="review-number">{{item.number}}</text>
+          <text class="review-state">{{item.answered ? '已答' : '未答'}}</text>
+        </button>
+      </view>
+      <view class="review-note">交卷后答案不能修改，成绩由系统在服务端判定。</view>
+      <button class="secondary review-back" bindtap="continueAnswering">返回答题</button>
+      <button class="primary submit-button" loading="{{busy}}" disabled="{{busy || expired || saveState === 'saving'}}" bindtap="submit">确认交卷</button>
+    </view>
+  </block>
+</view>
