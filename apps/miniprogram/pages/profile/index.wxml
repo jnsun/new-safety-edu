@@ -21,7 +21,9 @@
     <text class="title">账号安全</text>
     <view class="row"><text>登录方式</text><text>{{security.methodText}}</text></view>
     <view class="row"><text>当前有效设备</text><text>{{security.sessions.length}}</text></view>
-    <view wx:if="{{security.roles.length}}" class="course" wx:for="{{security.roles}}" wx:key="id"><text>{{item.text}}</text></view>
+    <block wx:if="{{security.roles.length}}">
+      <view class="course" wx:for="{{security.roles}}" wx:key="id"><text>{{item.text}}</text></view>
+    </block>
     <text wx:else class="muted">普通人员权限</text>
     <input class="field" type="number" maxlength="11" value="{{newPhone}}" bindinput="setNewPhone" placeholder="输入新手机号"/>
     <view class="row"><input class="field" type="number" maxlength="6" value="{{phoneCode}}" bindinput="setPhoneCode" placeholder="短信验证码"/><button class="mini-button" bindtap="sendPhoneCode">发送验证码</button></view>
