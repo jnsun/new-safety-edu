@@ -1,1 +1,71 @@
-<view class="page"><view class="hero"><text class="hero-title">我必须完成的任务</text><text>先完成这里的事项</text></view><view wx:if="{{loading}}" class="card empty">正在加载…</view><view wx:elif="{{error}}" class="card error">{{error}}</view><view wx:elif="{{!tasks.length}}" class="card empty">当前没有待完成任务</view><view wx:for="{{tasks}}" wx:key="id" class="card" data-id="{{item.id}}" bindtap="open"><view class="row"><text class="title">{{item.batch.name}}</text><text class="status">{{item.statusText}}</text></view><text class="muted">{{item.typeText}} · 截止 {{item.dueText}}</text><view class="progress"><view class="progress-bar" style="width: {{item.percent}}%"></view></view><view class="row"><text>{{item.progress.completed}}/{{item.progress.total}} 项已学</text><text class="success">下一步：{{item.nextAction}} ›</text></view></view></view>
+<view class="page todo-page">
+  <view class="workspace-head">
+    <text class="workspace-title">我的待办</text>
+    <text class="workspace-copy">先处理最需要完成的一项，其他任务仍可随时查看。</text>
+  </view>
+
+  <view wx:if="{{loading}}" class="state-panel">
+    <text class="state-title">正在加载待办</text>
+    <text class="state-copy">正在获取最新任务和进度，请稍候。</text>
+  </view>
+
+  <view wx:elif="{{error}}" class="state-panel state-error">
+    <text class="state-title">待办加载失败</text>
+    <text class="state-copy">{{error}}</text>
+    <button class="secondary retry-button" bindtap="retry">重新加载</button>
+  </view>
+
+  <view wx:elif="{{!primaryTask}}" class="state-panel">
+    <text class="state-title">当前没有待完成任务</text>
+    <text class="state-copy">新的培训任务下发后会显示在这里。</text>
+  </view>
+
+  <block wx:else>
+    <view wx:if="{{primaryTask.isThreeLevelPriority && primaryTask.priorityReason}}" class="priority-banner">
+      <text class="priority-copy">{{primaryTask.priorityReason}}</text>
+      <text class="priority-detail">这是当前最优先的培训任务，不影响你查看其他任务。</text>
+    </view>
+
+    <view class="todo-layout">
+      <view class="primary-section">
+        <text class="section-title">现在先做</text>
+        <button class="primary-task" data-id="{{primaryTask.id}}" bindtap="open">
+          <view class="task-heading">
+            <text class="task-title">{{primaryTask.batch.name}}</text>
+            <text class="status">{{primaryTask.statusText}}</text>
+          </view>
+          <text class="task-meta">{{primaryTask.typeText}}</text>
+          <text class="task-meta">截止时间：{{primaryTask.dueText}}</text>
+          <view class="progress" aria-label="已完成 {{primaryTask.percent}}%">
+            <view class="progress-bar" style="width: {{primaryTask.percent}}%"></view>
+          </view>
+          <view class="task-summary">
+            <text>学习进度 {{primaryTask.progress.completed}}/{{primaryTask.progress.total}}</text>
+            <text class="task-action">下一步：{{primaryTask.nextAction}}</text>
+          </view>
+          <text class="enter-copy">进入任务</text>
+        </button>
+      </view>
+
+      <view wx:if="{{remainingTasks.length}}" class="remaining-section">
+        <view class="section-heading">
+          <text class="section-title">其余任务</text>
+          <text class="section-count">{{remainingTasks.length}} 项</text>
+        </view>
+        <view class="task-list">
+          <button wx:for="{{remainingTasks}}" wx:key="id" class="task-row" data-id="{{item.id}}" bindtap="open">
+            <view class="task-row-main">
+              <view class="task-heading">
+                <text class="task-row-title">{{item.batch.name}}</text>
+                <text class="status">{{item.statusText}}</text>
+              </view>
+              <text class="task-meta">{{item.typeText}} · 截止时间：{{item.dueText}}</text>
+              <text class="task-meta">学习进度 {{item.progress.completed}}/{{item.progress.total}}</text>
+            </view>
+            <text class="row-action">下一步：{{item.nextAction}}</text>
+          </button>
+        </view>
+      </view>
+    </view>
+  </block>
+</view>
