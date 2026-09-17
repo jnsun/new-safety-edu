@@ -1,0 +1,13 @@
+<view class="page leaderboard-page">
+  <view class="leader-head"><view><text class="title">安全积分排行榜</text><text class="muted">只统计日常安全挑战积分</text></view><picker mode="date" fields="month" value="{{month}}" bindchange="changeMonth"><view class="month-picker">{{month}}</view></picker></view>
+  <view wx:if="{{points}}" class="points-card"><view><text class="points-value">{{points.total}}</text><text class="muted">累计积分</text></view><view><text class="points-value small-value">{{points.monthPoints}}</text><text class="muted">本月积分</text></view></view>
+  <view class="segment"><button class="{{tab === 'person' ? 'active' : ''}}" data-tab="person" bindtap="switchTab">个人榜</button><button class="{{tab === 'organization' ? 'active' : ''}}" data-tab="organization" bindtap="switchTab">部门榜</button></view>
+  <view wx:if="{{loading}}" class="card state">正在加载排行榜…</view>
+  <view wx:elif="{{error}}" class="card state error"><text>{{error}}</text><button class="secondary" bindtap="retry">重试</button></view>
+  <block wx:elif="{{tab === 'person'}}">
+    <view wx:if="{{personal.self}}" class="self-card"><text>我的本月名次</text><text class="self-rank">{{personal.self.rank ? '第 ' + personal.self.rank + ' 名' : '本月尚未上榜'}}</text><text>{{personal.self.points}} 分</text></view>
+    <view class="rank-list"><view wx:for="{{personal.top}}" wx:key="personId" class="rank-row"><text class="rank-number">{{item.rank}}</text><view class="rank-person"><text>{{item.name}}</text><text class="muted">{{item.organizationName || '未归属部门'}}</text></view><view class="rank-score"><text>{{item.points}} 分</text><text wx:if="{{item.rankChange !== null}}" class="change">{{item.rankChange > 0 ? '↑' + item.rankChange : item.rankChange < 0 ? '↓' + (-item.rankChange) : '—'}}</text></view></view></view>
+    <view wx:if="{{personal.nearby.length && personal.self && personal.self.rank > 20}}" class="nearby"><text class="section-title">我的附近</text><view wx:for="{{personal.nearby}}" wx:key="personId" class="rank-row"><text class="rank-number">{{item.rank}}</text><view class="rank-person"><text>{{item.name}}</text><text class="muted">{{item.organizationName || '未归属部门'}}</text></view><text>{{item.points}} 分</text></view></view>
+  </block>
+  <view wx:else class="rank-list"><view wx:for="{{organizations}}" wx:key="organizationId" class="organization-row"><text class="rank-number">{{item.rank}}</text><view class="rank-person"><view><text>{{item.name}}</text><text wx:if="{{!item.rewardEligible}}" class="sample-tag">少于 3 人，仅展示</text></view><text class="muted">参与 {{item.participantCount}}/{{item.activePersonCount}} · {{item.rateText}}</text></view><view class="rank-score"><text>{{item.averageText}}</text><text class="muted">人均积分</text></view></view></view>
+</view>

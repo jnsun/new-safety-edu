@@ -12,6 +12,11 @@
     </block>
     <text wx:else class="muted">人员档案尚未绑定或正在审核。</text>
   </view>
+  <view wx:if="{{challengePoints}}" class="card points-summary">
+    <view><text class="title">安全积分</text><text class="muted">积分仅来自日常安全挑战</text></view>
+    <view class="points-numbers"><view><text class="points-number">{{challengePoints.total}}</text><text class="muted">累计</text></view><view><text class="points-number">{{challengePoints.monthPoints}}</text><text class="muted">本月</text></view></view>
+    <view class="row"><button class="secondary" bindtap="openChallenge">今日挑战</button><button class="secondary" bindtap="openLeaderboard">查看排行榜</button></view>
+  </view>
   <view wx:if="{{security}}" class="card">
     <text class="title">账号安全</text>
     <view class="row"><text>登录方式</text><text>{{security.methodText}}</text></view>

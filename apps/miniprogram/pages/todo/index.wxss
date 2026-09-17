@@ -27,6 +27,11 @@
 .task-row-title { min-width: 0; flex: 1; font-size: 31rpx; line-height: 1.4; font-weight: 650; }
 .task-row-main { min-width: 0; }
 .row-action { display: block; margin-top: 14rpx; font-size: 28rpx; }
+.challenge-section { margin-top: 36rpx; }
+.challenge-card { display: flex; width: 100%; min-height: 132rpx; margin: 0; padding: 28rpx 30rpx; box-sizing: border-box; align-items: center; justify-content: space-between; gap: 22rpx; color: var(--ink); background: linear-gradient(135deg, #eef7ff, #f7fbff); border: 1rpx solid #cfe6ff; border-radius: var(--radius-card); text-align: left; }
+.challenge-title { display: block; font-size: 31rpx; font-weight: 700; }
+.challenge-action { color: var(--action); font-size: 28rpx; font-weight: 700; }
+.challenge-note { display: block; margin: 12rpx 4rpx 0; color: var(--muted); font-size: 24rpx; line-height: 1.5; }
 
 @media (min-width: 700px) {
   .todo-page { max-width: 1280rpx; padding-left: 48rpx; padding-right: 48rpx; }

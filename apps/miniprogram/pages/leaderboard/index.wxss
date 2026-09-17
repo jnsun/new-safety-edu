@@ -1,0 +1,25 @@
+.leader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24rpx; margin-bottom: 24rpx; }
+.title { display: block; font-size: 42rpx; font-weight: 750; }
+.month-picker { padding: 14rpx 20rpx; color: var(--action); background: var(--action-soft); border-radius: 14rpx; }
+.points-card { display: flex; justify-content: space-around; margin-bottom: 24rpx; padding: 28rpx; background: linear-gradient(135deg, #0876e8, #36a3ff); border-radius: var(--radius-card); color: #fff; text-align: center; }
+.points-value { display: block; font-size: 48rpx; font-weight: 750; }
+.small-value { font-size: 38rpx; }
+.points-card .muted { color: rgba(255,255,255,.82); }
+.segment { display: flex; padding: 6rpx; margin-bottom: 22rpx; background: #e9e9ed; border-radius: 16rpx; }
+.segment button { flex: 1; margin: 0; background: transparent; border-radius: 12rpx; font-size: 28rpx; }
+.segment button.active { background: #fff; box-shadow: 0 2rpx 10rpx rgba(0,0,0,.08); }
+.state { padding: 42rpx; text-align: center; }
+.state button { margin-top: 24rpx; }
+.error { color: var(--danger); }
+.self-card { display: flex; align-items: center; gap: 22rpx; margin-bottom: 18rpx; padding: 24rpx 28rpx; color: #fff; background: #1d1d1f; border-radius: 20rpx; }
+.self-rank { flex: 1; font-size: 31rpx; font-weight: 700; }
+.rank-list, .nearby { overflow: hidden; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.nearby { margin-top: 24rpx; }
+.section-title { display: block; padding: 24rpx 28rpx 10rpx; font-weight: 700; }
+.rank-row, .organization-row { display: flex; min-height: 116rpx; padding: 20rpx 26rpx; box-sizing: border-box; align-items: center; gap: 20rpx; border-bottom: 1rpx solid var(--line); }
+.rank-number { width: 46rpx; color: var(--muted); font-size: 31rpx; font-weight: 700; text-align: center; }
+.rank-person { min-width: 0; flex: 1; }
+.rank-person > text, .rank-score > text { display: block; }
+.rank-score { text-align: right; font-weight: 700; }
+.change { color: #16834b; font-size: 23rpx; }
+.sample-tag { margin-left: 12rpx; padding: 4rpx 10rpx; color: #8a5b00; background: #fff4ce; border-radius: 999rpx; font-size: 20rpx; }

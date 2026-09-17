@@ -68,4 +68,13 @@
       </view>
     </view>
   </block>
+
+  <view wx:if="{{!loading && !error && challenge}}" class="challenge-section">
+    <text class="section-title">每日安全挑战</text>
+    <button class="challenge-card" bindtap="openChallenge">
+      <view><text class="challenge-title">{{challenge.completedAt ? '今日挑战已完成' : '用几分钟巩固安全判断'}}</text><text class="task-meta">已答 {{challenge.answeredCount}}/{{challenge.totalCount}} 题 · 今日 {{challenge.todayPoints}} 分</text></view>
+      <text class="challenge-action">{{challenge.completedAt ? '查看结果' : '开始挑战'}}</text>
+    </button>
+    <text class="challenge-note">日常挑战为自愿巩固，不属于必须完成的培训任务。</text>
+  </view>
 </view>

@@ -1,0 +1,36 @@
+<view class="page challenge-page">
+  <view class="challenge-head">
+    <text class="eyebrow">日常安全挑战</text>
+    <text class="headline">每天几分钟，巩固安全判断</text>
+    <text class="subhead">答错不扣分，首次答对每题 2 分。挑战不影响正式培训成绩。</text>
+  </view>
+  <view wx:if="{{loading}}" class="card state"><text>正在准备今天的题目…</text></view>
+  <view wx:elif="{{error}}" class="card state error"><text>{{error}}</text><button class="secondary" bindtap="retry">重新加载</button></view>
+  <view wx:elif="{{attempt && !attempt.totalCount}}" class="card state"><text class="title">今天暂无挑战题</text><text class="muted">管理员启用题目后，这里会自动生成每日挑战。</text></view>
+  <view wx:elif="{{attempt && !current}}" class="card complete-card">
+    <text class="complete-mark">✓</text><text class="title">今天的挑战已完成</text>
+    <text class="score">+{{attempt.todayPoints}} 分</text><text class="muted">重复练习不会重复得分，明天再来巩固。</text>
+    <button class="primary" bindtap="openLeaderboard">查看积分排行榜</button>
+  </view>
+  <view wx:else class="question-workspace">
+    <view class="progress-row"><text>第 {{currentIndex + 1}} / {{attempt.totalCount}} 题</text><text>今日 {{attempt.todayPoints}} 分</text></view>
+    <view class="challenge-progress"><view class="challenge-progress-bar" style="width: {{(currentIndex + 1) * 100 / attempt.totalCount}}%"></view></view>
+    <view class="card question-card">
+      <view class="question-meta"><text wx:if="{{current.category}}" class="pill">{{current.category}}</text><text wx:if="{{current.difficulty}}" class="muted">{{current.difficulty === 'easy' ? '简单' : current.difficulty === 'hard' ? '较难' : '适中'}}</text></view>
+      <text class="question-title">{{current.prompt}}</text>
+      <checkbox-group wx:if="{{current.type === 'multiple_choice'}}" bindchange="chooseMany">
+        <label wx:for="{{current.options}}" wx:key="*this" class="answer-option"><checkbox value="{{item}}" disabled="{{!!feedback}}"/><text>{{item}}</text></label>
+      </checkbox-group>
+      <radio-group wx:else bindchange="chooseSingle">
+        <label wx:for="{{current.options}}" wx:key="*this" class="answer-option"><radio value="{{item}}" disabled="{{!!feedback}}"/><text>{{item}}</text></label>
+      </radio-group>
+      <view wx:if="{{feedback}}" class="feedback {{feedback.correct ? 'feedback-correct' : 'feedback-wrong'}}">
+        <text class="feedback-title">{{feedback.correct ? '回答正确' : '这次没有答对'}}</text>
+        <text class="feedback-score">{{feedback.pointsAwarded ? '+' + feedback.pointsAwarded + ' 分' : '不扣分'}}</text>
+        <text class="feedback-copy">{{feedback.explanation || '请记住正确的安全处理方式。'}}</text>
+      </view>
+      <button wx:if="{{!feedback}}" class="primary" loading="{{submitting}}" bindtap="submit">提交答案</button>
+      <button wx:else class="primary" bindtap="next">{{attempt.answeredCount >= attempt.totalCount ? '查看今日结果' : '下一题'}}</button>
+    </view>
+  </view>
+</view>

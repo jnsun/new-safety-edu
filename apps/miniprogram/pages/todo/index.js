@@ -6,13 +6,15 @@ function splitTasks(tasks) {
 }
 
 Page({
-  data: { primaryTask: null, remainingTasks: [], loading: true, error: '' },
+  data: { primaryTask: null, remainingTasks: [], challenge: null, loading: true, error: '' },
   async load() {
     this.setData({ loading: true, error: '' })
     try {
       await getApp().globalData.ready
       const rows = await api.request('/api/me/assignments?scope=todo')
-      this.setData(splitTasks(rows.map(decorate)))
+      let challenge = null
+      try { challenge = await api.request('/api/me/daily-challenge') } catch (_) {}
+      this.setData({ ...splitTasks(rows.map(decorate)), challenge })
     } catch (error) {
       this.setData({ error: error.message })
     } finally {
@@ -21,5 +23,6 @@ Page({
   },
   onShow() { return this.load() },
   retry() { return this.load() },
-  open(e) { wx.navigateTo({ url: `/pages/task/index?id=${e.currentTarget.dataset.id}` }) }
+  open(e) { wx.navigateTo({ url: `/pages/task/index?id=${e.currentTarget.dataset.id}` }) },
+  openChallenge() { wx.navigateTo({ url: '/pages/challenge/index' }) }
 })
