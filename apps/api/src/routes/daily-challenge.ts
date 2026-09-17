@@ -5,6 +5,7 @@ import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { challengeAnswersEqual, challengeDayRange, challengeMonthRange, challengeMonthRangeFromKey, scoreFirstAnswer, selectDailyQuestions } from "../daily-challenge-policy.js";
 import { personalLeaderboardView, rankOrganizationScores, rankPersonalScores, type OrganizationRank, type PersonalScore } from "../challenge-leaderboard.js";
+import { accessibleOrganizationIds, forbidden, isCompanyAdmin } from "../access.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type SnapshotQuestion = { questionId: string; questionVersionId: string; type: QuestionType; prompt: string; options: unknown; category: string | null; difficulty: string | null };
@@ -124,8 +125,9 @@ export async function finalizePreviousChallengeMonth(now = new Date()) {
   return finalizedOrganizationRanks(challengeMonthRangeFromKey(previousMonth(current.month), TIME_ZONE));
 }
 
-export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard }) {
+export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard; requireManager: Guard }) {
   const authenticated = { preHandler: deps.authenticate };
+  const manager = { preHandler: [deps.authenticate, deps.requireManager] };
 
   app.get("/api/me/daily-challenge", authenticated, async (request) => {
     const principal = principalOf(request);
@@ -224,5 +226,57 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
     const previousRanks = new Map(rankPersonalScores(previousScores).map((entry) => [entry.personId, entry.rank]));
     const view = personalLeaderboardView(rankPersonalScores(scores, previousRanks), principal.personId);
     return { data: { month: range.month, type: query.type, ...view, self: view.self ?? { personId: principal.personId, rank: null, rankChange: null, points: 0 } } };
+  });
+
+  app.get("/api/challenge/admin/questions", manager, async (request) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
+    return { data: await prisma.question.findMany({ include: { bank: { select: { id: true, name: true, scopeType: true, scopeId: true } } }, orderBy: [{ bankId: "asc" }, { createdAt: "asc" }] }) };
+  });
+
+  app.patch("/api/challenge/admin/questions/:id", manager, async (request) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const input = z.object({ challengeEnabled: z.boolean(), challengeCategory: z.string().trim().min(1).max(80).nullable(), challengeDifficulty: z.enum(["easy", "medium", "hard"]).nullable() }).strict().parse(request.body);
+    const updated = await prisma.$transaction(async (tx) => {
+      const question = await tx.question.update({ where: { id }, data: input });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "challenge.question_configure", objectType: "question", objectId: id, result: "success", metadata: input } });
+      return question;
+    });
+    return { data: updated };
+  });
+
+  app.get("/api/challenge/admin/points", manager, async (request) => {
+    const principal = principalOf(request);
+    const query = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(), organizationId: z.string().uuid().optional(), personId: z.string().uuid().optional() }).strict().parse(request.query);
+    const range = query.month ? challengeMonthRangeFromKey(query.month, TIME_ZONE) : challengeMonthRange(new Date(), TIME_ZONE);
+    const organizationIds = isCompanyAdmin(principal) ? null : await accessibleOrganizationIds(principal);
+    if (organizationIds && !organizationIds.length) forbidden("当前账号没有可查看的组织积分范围");
+    if (organizationIds && query.organizationId && !organizationIds.includes(query.organizationId)) forbidden("不能查看其他组织的积分流水");
+    const rows = await prisma.challengePointLedger.findMany({
+      where: {
+        occurredAt: { gte: range.start, lt: range.end },
+        ...(query.personId ? { personId: query.personId } : {}),
+        ...(query.organizationId ? { organizationIdSnapshot: query.organizationId } : organizationIds ? { organizationIdSnapshot: { in: organizationIds } } : {})
+      },
+      select: { id: true, sourceType: true, points: true, occurredAt: true, voidedAt: true, voidReason: true, person: { select: { id: true, name: true } }, organizationSnapshot: { select: { id: true, name: true } } },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+      take: 1000
+    });
+    return { data: { month: range.month, canVoid: isCompanyAdmin(principal), rows } };
+  });
+
+  app.post("/api/challenge/admin/points/:id/void", manager, async (request) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以作废异常积分");
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).strict().parse(request.body);
+    await prisma.$transaction(async (tx) => {
+      const changed = await tx.challengePointLedger.updateMany({ where: { id, voidedAt: null }, data: { voidedAt: new Date(), voidedBy: principal.accountId, voidReason: reason } });
+      if (!changed.count) throw Object.assign(new Error("积分流水不存在或已经作废"), { statusCode: 409, code: "CHALLENGE_POINT_ALREADY_VOIDED" });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "challenge.point_void", objectType: "challenge_point_ledger", objectId: id, result: "success", metadata: { reason } } });
+    });
+    return { data: { id, voided: true } };
   });
 }

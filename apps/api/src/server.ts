@@ -60,7 +60,7 @@ await registerFileRoutes(app, { env, ...guards });
 await registerWechatRoutes(app, { env, ...guards });
 await registerDay2Routes(app, { env, ...guards });
 await registerCoursewareAuthoringRoutes(app, { env, ...guards });
-await registerDailyChallengeRoutes(app, { env, authenticate: guards.authenticate });
+await registerDailyChallengeRoutes(app, { env, authenticate: guards.authenticate, requireManager: guards.requireManager });
 await registerDay4Routes(app, { env, ...guards });
 await registerSafetyManagementRoutes(app, { env, ...guards });
 await registerQualificationRoutes(app, { env, authenticate: guards.authenticate });
