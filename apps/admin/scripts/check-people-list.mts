@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { filterPeopleRows, peopleInOrganization, readPeopleView } from "../src/people-organization/people-list.ts";
+import { filterPeopleRows, peopleInOrganization, readPeopleListState, readPeopleView, writePeopleListState } from "../src/people-organization/people-list.ts";
 
 const rows = [
   { id: "1", name: "张三", phone: "13800001111", status: "active", type: "employee", organizationIds: ["finance"], organizationNames: ["财务资产部"], accountStatus: "active", username: "zhangsan", roles: ["org_leader"] },
@@ -20,5 +20,8 @@ assert.deepEqual(peopleInOrganization(organizationRows, "missing"), []);
 assert.equal(readPeopleView(null), "list");
 assert.equal(readPeopleView("grouped"), "grouped");
 assert.equal(readPeopleView("unexpected"), "list");
+const listState = readPeopleListState(new URLSearchParams("q=%E5%BC%A0&organizationId=dept&view=grouped&page=2"));
+assert.deepEqual(listState, { search: "张", organizationId: "dept", personStatus: undefined, accountStatus: undefined, role: undefined, view: "grouped", page: 2 });
+assert.equal(writePeopleListState(listState).toString(), "q=%E5%BC%A0&organizationId=dept&view=grouped&page=2");
 
 console.log("people list check passed");

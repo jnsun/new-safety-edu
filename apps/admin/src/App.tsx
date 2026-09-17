@@ -7,6 +7,7 @@ import {
   useLocation,
   useNavigate,
   useParams,
+  useSearchParams,
 } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -63,7 +64,10 @@ import { receivablesNavigation, receivablesPortalMode, usableReceivablesAccess, 
 import { personMatchesSearch } from "./person-search";
 import { platformConditionalModule } from "./platform-access";
 import { masterDataSelectedKey, peopleOrganizationNav } from "./people-organization/navigation";
-import { filterPeopleRows, peopleInOrganization, readPeopleView, type PeopleView } from "./people-organization/people-list";
+import { filterPeopleRows, peopleInOrganization, readPeopleListState, writePeopleListState, type PeopleView } from "./people-organization/people-list";
+import { SplitWorkspace } from "./people-organization/SplitWorkspace";
+import { groupOrganizations, readWorkspaceSelection, writeWorkspaceSelection } from "./people-organization/workspace-state";
+import { filterReviewRows, type ReviewScope } from "./people-organization/review-list";
 
 declare global {
   interface Window {
@@ -1039,100 +1043,44 @@ function BindingRequests({ persons }: { persons: Person[] }) {
       void requests.refetch();
     } catch (error) { message.error((error as Error).message); }
   }
-  return (<>
-    <Table
-      rowKey="id"
-      loading={requests.isLoading}
-      dataSource={requests.data}
-      columns={[
-        {
-          title: "申请类型",
-          render: (_: unknown, row) =>
-            row.type === "account_merge"
-              ? "账号合并"
-              : row.type === "person_merge"
-                ? "人员档案合并"
-              : row.type === "registration"
-                ? "新档案注册"
-                : row.payload.organizationName
-                  ? "加入部门/档案绑定"
-                  : "手机号绑定",
-        },
-        {
-          title: "申请人",
-          render: (_: unknown, row) => row.type === "account_merge" ? (
-            <Space direction="vertical" size={0}>
-              <span>来源：{String(row.payload.sourceAccountLabel ?? "账号信息不可用")}</span>
-              <Typography.Text type="secondary">目标：{String(row.payload.targetAccountLabel ?? "账号信息不可用")}</Typography.Text>
-            </Space>
-          ) : row.type === "person_merge" ? (
-            <Space direction="vertical" size={0}>
-              <span>来源：{persons.find((person) => person.id === row.personId)?.name ?? "档案信息不可用"}</span>
-              <Typography.Text type="secondary">目标：{persons.find((person) => person.id === row.payload.targetPersonId)?.name ?? "档案信息不可用"}</Typography.Text>
-            </Space>
-          ) : String(row.payload.name ?? "待匹配人员"),
-        },
-        {
-          title: "手机号",
-          render: (_: unknown, row) => <Space direction="vertical" size={0}><span>{String(row.payload.phone ?? "—")}</span>{row.type === "binding" && <Tag color={row.payload.phoneVerified ? "green" : "red"}>{row.payload.phoneVerified ? "已验证" : "未验证"}</Tag>}</Space>,
-        },
-        {
-          title: "申请部门",
-          render: (_: unknown, row) => <Space direction="vertical" size={0}><span>{String(row.payload.organizationName ?? "—")}</span>{row.payload.escalatedToCompany === true && <Tag color="orange">公司兜底</Tag>}{Boolean(row.payload.matchStatus) && <Typography.Text type="secondary">匹配：{String(row.payload.matchStatus)}</Typography.Text>}</Space>,
-        },
-        {
-          title: "操作",
-          render: (_: unknown, row) => (
-            <Space>
-              <Button
-                type="primary"
-                size="small"
-                onClick={() => void approve(row)}
-              >
-                {["account_merge", "person_merge"].includes(row.type) ? "确认合并" : row.type === "binding" ? "审核" : "审核通过"}
-              </Button>
-              {["account_merge", "person_merge"].includes(row.type) && <Button danger size="small" onClick={() => void rejectMerge(row)}>拒绝</Button>}
-            </Space>
-          ),
-        },
-      ]}
-    />
-    <Modal title="审核身份绑定申请" open={!!reviewing} footer={null} onCancel={() => setReviewing(undefined)}>
-      {reviewing && <>
-        <Descriptions size="small" column={1} bordered items={[
-          { key: "name", label: "申请姓名", children: String(reviewing.payload.name ?? "—") },
-          { key: "phone", label: "手机号", children: <Space>{String(reviewing.payload.phone ?? "—")}<Tag color="green">已短信验证</Tag></Space> },
-          { key: "org", label: "申请部门", children: String(reviewing.payload.organizationName ?? "—") },
-          { key: "conflict", label: "冲突提示", children: Array.isArray(reviewing.payload.conflictCodes) && reviewing.payload.conflictCodes.length ? reviewing.payload.conflictCodes.join("、") : "无" }
-        ]} />
-        <Form form={reviewForm} layout="vertical" style={{ marginTop: 16 }} onFinish={async (values) => {
-          try {
-            await api(`/api/identity-binding-requests/${reviewing.id}/review`, json("POST", values));
-            message.success(values.action === "reject" ? "申请已驳回" : "身份绑定已处理"); setReviewing(undefined); void requests.refetch();
-          } catch (error) { message.error((error as Error).message); }
-        }}>
-          <Form.Item name="action" label="处理方式" rules={[{ required: true }]}><Select options={[
-            { value: "bind_existing", label: "确认并绑定本部门已有人员" },
-            { value: "update_phone_and_bind", label: "修正人员手机号后绑定" },
-            { value: "repair_membership_and_bind", label: "补建本部门归属后绑定" },
-            { value: "create_employee_and_bind", label: "新建本部门正式员工并绑定" },
-            { value: "escalate_company", label: "升级给公司管理员处理" },
-            { value: "reject", label: "驳回申请" }
-          ]} /></Form.Item>
+  const requestLabel = (row: RequestRow) => row.type === "account_merge" ? "账号合并" : row.type === "person_merge" ? "人员档案合并" : row.type === "registration" ? "新档案注册" : row.payload.organizationName ? "加入部门/档案绑定" : "手机号绑定";
+  const applicantLabel = (row: RequestRow) => row.type === "account_merge" ? String(row.payload.sourceAccountLabel ?? "账号信息不可用") : row.type === "person_merge" ? persons.find((person) => person.id === row.personId)?.name ?? "档案信息不可用" : String(row.payload.name ?? "待匹配人员");
+  const openRequest = async (row: RequestRow) => {
+    setReviewing(row);
+    reviewForm.resetFields();
+    if (row.type !== "binding") { setCandidates([]); return; }
+    try { setCandidates(await api(`/api/identity-binding-requests/${row.id}/candidates`)); }
+    catch (error) { message.error((error as Error).message); }
+  };
+  return <div className="review-workbench">
+    <aside className="review-queue">
+      <div className="review-queue-heading"><strong>身份绑定与注册</strong><Tag>{requests.data?.length ?? 0}</Tag></div>
+      <div className="review-queue-scroll">
+        {(requests.data ?? []).map((row) => <button type="button" key={row.id} className={`review-queue-item ${reviewing?.id === row.id ? "is-active" : ""}`} onClick={() => void openRequest(row)}><strong>{applicantLabel(row)}</strong><span>{requestLabel(row)} · {String(row.payload.organizationName ?? "未指定部门")}</span><small>{new Date(row.createdAt).toLocaleString()}</small></button>)}
+        {!requests.isLoading && !requests.data?.length && <Typography.Text type="secondary">暂无身份绑定或注册申请</Typography.Text>}
+      </div>
+    </aside>
+    <section className="review-detail">
+      {!reviewing ? <Alert showIcon type="info" message="从左侧选择一条申请查看详情" /> : <>
+        <div className="review-detail-heading"><div><Typography.Title level={4}>{requestLabel(reviewing)}</Typography.Title><Typography.Text type="secondary">{applicantLabel(reviewing)} · {new Date(reviewing.createdAt).toLocaleString()}</Typography.Text></div><Tag color={reviewing.status === "pending" ? "blue" : "default"}>{labels[reviewing.status] ?? reviewing.status}</Tag></div>
+        <Descriptions size="small" column={1} bordered items={[{ key: "name", label: "申请姓名", children: applicantLabel(reviewing) }, { key: "phone", label: "手机号", children: <Space>{String(reviewing.payload.phone ?? "—")}{reviewing.type === "binding" && <Tag color={reviewing.payload.phoneVerified ? "green" : "red"}>{reviewing.payload.phoneVerified ? "已验证" : "未验证"}</Tag>}</Space> }, { key: "org", label: "申请部门", children: String(reviewing.payload.organizationName ?? "—") }, { key: "match", label: "匹配情况", children: String(reviewing.payload.matchStatus ?? "—") }, { key: "conflict", label: "冲突提示", children: Array.isArray(reviewing.payload.conflictCodes) && reviewing.payload.conflictCodes.length ? reviewing.payload.conflictCodes.join("、") : "无" }]} />
+        {reviewing.type === "binding" ? <Form form={reviewForm} layout="vertical" className="review-action-form" onFinish={async (values) => { try { await api(`/api/identity-binding-requests/${reviewing.id}/review`, json("POST", values)); message.success(values.action === "reject" ? "申请已驳回" : "身份绑定已处理"); setReviewing(undefined); void requests.refetch(); } catch (error) { message.error((error as Error).message); } }}>
+          <Form.Item name="action" label="处理方式" rules={[{ required: true }]}><Select options={[{ value: "bind_existing", label: "确认并绑定本部门已有人员" }, { value: "update_phone_and_bind", label: "修正人员手机号后绑定" }, { value: "repair_membership_and_bind", label: "补建本部门归属后绑定" }, { value: "create_employee_and_bind", label: "新建本部门正式员工并绑定" }, { value: "escalate_company", label: "升级给公司管理员处理" }, { value: "reject", label: "驳回申请" }]} /></Form.Item>
           <Form.Item noStyle shouldUpdate={(before, after) => before.action !== after.action}>{({ getFieldValue }) => !["create_employee_and_bind", "escalate_company", "reject"].includes(getFieldValue("action")) && <Form.Item name="personId" label="人员档案" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" placeholder={candidates.length ? "请选择人员" : "暂无可选人员档案"} options={candidates.map((person) => ({ value: person.id, label: `${person.name} · ${person.phone}` }))} /></Form.Item>}</Form.Item>
-          <Form.Item name="note" label="审核意见/处理原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item>
-          <Button type="primary" htmlType="submit">确认处理</Button>
-        </Form>
+          <Form.Item name="note" label="审核意见/处理原因" rules={[{ required: true, min: 2, max: 500 }]}><Input.TextArea rows={3} /></Form.Item><Button type="primary" htmlType="submit">确认处理</Button>
+        </Form> : <Space className="review-action-form"> <Button type="primary" onClick={() => void approve(reviewing)}>{["account_merge", "person_merge"].includes(reviewing.type) ? "确认合并" : "审核通过"}</Button>{["account_merge", "person_merge"].includes(reviewing.type) && <Button danger onClick={() => void rejectMerge(reviewing)}>拒绝</Button>}</Space>}
       </>}
-    </Modal>
-  </>);
+    </section>
+  </div>;
 }
 
 function ManagementRequestsPanel({ accountId }: { accountId: string }) {
   type Row = { id: string; type: string; status: string; applicant: string; summary: Record<string, unknown>; reviewedBy: string | null; reviewNote: string | null; createdAt: string; availableActions?: string[] };
   const requests = useQuery({ queryKey: ["management-requests"], queryFn: () => api<Row[]>("/api/management/requests") });
-  const [scope, setScope] = useState<"pending" | "reviewed" | "all">("pending");
-  const rows = (requests.data ?? []).filter((row) => scope === "all" || (scope === "pending" ? row.status === "pending" : row.status !== "pending" && row.reviewedBy === accountId));
+  const [scope, setScope] = useState<ReviewScope>("pending");
+  const [selectedId, setSelectedId] = useState<string>();
+  const rows = filterReviewRows(requests.data ?? [], scope, accountId);
+  const selected = rows.find((row) => row.id === selectedId) ?? rows[0];
   async function review(row: Row, action: "approve" | "reject") {
     const note = window.prompt(action === "approve" ? "请输入审核意见（可选）" : "请输入驳回原因");
     if (action === "reject" && !note?.trim()) return;
@@ -1149,15 +1097,25 @@ function ManagementRequestsPanel({ accountId }: { accountId: string }) {
       void requests.refetch();
     } catch (error) { message.error((error as Error).message); }
   }
+  const summary = (row: Row) => Object.values(row.summary).filter(Boolean).join("；") || "—";
   return <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-    <Space><Button type={scope === "pending" ? "primary" : "default"} onClick={() => setScope("pending")}>待我处理</Button><Button type={scope === "reviewed" ? "primary" : "default"} onClick={() => setScope("reviewed")}>我已处理</Button><Button type={scope === "all" ? "primary" : "default"} onClick={() => setScope("all")}>全部记录</Button></Space>
-    <Table rowKey="id" dataSource={rows} columns={[
-      { title: "申请人", dataIndex: "applicant" },
-      { title: "类型", dataIndex: "type", render: (value: string) => labels[value] ?? value },
-      { title: "申请摘要", render: (_: unknown, row: Row) => Object.values(row.summary).filter(Boolean).join("；") || "—" },
-      { title: "状态", dataIndex: "status", render: (value: string) => <Tag color={value === "pending" ? "blue" : value === "approved" ? "green" : "default"}>{labels[value] ?? value}</Tag> },
-      { title: "操作", render: (_: unknown, row: Row) => row.status === "pending" ? <Space>{row.availableActions?.includes("approve") && <Button size="small" type="primary" onClick={() => void review(row, "approve")}>通过</Button>}{row.availableActions?.includes("reject") && <Button size="small" danger onClick={() => void review(row, "reject")}>驳回</Button>}</Space> : row.reviewNote || "—" },
-    ]} />
+    <Space wrap><Button type={scope === "pending" ? "primary" : "default"} onClick={() => { setScope("pending"); setSelectedId(undefined); }}>待我处理</Button><Button type={scope === "reviewed" ? "primary" : "default"} onClick={() => { setScope("reviewed"); setSelectedId(undefined); }}>我已处理</Button><Button type={scope === "all" ? "primary" : "default"} onClick={() => { setScope("all"); setSelectedId(undefined); }}>全部记录</Button></Space>
+    <div className="review-workbench">
+      <aside className="review-queue">
+        <div className="review-queue-heading"><strong>申请队列</strong><Tag>{rows.length}</Tag></div>
+        <div className="review-queue-scroll">
+          {rows.map((row) => <button type="button" key={row.id} className={`review-queue-item ${selected?.id === row.id ? "is-active" : ""}`} onClick={() => setSelectedId(row.id)}><strong>{row.applicant}</strong><span>{labels[row.type] ?? row.type}</span><small>{new Date(row.createdAt).toLocaleString()}</small></button>)}
+          {!requests.isLoading && !rows.length && <Typography.Text type="secondary">当前筛选下暂无申请</Typography.Text>}
+        </div>
+      </aside>
+      <section className="review-detail">
+        {!selected ? <Alert showIcon type="info" message="当前没有可查看的申请" /> : <>
+          <div className="review-detail-heading"><div><Typography.Title level={4}>{labels[selected.type] ?? selected.type}</Typography.Title><Typography.Text type="secondary">{selected.applicant} · {new Date(selected.createdAt).toLocaleString()}</Typography.Text></div><Tag color={selected.status === "pending" ? "blue" : selected.status === "approved" ? "green" : "default"}>{labels[selected.status] ?? selected.status}</Tag></div>
+          <Descriptions column={1} size="small" bordered items={[{ key: "summary", label: "申请摘要", children: summary(selected) }, { key: "review", label: "审核意见", children: selected.reviewNote || "—" }]} />
+          {selected.status === "pending" && <Space className="review-action-form">{selected.availableActions?.includes("approve") && <Button type="primary" onClick={() => void review(selected, "approve")}>通过</Button>}{selected.availableActions?.includes("reject") && <Button danger onClick={() => void review(selected, "reject")}>驳回</Button>}</Space>}
+        </>}
+      </section>
+    </div>
   </Space>;
 }
 
@@ -1173,8 +1131,8 @@ function DataToolsPage({ principal }: { principal: Principal }) {
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: () => api<Organization[]>("/api/organizations") });
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
   const canExportSensitive = principal.roles.some((role) => ["company_admin", "org_leader", "org_admin", "project_admin"].includes(role.role));
-  return <><Typography.Title level={3}>数据工具</Typography.Title><Tabs items={[
-    { key: "import", label: "人员与照片导入", children: <PersonImport enabled={principal.roles.some((role) => role.role === "company_admin")} /> },
+  return <><Typography.Title level={3}>数据工具</Typography.Title><Alert showIcon type="info" message="导入和导出是低频、高影响操作，请按任务逐项展开。" style={{ marginBottom: 16 }} /><Collapse className="data-tools-list" defaultActiveKey={["import"]} items={[
+    { key: "import", label: "人员 Excel 与照片导入", children: <PersonImport enabled={principal.roles.some((role) => role.role === "company_admin")} /> },
     ...(canExportSensitive ? [{ key: "exports", label: "敏感资料导出", children: <SensitiveExports principal={principal} organizations={organizations.data ?? []} projects={projects.data ?? []} /> }] : []),
   ]} /></>;
 }
@@ -1189,6 +1147,8 @@ function AccountIssuesPage({ principal }: { principal: Principal }) {
 
 function People({ principal }: { principal: Principal }) {
   const navigate = useNavigate();
+  const [listSearchParams, setListSearchParams] = useSearchParams();
+  const initialListState = useRef(readPeopleListState(listSearchParams));
   const query = useQuery({
     queryKey: ["persons"],
     queryFn: () => api<Person[]>("/api/persons"),
@@ -1206,12 +1166,13 @@ function People({ principal }: { principal: Principal }) {
     (role) => role.role === "company_admin",
   );
   const [open, setOpen] = useState(false);
-  const [personSearch, setPersonSearch] = useState("");
-  const [organizationFilter, setOrganizationFilter] = useState<string>();
-  const [personStatusFilter, setPersonStatusFilter] = useState<string>();
-  const [accountStatusFilter, setAccountStatusFilter] = useState<string>();
-  const [roleFilter, setRoleFilter] = useState<string>();
-  const [peopleView, setPeopleView] = useState<PeopleView>(() => readPeopleView(window.localStorage.getItem("people-view")));
+  const [personSearch, setPersonSearch] = useState(initialListState.current.search);
+  const [organizationFilter, setOrganizationFilter] = useState<string | undefined>(initialListState.current.organizationId);
+  const [personStatusFilter, setPersonStatusFilter] = useState<string | undefined>(initialListState.current.personStatus);
+  const [accountStatusFilter, setAccountStatusFilter] = useState<string | undefined>(initialListState.current.accountStatus);
+  const [roleFilter, setRoleFilter] = useState<string | undefined>(initialListState.current.role);
+  const [peopleView, setPeopleView] = useState<PeopleView>(initialListState.current.view);
+  const [peoplePage, setPeoplePage] = useState(initialListState.current.page);
   const [selectedUnassignedIds, setSelectedUnassignedIds] = useState<string[]>([]);
   const [selectedPersonIds, setSelectedPersonIds] = useState<string[]>([]);
   const [bulkDisableOpen, setBulkDisableOpen] = useState(false);
@@ -1337,6 +1298,21 @@ function People({ principal }: { principal: Principal }) {
           : undefined;
     return `${labels[role.role] ?? role.role}${scope ? ` · ${scope}` : ""}`;
   };
+  const currentPeopleListState = {
+    search: personSearch,
+    organizationId: organizationFilter,
+    personStatus: personStatusFilter,
+    accountStatus: accountStatusFilter,
+    role: roleFilter,
+    view: peopleView,
+    page: peoplePage,
+  };
+  const peopleListQuery = writePeopleListState(currentPeopleListState).toString();
+  const peopleReturnPath = `/people${peopleListQuery ? `?${peopleListQuery}` : ""}`;
+  const openPerson = (personId: string) => {
+    window.sessionStorage.setItem("people-list-scroll", String(window.scrollY));
+    navigate(`/people/${personId}?returnTo=${encodeURIComponent(peopleReturnPath)}`);
+  };
   const personColumns = [
     {
       title: "姓名",
@@ -1345,7 +1321,7 @@ function People({ principal }: { principal: Principal }) {
         <Button
           type="link"
           style={{ padding: 0 }}
-          onClick={() => navigate(`/people/${row.id}`)}
+          onClick={() => openPerson(row.id)}
         >
           {value}
         </Button>
@@ -1436,6 +1412,16 @@ function People({ principal }: { principal: Principal }) {
     (person) => !person.organizations.some((item) => item.primary),
   );
   useEffect(() => window.localStorage.setItem("people-view", peopleView), [peopleView]);
+  useEffect(() => {
+    const next = writePeopleListState(currentPeopleListState);
+    if (next.toString() !== listSearchParams.toString()) setListSearchParams(next, { replace: true });
+  }, [accountStatusFilter, listSearchParams, organizationFilter, peoplePage, peopleView, personSearch, personStatusFilter, roleFilter, setListSearchParams]);
+  useEffect(() => {
+    const saved = Number.parseInt(window.sessionStorage.getItem("people-list-scroll") ?? "", 10);
+    if (!Number.isFinite(saved)) return;
+    window.sessionStorage.removeItem("people-list-scroll");
+    window.requestAnimationFrame(() => window.scrollTo({ top: saved }));
+  }, []);
   return (
     <>
       <Space className="page-title">
@@ -1447,15 +1433,15 @@ function People({ principal }: { principal: Principal }) {
         )}
       </Space>
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        <Card size="small" className="people-filter-card">
+        <Card size="small" className="people-filter-card people-filter-sticky">
           <Space wrap>
-            <Input allowClear prefix={<SearchOutlined />} placeholder="搜索姓名、手机号、用户名或部门" value={personSearch} onChange={(event) => setPersonSearch(event.target.value)} style={{ width: 320 }} />
-            <Select allowClear placeholder="组织" value={organizationFilter} onChange={setOrganizationFilter} style={{ width: 180 }} options={(organizations.data ?? []).filter((item) => item.type !== "company").map((item) => ({ value: item.id, label: item.name }))} />
-            <Select allowClear placeholder="人员状态" value={personStatusFilter} onChange={setPersonStatusFilter} style={{ width: 130 }} options={[{ value: "active", label: "正常" }, { value: "disabled", label: "已停用" }, { value: "merged", label: "已合并" }]} />
-            <Select allowClear placeholder="账号状态" value={accountStatusFilter} onChange={setAccountStatusFilter} style={{ width: 140 }} options={[{ value: "none", label: "未开通" }, { value: "pending", label: "待激活" }, { value: "active", label: "正常" }, { value: "disabled", label: "已停用" }, { value: "merged", label: "已合并" }]} />
-            <Select allowClear placeholder="管理角色" value={roleFilter} onChange={setRoleFilter} style={{ width: 160 }} options={["company_admin", "org_leader", "org_admin", "field_reporter", "project_admin"].map((value) => ({ value, label: labels[value] }))} />
-            <Button type={peopleView === "list" ? "primary" : "default"} onClick={() => setPeopleView("list")}>列表视图</Button>
-            <Button type={peopleView === "grouped" ? "primary" : "default"} onClick={() => setPeopleView("grouped")}>按部门分组</Button>
+            <Input allowClear prefix={<SearchOutlined />} placeholder="搜索姓名、手机号、用户名或部门" value={personSearch} onChange={(event) => { setPersonSearch(event.target.value); setPeoplePage(1); }} style={{ width: 320 }} />
+            <Select allowClear placeholder="组织" value={organizationFilter} onChange={(value) => { setOrganizationFilter(value); setPeoplePage(1); }} style={{ width: 180 }} options={(organizations.data ?? []).filter((item) => item.type !== "company").map((item) => ({ value: item.id, label: item.name }))} />
+            <Select allowClear placeholder="人员状态" value={personStatusFilter} onChange={(value) => { setPersonStatusFilter(value); setPeoplePage(1); }} style={{ width: 130 }} options={[{ value: "active", label: "正常" }, { value: "disabled", label: "已停用" }, { value: "merged", label: "已合并" }]} />
+            <Select allowClear placeholder="账号状态" value={accountStatusFilter} onChange={(value) => { setAccountStatusFilter(value); setPeoplePage(1); }} style={{ width: 140 }} options={[{ value: "none", label: "未开通" }, { value: "pending", label: "待激活" }, { value: "active", label: "正常" }, { value: "disabled", label: "已停用" }, { value: "merged", label: "已合并" }]} />
+            <Select allowClear placeholder="管理角色" value={roleFilter} onChange={(value) => { setRoleFilter(value); setPeoplePage(1); }} style={{ width: 160 }} options={["company_admin", "org_leader", "org_admin", "field_reporter", "project_admin"].map((value) => ({ value, label: labels[value] }))} />
+            <Button type={peopleView === "list" ? "primary" : "default"} onClick={() => { setPeopleView("list"); setPeoplePage(1); }}>列表视图</Button>
+            <Button type={peopleView === "grouped" ? "primary" : "default"} onClick={() => { setPeopleView("grouped"); setPeoplePage(1); }}>按部门分组</Button>
           </Space>
         </Card>
         <Space wrap>
@@ -1467,7 +1453,7 @@ function People({ principal }: { principal: Principal }) {
         {!filteredPeople.length ? <Alert showIcon type="info" message="没有匹配的人员档案" /> : peopleView === "grouped" ? (
           <Collapse items={[...groupedPeople.map(({ organization, people }) => ({ key: organization.id, label: `${organization.name}（${people.length} 人）`, children: <Table rowKey="id" pagination={false} dataSource={people} columns={personColumns} /> })), ...(unassigned.length ? [{ key: "unassigned", label: `待分配部门（${unassigned.length} 人）`, children: <Table rowKey="id" pagination={false} dataSource={unassigned} columns={personColumns} /> }] : [])]} />
         ) : (
-          <Table rowKey="id" dataSource={filteredPeople} columns={personColumns} {...(companyAdmin ? { rowSelection: { selectedRowKeys: selectedPersonIds, preserveSelectedRowKeys: true, onChange: (keys: Key[]) => setSelectedPersonIds(keys.map(String)) } } : {})} pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: (total) => `共 ${total} 人` }} />
+          <Table rowKey="id" dataSource={filteredPeople} columns={personColumns} {...(companyAdmin ? { rowSelection: { selectedRowKeys: selectedPersonIds, preserveSelectedRowKeys: true, onChange: (keys: Key[]) => setSelectedPersonIds(keys.map(String)) } } : {})} pagination={{ current: peoplePage, defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: (total) => `共 ${total} 人`, onChange: (page) => setPeoplePage(page) }} />
         )}
       </Space>
       <Modal title="批量停用人员" open={bulkDisableOpen} footer={null} onCancel={() => setBulkDisableOpen(false)} destroyOnClose>
@@ -1650,12 +1636,15 @@ function People({ principal }: { principal: Principal }) {
 
 function PersonDetailRoute({ principal }: { principal: Principal }) {
   const navigate = useNavigate();
+  const [detailSearchParams] = useSearchParams();
   const { personId } = useParams();
+  const requestedReturnTo = detailSearchParams.get("returnTo");
+  const returnTo = requestedReturnTo && ["/people", "/organization", "/projects"].some((prefix) => requestedReturnTo.startsWith(prefix)) ? requestedReturnTo : "/people";
   const people = useQuery({ queryKey: ["persons"], queryFn: () => api<Person[]>("/api/persons") });
   const person = (people.data ?? []).find((item) => item.id === personId);
   if (people.isLoading) return <Card loading />;
-  if (!person) return <Alert type="warning" showIcon message="人员不存在或不在你的管理范围内" action={<Button onClick={() => navigate("/people")}>返回人员列表</Button>} />;
-  return <PersonDetail person={person} principal={principal} onClose={() => navigate("/people")} onChanged={() => void people.refetch()} />;
+  if (!person) return <Alert type="warning" showIcon message="人员不存在或不在你的管理范围内" action={<Button onClick={() => navigate(returnTo)}>返回人员列表</Button>} />;
+  return <PersonDetail person={person} principal={principal} onClose={() => navigate(returnTo)} onChanged={() => void people.refetch()} />;
 }
 
 function PersonDetail({
@@ -2042,6 +2031,8 @@ function PersonDetail({
 function OrganizationProjects({ principal, view = "organizations" }: { principal: Principal; view?: "organizations" | "projects" }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const detailRef = useRef<HTMLDivElement>(null);
   const organizations = useQuery({
     queryKey: ["organizations"],
     queryFn: () => api<Organization[]>("/api/organizations"),
@@ -2060,9 +2051,10 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
   const [roleName, setRoleName] = useState("field_reporter");
   const [projectOpen, setProjectOpen] = useState(false);
   const [memberProject, setMemberProject] = useState<Project>();
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string>();
-  const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [directorySearch, setDirectorySearch] = useState("");
+  const [organizationTypeFilter, setOrganizationTypeFilter] = useState<string>();
+  const [projectStatusFilter, setProjectStatusFilter] = useState<string>();
+  const [collapsedOrganizationGroups, setCollapsedOrganizationGroups] = useState(() => new Set<string>(["contractor"]));
   const members = useQuery({
     queryKey: ["project-members", memberProject?.id],
     queryFn: () =>
@@ -2134,11 +2126,31 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
         managedOrganizationIds.includes(organization.id),
       );
   const normalizedDirectorySearch = directorySearch.trim().toLocaleLowerCase("zh-CN");
-  const organizationRows = (organizations.data ?? []).filter((organization) => organization.type !== "company" && (!normalizedDirectorySearch || organization.name.toLocaleLowerCase("zh-CN").includes(normalizedDirectorySearch)));
-  const selectedOrganization = organizationRows.find((organization) => organization.id === selectedOrganizationId) ?? organizationRows[0];
+  const organizationRows = (organizations.data ?? []).filter((organization) => organization.type !== "company" && (!organizationTypeFilter || organization.type === organizationTypeFilter) && (!normalizedDirectorySearch || organization.name.toLocaleLowerCase("zh-CN").includes(normalizedDirectorySearch)));
+  const organizationGroups = groupOrganizations(organizationRows);
+  const selectedOrganizationId = readWorkspaceSelection(searchParams, "organizationId", organizationRows.map((organization) => organization.id));
+  const selectedOrganization = organizationRows.find((organization) => organization.id === selectedOrganizationId);
   const selectedOrganizationPeople = peopleInOrganization(people.data ?? [], selectedOrganization?.id);
-  const projectRows = (projects.data ?? []).filter((project) => !normalizedDirectorySearch || [project.name, project.code, project.responsibleOrganization.name].some((value) => value.toLocaleLowerCase("zh-CN").includes(normalizedDirectorySearch)));
-  const selectedProject = projectRows.find((project) => project.id === selectedProjectId) ?? projectRows[0];
+  const projectRows = (projects.data ?? []).filter((project) => (!projectStatusFilter || project.status === projectStatusFilter) && (!normalizedDirectorySearch || [project.name, project.code, project.responsibleOrganization.name].some((value) => value.toLocaleLowerCase("zh-CN").includes(normalizedDirectorySearch))));
+  const selectedProjectId = readWorkspaceSelection(searchParams, "projectId", projectRows.map((project) => project.id));
+  const selectedProject = projectRows.find((project) => project.id === selectedProjectId);
+  const selectedProjectMembers = useQuery({
+    queryKey: ["project-members", "workspace", selectedProject?.id],
+    queryFn: () => api<Array<{ id: string; status: string; person: Person }>>(`/api/projects/${selectedProject!.id}/members`),
+    enabled: view === "projects" && !!selectedProject,
+  });
+  const selectedProjectAdmins = selectedProject
+    ? (people.data ?? []).filter((person) => person.roleAssignments.some((role) => role.active && role.role === "project_admin" && role.scopeType === "project" && role.scopeId === selectedProject.id))
+    : [];
+  const selectWorkspaceItem = (key: "organizationId" | "projectId", id: string) => {
+    setSearchParams(writeWorkspaceSelection(searchParams, key, id), { replace: true });
+    detailRef.current?.scrollTo({ top: 0 });
+  };
+  const toggleOrganizationGroup = (type: string) => setCollapsedOrganizationGroups((current) => {
+    const next = new Set(current);
+    if (next.has(type)) next.delete(type); else next.add(type);
+    return next;
+  });
   const canChangeProjectStatus = (project: Project) =>
     companyAdmin ||
     managedOrganizationIds.includes(project.responsibleOrganizationId);
@@ -2194,6 +2206,31 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
     ) : (
       "—"
     );
+  const confirmOrganizationDelete = (row: Organization) => Modal.confirm({
+    title: `删除“${row.name}”？`,
+    content: "仅未关联人员、项目、权限或培训资料的组织可以删除；不能删除时会明确提示原因。",
+    okText: "确认删除",
+    cancelText: "取消",
+    okButtonProps: { danger: true },
+    onOk: async () => {
+      try {
+        await api(`/api/organizations/${row.id}`, { method: "DELETE" });
+        message.success("组织已删除");
+        void organizations.refetch();
+      } catch (error) {
+        message.error((error as Error).message);
+      }
+    },
+  });
+  const changeProjectStatus = async (project: Project, status: "active" | "paused" | "ended") => {
+    try {
+      await api(`/api/projects/${project.id}/status`, json("PATCH", { status }));
+      message.success(status === "ended" ? "项目已结束" : status === "paused" ? "项目已暂停" : "项目已恢复");
+      void projects.refetch();
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
   return (
     <>
       <Space className="page-title">
@@ -2207,284 +2244,44 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
           </Button>
         )}
       </Space>
-      <div className="master-workbench">
-        <aside className="master-directory">
-          <Input allowClear prefix={<SearchOutlined />} placeholder={view === "organizations" ? "搜索组织" : "搜索项目"} value={directorySearch} onChange={(event) => setDirectorySearch(event.target.value)} />
-          <div className="master-directory-list">
-            {(view === "organizations" ? organizationRows : projectRows).map((item) => (
-              <button type="button" key={item.id} className={`master-directory-item ${item.id === (view === "organizations" ? selectedOrganization?.id : selectedProject?.id) ? "is-active" : ""}`} onClick={() => view === "organizations" ? setSelectedOrganizationId(item.id) : setSelectedProjectId(item.id)}>
-                <strong>{item.name}</strong>
-                <span>{view === "organizations" ? `${(item as Organization).memberCount} 人 · ${organizationTypeLabels[(item as Organization).type] ?? (item as Organization).type}` : `${(item as Project)._count.members} 人 · ${labels[(item as Project).status] ?? (item as Project).status}`}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
-        <section className="master-detail">
-      <Tabs
-        activeKey={view === "organizations" ? "org" : "projects"}
-        renderTabBar={() => <></>}
-        items={[
-          {
-            key: "org",
-            label: "组织",
-            children: (
-              <>
-              <Table
-                rowKey="id"
-                pagination={false}
-                scroll={{ x: 1120 }}
-                dataSource={selectedOrganization ? [selectedOrganization] : []}
-                columns={[
-                  {
-                    title: "名称",
-                    dataIndex: "name",
-                    fixed: "left",
-                    width: 180,
-                  },
-                  {
-                    title: "类型",
-                    dataIndex: "type",
-                    width: 100,
-                    render: (v: string) => organizationTypeLabels[v] ?? v,
-                  },
-                  { title: "人数", dataIndex: "memberCount", width: 80 },
-                  {
-                    title: "负责人",
-                    width: 180,
-                    render: (_: unknown, row: Organization) =>
-                      roleTags(row, row.leaders, companyAdmin),
-                  },
-                  {
-                    title: "管理人员",
-                    width: 200,
-                    render: (_: unknown, row: Organization) =>
-                      roleTags(row, row.admins, companyAdmin),
-                  },
-                  {
-                    title: "野外项目报送人员",
-                    width: 260,
-                    render: (_: unknown, row: Organization) =>
-                      row.type === "business_entity"
-                        ? roleTags(
-                            row,
-                            row.reporters,
-                            canManageOrganization(row),
-                          )
-                        : "—",
-                  },
-                  {
-                    title: "操作",
-                    fixed: "right",
-                    width: 210,
-                    render: (_: unknown, row: Organization) => (
-                      <Space>
-                        {companyAdmin && (
-                          <Button
-                            size="small"
-                            onClick={() => setEditingOrg(row)}
-                          >
-                            编辑
-                          </Button>
-                        )}
-                        {["department", "business_entity"].includes(row.type) &&
-                          canGrantOrganizationRole(row) && (
-                            <Button
-                              size="small"
-                              onClick={() => {
-                                setRoleName(
-                                  companyAdmin || principal.roles.some((role) => role.role === "org_leader" && role.scopeId === row.id) ? "org_admin" : "field_reporter",
-                                );
-                                setRoleOrg(row);
-                              }}
-                            >
-                              人员权限
-                            </Button>
-                          )}
-                        {companyAdmin && (
-                          <Button
-                            size="small"
-                            danger
-                            onClick={() =>
-                              Modal.confirm({
-                                title: `删除“${row.name}”？`,
-                                content:
-                                  "仅未关联人员、项目、权限或培训资料的组织可以删除；不能删除时会明确提示原因。",
-                                okText: "确认删除",
-                                cancelText: "取消",
-                                okButtonProps: { danger: true },
-                                onOk: async () => {
-                                  try {
-                                    await api(`/api/organizations/${row.id}`, {
-                                      method: "DELETE",
-                                    });
-                                    message.success("组织已删除");
-                                    void organizations.refetch();
-                                  } catch (error) {
-                                    message.error((error as Error).message);
-                                  }
-                                },
-                              })
-                            }
-                          >
-                            删除
-                          </Button>
-                        )}
-                      </Space>
-                    ),
-                  },
-                ]}
-              />
-              {selectedOrganization && (
-                <div className="organization-people">
-                  <div className="master-section-heading">
-                    <Typography.Title level={4}>组织人员</Typography.Title>
-                    <Typography.Text type="secondary">共 {selectedOrganizationPeople.length} 人</Typography.Text>
-                  </div>
-                  <Table
-                    rowKey="id"
-                    loading={people.isLoading}
-                    pagination={false}
-                    dataSource={selectedOrganizationPeople}
-                    locale={{ emptyText: "该组织暂无人员" }}
-                    columns={[
-                      {
-                        title: "姓名",
-                        dataIndex: "name",
-                        render: (value: string, row: Person) => <Button type="link" className="table-link" onClick={() => navigate(`/people/${row.id}`)}>{value}</Button>,
-                      },
-                      { title: "人员类型", dataIndex: "type", render: (value: string) => labels[value] ?? value },
-                      { title: "手机号", dataIndex: "phone" },
-                      {
-                        title: "账号",
-                        render: (_: unknown, row: Person) => row.account
-                          ? <Tag color={row.account.status === "active" ? "green" : "default"}>{labels[row.account.status] ?? row.account.status}</Tag>
-                          : <Typography.Text type="secondary">未开通</Typography.Text>,
-                      },
-                      {
-                        title: "本组织职责",
-                        render: (_: unknown, row: Person) => {
-                          const roles = row.roleAssignments.filter((role) => role.scopeType === "organization" && role.scopeId === selectedOrganization.id && role.role !== "learner");
-                          return roles.length
-                            ? <Space size={[0, 4]} wrap>{roles.map((role) => <Tag color="blue" key={role.id}>{labels[role.role] ?? role.role}{role.activationPending ? "（待激活）" : ""}</Tag>)}</Space>
-                            : <Typography.Text type="secondary">普通人员</Typography.Text>;
-                        },
-                      },
-                      { title: "人员状态", dataIndex: "status", render: (value: string) => <Tag color={value === "active" ? "green" : "default"}>{labels[value] ?? value}</Tag> },
-                    ]}
-                  />
-                </div>
-              )}
-              </>
-            ),
-          },
-          {
-            key: "projects",
-            label: "项目",
-            children: (
-              <Table
-                rowKey="id"
-                pagination={false}
-                dataSource={selectedProject ? [selectedProject] : []}
-                columns={[
-                  { title: "项目名称", dataIndex: "name" },
-                  { title: "编号", dataIndex: "code" },
-                  {
-                    title: "类型/地点",
-                    render: (_: unknown, row: Project) =>
-                      [row.projectType, row.location]
-                        .filter(Boolean)
-                        .join(" / ") || "—",
-                  },
-                  {
-                    title: "项目负责人",
-                    render: (_: unknown, row: Project) =>
-                      [row.managerName, row.managerPhone]
-                        .filter(Boolean)
-                        .join(" / ") || "—",
-                  },
-                  {
-                    title: "责任实体",
-                    render: (_: unknown, row: Project) =>
-                      row.responsibleOrganization.name,
-                  },
-                  {
-                    title: "成员数",
-                    render: (_: unknown, row: Project) => row._count.members,
-                  },
-                  {
-                    title: "状态",
-                    dataIndex: "status",
-                    render: (v: string) => (
-                      <Tag
-                        color={
-                          v === "active"
-                            ? "green"
-                            : v === "ended"
-                              ? "default"
-                              : "orange"
-                        }
-                      >
-                        {labels[v] ?? v}
-                      </Tag>
-                    ),
-                  },
-                  {
-                    title: "操作",
-                    render: (_: unknown, row: Project) => (
-                      <Space>
-                        <Button
-                          size="small"
-                          onClick={() => setMemberProject(row)}
-                        >
-                          管理成员
-                        </Button>
-                        {canChangeProjectStatus(row) &&
-                          row.status !== "ended" && (
-                            <Button
-                              size="small"
-                              onClick={async () => {
-                                await api(
-                                  `/api/projects/${row.id}/status`,
-                                  json("PATCH", {
-                                    status:
-                                      row.status === "active"
-                                        ? "paused"
-                                        : "active",
-                                  }),
-                                );
-                                void projects.refetch();
-                              }}
-                            >
-                              {row.status === "active" ? "暂停" : "恢复"}
-                            </Button>
-                          )}
-                        {canChangeProjectStatus(row) &&
-                          row.status !== "ended" && (
-                            <Button
-                              danger
-                              size="small"
-                              onClick={async () => {
-                                await api(
-                                  `/api/projects/${row.id}/status`,
-                                  json("PATCH", { status: "ended" }),
-                                );
-                                void projects.refetch();
-                              }}
-                            >
-                              结束
-                            </Button>
-                          )}
-                      </Space>
-                    ),
-                  },
-                ]}
-              />
-            ),
-          },
-        ]}
+      <SplitWorkspace
+        detailRef={detailRef}
+        directoryHeader={<Space direction="vertical" size={10} style={{ width: "100%" }}>
+          <Input allowClear prefix={<SearchOutlined />} placeholder={view === "organizations" ? "搜索组织名称" : "搜索项目名称、编号或责任实体"} value={directorySearch} onChange={(event) => setDirectorySearch(event.target.value)} />
+          {view === "organizations"
+            ? <div className="master-directory-filters">
+                {[undefined, "business_entity", "department", "contractor"].map((type) => <Button key={type ?? "all"} size="small" type={organizationTypeFilter === type ? "primary" : "default"} onClick={() => setOrganizationTypeFilter(type)}>{type ? organizationTypeLabels[type] : "全部"}</Button>)}
+              </div>
+            : <Select allowClear placeholder="全部项目状态" value={projectStatusFilter} onChange={setProjectStatusFilter} options={["active", "paused", "ended"].map((status) => ({ value: status, label: labels[status] }))} />}
+        </Space>}
+        directory={<div className="master-directory-list">
+          {view === "organizations" ? organizationGroups.map((group) => <div className="master-directory-group" key={group.type}>
+            <button type="button" className="master-directory-group-title" onClick={() => toggleOrganizationGroup(group.type)}><span>{organizationTypeLabels[group.type]}</span><span>{group.rows.length} {collapsedOrganizationGroups.has(group.type) ? "⌄" : "⌃"}</span></button>
+            {!collapsedOrganizationGroups.has(group.type) && group.rows.map((organization) => <button type="button" title={organization.name} key={organization.id} className={`master-directory-item ${organization.id === selectedOrganization?.id ? "is-active" : ""}`} onClick={() => selectWorkspaceItem("organizationId", organization.id)}><strong>{organization.name}</strong><span>{organization.memberCount} 人</span></button>)}
+          </div>) : projectRows.map((project) => <button type="button" title={project.name} key={project.id} className={`master-directory-item ${project.id === selectedProject?.id ? "is-active" : ""}`} onClick={() => selectWorkspaceItem("projectId", project.id)}><strong>{project.name}</strong><span>{project._count.members} 人 · {labels[project.status] ?? project.status}</span><small>{project.responsibleOrganization.name}</small></button>)}
+          {!(view === "organizations" ? organizationRows.length : projectRows.length) && <Typography.Text type="secondary">没有匹配结果</Typography.Text>}
+        </div>}
+        mobileSelector={<Select showSearch optionFilterProp="label" style={{ width: "100%" }} value={view === "organizations" ? selectedOrganization?.id : selectedProject?.id} onChange={(id?: string) => { if (id) selectWorkspaceItem(view === "organizations" ? "organizationId" : "projectId", id); }} options={(view === "organizations" ? organizationRows : projectRows).map((item) => ({ value: item.id, label: item.name }))} placeholder={view === "organizations" ? "选择组织" : "选择项目"} />}
+        detailHeader={view === "organizations" ? selectedOrganization && <div className="master-object-header"><div><Typography.Title level={4}>{selectedOrganization.name}</Typography.Title><Typography.Text type="secondary">{organizationTypeLabels[selectedOrganization.type] ?? selectedOrganization.type} · {selectedOrganization.memberCount} 名当前人员 · 已开通账号 {selectedOrganizationPeople.filter((person) => person.account?.status === "active").length} 人</Typography.Text></div><Space wrap>
+          {companyAdmin && <Button onClick={() => setEditingOrg(selectedOrganization)}>编辑组织</Button>}
+          {["department", "business_entity"].includes(selectedOrganization.type) && canGrantOrganizationRole(selectedOrganization) && <Button onClick={() => { setRoleName(companyAdmin || principal.roles.some((role) => role.role === "org_leader" && role.scopeId === selectedOrganization.id) ? "org_admin" : "field_reporter"); setRoleOrg(selectedOrganization); }}>管理职责</Button>}
+          {companyAdmin && <Button danger onClick={() => confirmOrganizationDelete(selectedOrganization)}>删除</Button>}
+        </Space></div> : selectedProject && <div className="master-object-header"><div><Typography.Title level={4}>{selectedProject.name}</Typography.Title><Typography.Text type="secondary">{selectedProject.code} · {selectedProject.responsibleOrganization.name} · {labels[selectedProject.status] ?? selectedProject.status}</Typography.Text></div><Space wrap><Button onClick={() => setMemberProject(selectedProject)}>管理成员</Button>{canChangeProjectStatus(selectedProject) && selectedProject.status !== "ended" && <><Button onClick={() => void changeProjectStatus(selectedProject, selectedProject.status === "active" ? "paused" : "active")}>{selectedProject.status === "active" ? "暂停" : "恢复"}</Button><Button danger onClick={() => void changeProjectStatus(selectedProject, "ended")}>结束项目</Button></>}</Space></div>}
+        detail={view === "organizations" ? selectedOrganization ? <Tabs defaultActiveKey="people" items={[
+          { key: "overview", label: "概览", children: <Descriptions bordered size="small" column={2} items={[{ key: "type", label: "组织类型", children: organizationTypeLabels[selectedOrganization.type] ?? selectedOrganization.type }, { key: "people", label: "当前人数", children: `${selectedOrganization.memberCount} 人` }, { key: "leader", label: "负责人", children: roleTags(selectedOrganization, selectedOrganization.leaders, companyAdmin) }, { key: "admins", label: "组织管理员", children: roleTags(selectedOrganization, selectedOrganization.admins, companyAdmin) }]} /> },
+          { key: "people", label: `人员 ${selectedOrganizationPeople.length}`, children: <Table rowKey="id" loading={people.isLoading} pagination={false} dataSource={selectedOrganizationPeople} locale={{ emptyText: "该组织暂无人员" }} columns={[{ title: "姓名", dataIndex: "name", render: (value: string, row: Person) => <Button type="link" className="table-link" onClick={() => navigate(`/people/${row.id}?returnTo=${encodeURIComponent(`/organization?organizationId=${selectedOrganization.id}`)}`)}>{value}</Button> }, { title: "人员类型", dataIndex: "type", responsive: ["md"], render: (value: string) => labels[value] ?? value }, { title: "手机号", dataIndex: "phone", responsive: ["lg"] }, { title: "账号", render: (_: unknown, row: Person) => row.account ? <Tag color={row.account.status === "active" ? "green" : "default"}>{labels[row.account.status] ?? row.account.status}</Tag> : <Typography.Text type="secondary">未开通</Typography.Text> }, { title: "本组织职责", render: (_: unknown, row: Person) => { const roles = row.roleAssignments.filter((role) => role.scopeType === "organization" && role.scopeId === selectedOrganization.id && role.role !== "learner"); return roles.length ? <Space size={[0, 4]} wrap>{roles.map((role) => <Tag color="blue" key={role.id}>{labels[role.role] ?? role.role}{role.activationPending ? "（待激活）" : ""}</Tag>)}</Space> : <Typography.Text type="secondary">普通人员</Typography.Text>; } }, { title: "状态", dataIndex: "status", render: (value: string) => <Tag color={value === "active" ? "green" : "default"}>{labels[value] ?? value}</Tag> }]} /> },
+          { key: "roles", label: "职责权限", children: <Descriptions bordered size="small" column={1} items={[{ key: "leader", label: "负责人", children: roleTags(selectedOrganization, selectedOrganization.leaders, companyAdmin) }, { key: "admins", label: "组织管理员", children: roleTags(selectedOrganization, selectedOrganization.admins, companyAdmin) }, ...(selectedOrganization.type === "business_entity" ? [{ key: "reporters", label: "野外项目报送人员", children: roleTags(selectedOrganization, selectedOrganization.reporters, canManageOrganization(selectedOrganization)) }] : [])]} /> },
+          ...(selectedOrganization.type === "business_entity" ? [{ key: "projects", label: `项目 ${(projects.data ?? []).filter((project) => project.responsibleOrganizationId === selectedOrganization.id).length}`, children: <Table rowKey="id" pagination={false} dataSource={(projects.data ?? []).filter((project) => project.responsibleOrganizationId === selectedOrganization.id)} columns={[{ title: "项目", dataIndex: "name" }, { title: "编号", dataIndex: "code" }, { title: "成员", render: (_: unknown, row: Project) => `${row._count.members} 人` }, { title: "状态", dataIndex: "status", render: (value: string) => labels[value] ?? value }, { title: "操作", render: (_: unknown, row: Project) => <Button size="small" onClick={() => navigate(`/projects?projectId=${row.id}`)}>查看项目</Button> }]} /> }] : []),
+          { key: "changes", label: "变更记录", children: <Alert showIcon type="info" message="组织资料修改、负责人和管理员变更均已写入审计日志" description="本页不允许覆盖或删除历史授权记录。人员的部门变更可在对应人员详情中查看。" /> },
+        ]} /> : <Alert type="info" showIcon message="没有可查看的组织" /> : selectedProject ? <Tabs defaultActiveKey="members" items={[
+          { key: "overview", label: "概览", children: <Descriptions bordered size="small" column={2} items={[{ key: "code", label: "项目编号", children: selectedProject.code }, { key: "status", label: "状态", children: labels[selectedProject.status] ?? selectedProject.status }, { key: "org", label: "责任实体", children: selectedProject.responsibleOrganization.name }, { key: "type", label: "类型/地点", children: [selectedProject.projectType, selectedProject.location].filter(Boolean).join(" / ") || "—" }, { key: "manager", label: "项目负责人", children: [selectedProject.managerName, selectedProject.managerPhone].filter(Boolean).join(" / ") || "—" }, { key: "members", label: "当前成员", children: `${selectedProject._count.members} 人` }]} /> },
+          { key: "members", label: `项目成员 ${selectedProject._count.members}`, children: <Table rowKey="id" loading={selectedProjectMembers.isLoading} pagination={false} dataSource={(selectedProjectMembers.data ?? []).filter((row) => row.status === "active")} locale={{ emptyText: "该项目暂无当前成员" }} columns={[{ title: "姓名", render: (_: unknown, row: { person: Person }) => <Button type="link" className="table-link" onClick={() => navigate(`/people/${row.person.id}?returnTo=${encodeURIComponent(`/projects?projectId=${selectedProject.id}`)}`)}>{row.person.name}</Button> }, { title: "所属组织", render: (_: unknown, row: { person: Person }) => row.person.organizations.find((item) => item.primary)?.organization.name ?? "—" }, { title: "人员类型", responsive: ["md"], render: (_: unknown, row: { person: Person }) => labels[row.person.type] ?? row.person.type }, { title: "状态", dataIndex: "status", render: (value: string) => labels[value] ?? value }]} /> },
+          { key: "admins", label: `项目管理员 ${selectedProjectAdmins.length}`, children: <Table rowKey="id" pagination={false} dataSource={selectedProjectAdmins} locale={{ emptyText: "尚未设置项目管理员" }} columns={[{ title: "姓名", dataIndex: "name" }, { title: "所属组织", render: (_: unknown, row: Person) => row.organizations.find((item) => item.primary)?.organization.name ?? "—" }, { title: "账号", render: (_: unknown, row: Person) => row.account ? labels[row.account.status] ?? row.account.status : "未开通" }]} /> },
+          { key: "requests", label: `加入申请 ${(selectedProjectMembers.data ?? []).filter((row) => row.status === "pending").length}`, children: <Table rowKey="id" pagination={false} dataSource={(selectedProjectMembers.data ?? []).filter((row) => row.status === "pending")} locale={{ emptyText: "没有待处理的加入申请" }} columns={[{ title: "姓名", render: (_: unknown, row: { person: Person }) => row.person.name }, { title: "所属组织", render: (_: unknown, row: { person: Person }) => row.person.organizations.find((item) => item.primary)?.organization.name ?? "—" }, { title: "操作", render: () => <Button size="small" onClick={() => setMemberProject(selectedProject)}>进入成员管理</Button> }]} /> },
+          { key: "training", label: "培训关联", children: <Alert showIcon type="info" message="培训任务继续在培训教育模块统一管理" action={<Button onClick={() => navigate(`/training?projectId=${selectedProject.id}`)}>查看培训安排</Button>} /> },
+          { key: "changes", label: "变更记录", children: <Alert showIcon type="info" message="项目状态、成员审核和管理员授权均保留审计记录" description="结束项目不会物理删除项目、成员或既有培训记录。" /> },
+        ]} /> : <Alert type="info" showIcon message="没有可查看的项目" />}
       />
-        </section>
-      </div>
       <Modal
         title="新建组织"
         open={orgOpen}

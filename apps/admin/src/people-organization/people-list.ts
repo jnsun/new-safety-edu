@@ -21,6 +21,16 @@ export type PeopleFilters = {
   role?: string | undefined;
 };
 
+export type PeopleListState = {
+  search: string;
+  organizationId?: string | undefined;
+  personStatus?: string | undefined;
+  accountStatus?: string | undefined;
+  role?: string | undefined;
+  view: PeopleView;
+  page: number;
+};
+
 export function filterPeopleRows<T extends PeopleListRow>(rows: T[], filters: PeopleFilters) {
   const search = filters.search?.trim().toLocaleLowerCase("zh-CN") ?? "";
   return rows.filter((row) => {
@@ -37,6 +47,31 @@ export function filterPeopleRows<T extends PeopleListRow>(rows: T[], filters: Pe
 export function peopleInOrganization<T extends { organizations: Array<{ organization: { id: string } }> }>(rows: T[], organizationId?: string) {
   if (!organizationId) return [];
   return rows.filter((row) => row.organizations.some(({ organization }) => organization.id === organizationId));
+}
+
+export function readPeopleListState(search: URLSearchParams): PeopleListState {
+  const page = Number.parseInt(search.get("page") ?? "1", 10);
+  return {
+    search: search.get("q") ?? "",
+    organizationId: search.get("organizationId") || undefined,
+    personStatus: search.get("personStatus") || undefined,
+    accountStatus: search.get("accountStatus") || undefined,
+    role: search.get("role") || undefined,
+    view: readPeopleView(search.get("view")),
+    page: Number.isFinite(page) && page > 0 ? page : 1,
+  };
+}
+
+export function writePeopleListState(state: PeopleListState) {
+  const search = new URLSearchParams();
+  if (state.search) search.set("q", state.search);
+  if (state.organizationId) search.set("organizationId", state.organizationId);
+  if (state.personStatus) search.set("personStatus", state.personStatus);
+  if (state.accountStatus) search.set("accountStatus", state.accountStatus);
+  if (state.role) search.set("role", state.role);
+  if (state.view === "grouped") search.set("view", state.view);
+  if (state.page > 1) search.set("page", String(state.page));
+  return search;
 }
 
 export function readPeopleView(value: string | null): PeopleView {
