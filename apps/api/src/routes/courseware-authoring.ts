@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { extname, relative, resolve } from "node:path";
 import { Prisma, type CoursewareType } from "@prisma/client";
 import type { StructuredCoursewareDocument } from "@safety/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -6,6 +8,9 @@ import { z } from "zod";
 import type { Principal } from "../auth.js";
 import { audit } from "../audit.js";
 import { prisma } from "../db.js";
+import type { Env } from "../env.js";
+import { exportCoursewareJson, exportCoursewareXlsx, exportCoursewareZip, type ExportAsset } from "../courseware-export.js";
+import { createAnonymousCoursewareXlsx, createCoursewareJsonSchema, createCoursewareJsonTemplate } from "../courseware-template.js";
 import {
   canEditCoursewareVersion,
   hashStructuredCourseware,
@@ -18,7 +23,7 @@ import {
 import { assertCoursewareFile, assertScope } from "./day2.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
-type Deps = { authenticate: Guard; requireManager: Guard };
+type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
 
 const principalOf = (request: FastifyRequest) => {
   if (!request.principal) throw Object.assign(new Error("未登录"), { statusCode: 401, code: "UNAUTHORIZED" });
@@ -123,6 +128,66 @@ async function syncStructuredAssets(tx: Prisma.TransactionClient, coursewareVers
 
 export async function registerCoursewareAuthoringRoutes(app: FastifyInstance, deps: Deps) {
   const manager = { preHandler: [deps.authenticate, deps.requireManager] };
+
+  app.get("/api/courseware-authoring/templates/:format", manager, async (request, reply) => {
+    const principal = principalOf(request);
+    const { format } = z.object({ format: z.enum(["xlsx", "json", "schema"]) }).parse(request.params);
+    const output = format === "xlsx" ? await createAnonymousCoursewareXlsx() : format === "json" ? createCoursewareJsonTemplate() : createCoursewareJsonSchema();
+    const filename = format === "schema" ? "structured-courseware.schema.json" : `structured-courseware-template.${format}`;
+    audit(principal.accountId, "courseware.template_download", "courseware_template", format);
+    return reply
+      .header("Content-Type", format === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/json; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+      .send(output);
+  });
+
+  app.get("/api/courseware-versions/:id/export", manager, async (request, reply) => {
+    const principal = principalOf(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { format } = z.object({ format: z.enum(["xlsx", "json", "zip"]) }).parse(request.query);
+    const version = await prisma.coursewareVersion.findUniqueOrThrow({
+      where: { id },
+      include: { courseware: true, assets: { include: { file: true } } }
+    });
+    await assertScope(principal, version.courseware.scopeType, version.courseware.scopeId);
+    if (version.courseware.type !== "structured" || !version.structuredContent) {
+      throw Object.assign(new Error("仅结构化课件支持此导出格式"), { statusCode: 400, code: "STRUCTURED_COURSEWARE_REQUIRED" });
+    }
+    const document = normalizeStructuredCourseware(version.structuredContent);
+    const hasImages = document.units.some((unit) => unit.blocks.some((block) => block.type === "knowledge" && block.imageFileId));
+    if (hasImages && format !== "zip") {
+      throw Object.assign(new Error("包含图片的课件请导出 ZIP，以免丢失素材"), { statusCode: 400, code: "COURSEWARE_ZIP_REQUIRED" });
+    }
+    const filesById = new Map(version.assets.map(({ file }) => [file.id, file]));
+    const usedNames = new Set<string>();
+    const extensionByMime: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" };
+    const assets: ExportAsset[] = [];
+    for (const unit of document.units) for (const block of unit.blocks) {
+      if (block.type !== "knowledge" || !block.imageFileId) continue;
+      const file = filesById.get(block.imageFileId);
+      if (!file) throw Object.assign(new Error("课件素材关联不完整"), { statusCode: 409, code: "COURSEWARE_ASSET_MISSING" });
+      const extension = extensionByMime[file.mimeType] ?? extname(file.originalName).toLowerCase();
+      let name = `${block.key.replace(/[^A-Za-z0-9_-]/g, "_") || "asset"}-${file.id.slice(0, 8)}${extension}`;
+      while (usedNames.has(name.toLocaleLowerCase("en-US"))) name = `${block.key.replace(/[^A-Za-z0-9_-]/g, "_") || "asset"}-${file.id}${extension}`;
+      usedNames.add(name.toLocaleLowerCase("en-US"));
+      const path = `assets/${name}`;
+      const root = resolve(deps.env.UPLOAD_ROOT);
+      const diskPath = resolve(root, file.storageKey);
+      const outside = relative(root, diskPath);
+      if (outside.startsWith("..") || outside === "" || resolve(diskPath) !== diskPath) throw Object.assign(new Error("课件素材存储路径无效"), { statusCode: 409, code: "COURSEWARE_ASSET_PATH_INVALID" });
+      const buffer = format === "zip" ? await readFile(diskPath) : Buffer.alloc(0);
+      if (format === "zip" && (buffer.length !== file.size || createHash("sha256").update(buffer).digest("hex") !== file.sha256)) {
+        throw Object.assign(new Error("课件素材文件校验失败"), { statusCode: 409, code: "COURSEWARE_ASSET_INTEGRITY_FAILED" });
+      }
+      assets.push({ blockKey: block.key, path, sha256: file.sha256, buffer });
+    }
+    const code = version.courseware.code ?? `courseware-${version.courseware.id}`;
+    const output = format === "xlsx" ? await exportCoursewareXlsx(code, document, assets) : format === "json" ? exportCoursewareJson(code, document, assets) : await exportCoursewareZip(code, document, assets);
+    audit(principal.accountId, "courseware.export", "courseware_version", id, { format, assetCount: assets.length });
+    const filename = `courseware-${version.courseware.id}-v${version.version}.${format}`;
+    const contentType = format === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : format === "zip" ? "application/zip" : "application/json; charset=utf-8";
+    return reply.header("Content-Type", contentType).header("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`).send(output);
+  });
 
   app.post("/api/coursewares", manager, async (request, reply) => {
     const principal = principalOf(request);
