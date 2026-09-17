@@ -28,6 +28,7 @@ import { cleanupExpiredSensitiveExports } from "./sensitive-export.js";
 import { cleanupExpiredReceivablesExports, processPendingReceivablesExports } from "./receivables-export.js";
 import { assertCsrfRequest } from "./csrf.js";
 import { registerCoursewareAuthoringRoutes } from "./routes/courseware-authoring.js";
+import { registerDailyChallengeRoutes } from "./routes/daily-challenge.js";
 
 const env = loadEnv();
 const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.newPassword", "body.code", "body.refreshToken", "body.token", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
@@ -59,6 +60,7 @@ await registerFileRoutes(app, { env, ...guards });
 await registerWechatRoutes(app, { env, ...guards });
 await registerDay2Routes(app, { env, ...guards });
 await registerCoursewareAuthoringRoutes(app, { env, ...guards });
+await registerDailyChallengeRoutes(app, { env, authenticate: guards.authenticate });
 await registerDay4Routes(app, { env, ...guards });
 await registerSafetyManagementRoutes(app, { env, ...guards });
 await registerQualificationRoutes(app, { env, authenticate: guards.authenticate });

@@ -46,6 +46,13 @@ function zonedMidnight(year: number, month: number, day: number, timeZone: strin
   return new Date(instant);
 }
 
+export function challengeDayRange(date: Date, timeZone: string) {
+  const key = challengeDateKey(date, timeZone);
+  const [year, month, day] = key.split("-").map(Number) as [number, number, number];
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  return { date: key, start: zonedMidnight(year, month, day, timeZone), end: zonedMidnight(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), timeZone) };
+}
+
 export function challengeMonthRange(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit" }).formatToParts(date);
   const year = numberPart(parts, "year");
