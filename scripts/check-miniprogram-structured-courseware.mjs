@@ -27,6 +27,8 @@ assert.match(pageSource, /persistResume\(progressPercent, detail\.blockKey\)/, "
 assert.match(pageSource, /Math\.max\([^)]*progressPercent/, "结构化续学进度必须单调递增");
 assert.match(pageSource, /detail\.isLast[\s\S]*recordReachedEnd\(\)/, "只有显式到达最后内容块才能记录末尾证据");
 assert.match(pageTemplate, /courseware-blocks/, "课件页必须挂载结构化课件组件");
+assert.match(pageTemplate, /bindtap="reloadCourseware">重新加载<\/button>/, "加载失败必须提供明确的重新加载操作");
+assert.match(pageSource, /reloadCourseware\(\)/, "课件页必须提供可复用的重新加载处理器");
 assert.equal(JSON.parse(componentConfig).component, true, "渲染器必须注册为小程序组件");
 
 let definition;
@@ -74,5 +76,42 @@ instance.selectCheckpointOption({ currentTarget: { dataset: { unitIndex: 0, bloc
 assert.deepEqual(Array.from(instance.data.preparedUnits[0].blocks[0].options, (option) => option.selected), [false, true], "单选和判断只能保留一个选项");
 instance.submitCheckpoint({ currentTarget: { dataset: { unitIndex: 0, blockIndex: 0 } } });
 assert.equal(instance.lastEvent.detail.correct, true, "判断题必须支持本地即时反馈");
+
+let pageDefinition;
+let loadingAttempts = 0;
+const requestedPaths = [];
+vm.runInNewContext(pageSource, {
+  Page(value) { pageDefinition = value; },
+  require(id) {
+    assert.equal(id, "../../utils/api");
+    return { request: async (path, method = "GET") => {
+      requestedPaths.push({ path, method });
+      loadingAttempts += 1;
+      if (loadingAttempts === 1) throw new Error("网络暂时不可用");
+      return { title: "匿名课件", type: "structured", units: [], estimatedMinutes: 1, resumeState: null, reachedEndAt: null };
+    } };
+  },
+  wx: { nextTick(callback) { callback(); } },
+  console,
+  Promise,
+  Number,
+  Math,
+  setTimeout,
+  clearTimeout
+});
+const pageInstance = {
+  ...pageDefinition,
+  data: { ...pageDefinition.data },
+  setData(values) { Object.assign(this.data, values); }
+};
+await pageInstance.onLoad({ assignmentId: "assignment-1", versionId: "version-1" });
+assert.equal(pageInstance.data.error, "网络暂时不可用");
+await pageInstance.reloadCourseware();
+assert.equal(pageInstance.data.error, "", "重试成功必须清理旧错误");
+assert.equal(pageInstance.data.content.title, "匿名课件", "重试必须重新获取同一课件");
+assert.deepEqual(requestedPaths, [
+  { path: "/api/assignments/assignment-1/coursewares/version-1", method: "GET" },
+  { path: "/api/assignments/assignment-1/coursewares/version-1", method: "GET" }
+], "重试只能重复安全读取，不得创建进度或完成证据");
 
 console.log("MINIPROGRAM_STRUCTURED_COURSEWARE_CHECK=PASS");

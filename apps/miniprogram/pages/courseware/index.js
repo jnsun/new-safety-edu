@@ -5,24 +5,40 @@ const remainingText = (percent) => percent >= 100 ? '已阅读至末尾' : (perc
 Page({
   data: { assignmentId: '', versionId: '', content: null, progressPercent: 0, remainingText: '全部内容待阅读', structuredResumeBlockKey: '', atEnd: false, htmlNavigationSucceeded: false, reachingEnd: false, loading: true, busy: false, error: '', syncWarning: '' },
   async onLoad(options) {
+    this._destroyed = false
     this.setData({ assignmentId: options.assignmentId, versionId: options.versionId })
-    try {
-      const content = await api.request(`/api/assignments/${options.assignmentId}/coursewares/${options.versionId}`)
-      const hasCompatibleResume = content.type === 'structured' || (content.type === 'rich_text' && content.resumeState?.blockKey === 'rich-text')
-      const saved = hasCompatibleResume ? content.resumeState?.progressPercent : 0
-      const resumePercent = Number.isInteger(saved) && saved >= 0 && saved <= 100 ? saved : 0
-      const atEnd = !!content.reachedEndAt
-      const progressPercent = atEnd ? 100 : Math.min(resumePercent, 99)
-      this._savedPercent = progressPercent
-      this._queuedPercent = progressPercent
-      const structuredResumeBlockKey = content.type === 'structured' && typeof content.resumeState?.blockKey === 'string' ? content.resumeState.blockKey : ''
-      this.setData({ content, progressPercent, remainingText: remainingText(progressPercent), structuredResumeBlockKey, atEnd })
-      if (content.type === 'rich_text' && progressPercent && !atEnd) wx.nextTick(() => this.restorePosition(Math.min(progressPercent, 95)))
-    } catch (error) {
-      this.setData({ error: error.message })
-    } finally {
-      this.setData({ loading: false })
-    }
+    return this.loadCourseware()
+  },
+  reloadCourseware() {
+    return this.loadCourseware()
+  },
+  loadCourseware() {
+    if (this._loadingRequest) return this._loadingRequest
+    const { assignmentId, versionId } = this.data
+    if (!assignmentId || !versionId) return Promise.resolve()
+    this.setData({ loading: true, error: '' })
+    this._loadingRequest = (async () => {
+      try {
+        const content = await api.request(`/api/assignments/${assignmentId}/coursewares/${versionId}`)
+        if (this._destroyed) return
+        const hasCompatibleResume = content.type === 'structured' || (content.type === 'rich_text' && content.resumeState?.blockKey === 'rich-text')
+        const saved = hasCompatibleResume ? content.resumeState?.progressPercent : 0
+        const resumePercent = Number.isInteger(saved) && saved >= 0 && saved <= 100 ? saved : 0
+        const atEnd = !!content.reachedEndAt
+        const progressPercent = atEnd ? 100 : Math.min(resumePercent, 99)
+        this._savedPercent = progressPercent
+        this._queuedPercent = progressPercent
+        const structuredResumeBlockKey = content.type === 'structured' && typeof content.resumeState?.blockKey === 'string' ? content.resumeState.blockKey : ''
+        this.setData({ content, progressPercent, remainingText: remainingText(progressPercent), structuredResumeBlockKey, atEnd })
+        if (content.type === 'rich_text' && progressPercent && !atEnd) wx.nextTick(() => this.restorePosition(Math.min(progressPercent, 95)))
+      } catch (error) {
+        if (!this._destroyed) this.setData({ error: error.message || '课件加载失败，请重试' })
+      } finally {
+        this._loadingRequest = null
+        if (!this._destroyed) this.setData({ loading: false })
+      }
+    })()
+    return this._loadingRequest
   },
   restorePosition(percent) {
     const windowHeight = (wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()).windowHeight
