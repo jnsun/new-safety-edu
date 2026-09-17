@@ -8,8 +8,9 @@
 .resume-copy { display: block; margin-top: 18rpx; color: var(--muted); font-size: 28rpx; line-height: 1.5; }
 .reader-content { padding: 38rpx 34rpx; }
 .reader-content rich-text { color: #2c2c2e; font-size: 31rpx; line-height: 1.9; word-break: break-word; }
+.rich-end-action { padding-top: 28rpx; margin-top: 34rpx; border-top: 1rpx solid var(--line); }
 .section-title { display: block; margin-bottom: 10rpx; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
-.html-button, .attestation-button, .finish-button { width: 100%; }
+.html-button, .attestation-button, .end-confirm-button, .finish-button { width: 100%; }
 .attestation-button { margin-top: 18rpx; }
 .attestation-success { display: block; margin-top: 18rpx; color: var(--success); font-size: 28rpx; line-height: 1.5; font-weight: 550; }
 .sync-warning { display: block; margin-top: 18rpx; color: var(--warning); font-size: 28rpx; line-height: 1.5; }

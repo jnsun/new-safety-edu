@@ -15,9 +15,7 @@ Page({
       this._savedPercent = progressPercent
       this._queuedPercent = progressPercent
       this.setData({ content, progressPercent, remainingText: remainingText(progressPercent), atEnd })
-      if (content.type === 'rich_text') wx.nextTick(() => {
-        this.settleReaderLayout(progressPercent && !atEnd ? Math.min(progressPercent, 95) : 0)
-      })
+      if (content.type === 'rich_text' && progressPercent && !atEnd) wx.nextTick(() => this.restorePosition(Math.min(progressPercent, 95)))
     } catch (error) {
       this.setData({ error: error.message })
     } finally {
@@ -31,23 +29,6 @@ Page({
       this._contentTop = rect.top
       wx.pageScrollTo({ scrollTop: Math.max(0, Math.round(rect.top + Math.max(0, rect.height - windowHeight) * percent / 100)), duration: 0 })
     }).exec()
-  },
-  settleReaderLayout(restorePercent, lastHeight, stablePasses = 0, attempt = 0) {
-    const windowHeight = (wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()).windowHeight
-    const query = wx.createSelectorQuery().in(this)
-    query.select('.reader-content').boundingClientRect()
-    query.select('.finish-panel').boundingClientRect()
-    query.exec(([reader, finish]) => {
-      if (!reader || !finish || this.data.atEnd) return
-      const stable = lastHeight !== undefined && Math.abs(reader.height - lastHeight) <= 1 ? stablePasses + 1 : 0
-      if (stable >= 2 && attempt >= 3) {
-        if (finish.bottom <= windowHeight) this.onReachBottom()
-        else if (restorePercent) this.restorePosition(restorePercent)
-        return
-      }
-      if (attempt < 10) this._layoutTimer = setTimeout(() => this.settleReaderLayout(restorePercent, reader.height, stable, attempt + 1), 150)
-      else if (restorePercent) this.restorePosition(restorePercent)
-    })
   },
   onPageScroll({ scrollTop }) {
     if (this.data.content?.type !== 'rich_text' || this.data.atEnd) return
@@ -104,6 +85,10 @@ Page({
     if (!this.data.htmlNavigationSucceeded) return
     return this.recordReachedEnd()
   },
+  attestRichTextComplete() {
+    if (this.data.content?.type !== 'rich_text') return
+    return this.recordReachedEnd()
+  },
   recordReachedEnd() {
     if (this.data.atEnd || this._reachedEndPending) return this._reachedEndPending
     this.setData({ reachingEnd: true, error: '' })
@@ -138,7 +123,6 @@ Page({
     this._destroyed = true
     clearTimeout(this._progressTimer)
     clearTimeout(this._saveTimer)
-    clearTimeout(this._layoutTimer)
     if (this.data.content?.type === 'rich_text' && this.data.progressPercent > (this._savedPercent ?? 0)) this.persistResume(this.data.progressPercent)
   }
 })

@@ -21,6 +21,10 @@
 
     <view wx:if="{{content.type === 'rich_text'}}" class="reader-content">
       <rich-text nodes="{{content.richText}}"></rich-text>
+      <view class="rich-end-action">
+        <button wx:if="{{!atEnd}}" class="secondary end-confirm-button" loading="{{reachingEnd}}" disabled="{{reachingEnd}}" bindtap="attestRichTextComplete">本人确认已阅读至末尾</button>
+        <text wx:else class="attestation-success">已记录本人阅读至末尾。</text>
+      </view>
     </view>
 
     <view wx:else class="html-panel">
@@ -33,7 +37,7 @@
 
     <view class="finish-panel">
       <text class="section-title">完成本次学习</text>
-      <text wx:if="{{content.type === 'rich_text' && !atEnd}}" class="section-copy">继续向下阅读，到达课件末尾后即可完成。</text>
+      <text wx:if="{{content.type === 'rich_text' && !atEnd}}" class="section-copy">请阅读至内容末尾并点击“本人确认已阅读至末尾”。</text>
       <text wx:elif="{{content.type === 'rich_text'}}" class="section-copy success-copy">已到达课件末尾，可以完成本次学习。</text>
       <text wx:elif="{{!htmlNavigationSucceeded}}" class="section-copy">请先打开 HTML 课件并完成互动内容。</text>
       <text wx:elif="{{!atEnd}}" class="section-copy">返回后点击“本人确认已完成全部互动内容”。</text>
