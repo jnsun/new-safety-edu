@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, message, Modal, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Table, Tag, Typography } from "antd";
+import { HolderOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, json } from "./api";
-import { filterReceivablesDepartments, groupReceivablesDictionaryOptions, normalizeReceivablesGrantDraft, preserveReceivablesConflictDraft, receivablesErrorKind, receivablesQueryKey, receivablesReferenceCategories, receivablesReferenceCategoryLabels, receivablesScopeQueryPrefix, receivablesScopedQueryKey, updateReceivablesSelectedScopes, usableReceivablesData, type ReceivablesAccess, type ReceivablesDepartment, type ReceivablesDictionaryOption, type ReceivablesGrant, type ReceivablesGrantCandidate, type ReceivablesReferenceCategory } from "./receivables-types";
+import { filterReceivablesDepartments, groupReceivablesDictionaryOptions, moveReceivablesDepartment, normalizeReceivablesGrantDraft, preserveReceivablesConflictDraft, receivablesErrorKind, receivablesQueryKey, receivablesReferenceCategories, receivablesReferenceCategoryLabels, receivablesScopeQueryPrefix, receivablesScopedQueryKey, updateReceivablesSelectedScopes, usableReceivablesData, type ReceivablesAccess, type ReceivablesDepartment, type ReceivablesDictionaryOption, type ReceivablesGrant, type ReceivablesGrantCandidate, type ReceivablesReferenceCategory } from "./receivables-types";
 
 type Section = "grants" | "departments" | "dictionaries";
 type MigrationPreview = { sourceId: string; targetId: string; impactCount: number; token: string; expiresAt: string };
@@ -23,6 +24,8 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
   const [listSearch, setListSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("active");
   const [expandedDepartmentId, setExpandedDepartmentId] = useState<string>();
+  const [draggedDepartmentId, setDraggedDepartmentId] = useState<string>();
+  const [dragOverDepartmentId, setDragOverDepartmentId] = useState<string>();
   const [dictionaryCategory, setDictionaryCategory] = useState<ReceivablesReferenceCategory>("project_status");
   const [form] = Form.useForm();
   const [migrationForm] = Form.useForm();
@@ -43,6 +46,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     return !listSearch.trim() || row.value.toLocaleLowerCase("zh-CN").includes(listSearch.trim().toLocaleLowerCase("zh-CN"));
   }), [listSearch, selectedDictionaryGroup, statusFilter]);
   const visibleDepartments = useMemo(() => filterReceivablesDepartments(section === "departments" ? (currentRows ?? []) as ReceivablesDepartment[] : [], listSearch, statusFilter), [currentRows, listSearch, section, statusFilter]);
+  const canReorderDepartments = section === "departments" && statusFilter === "active" && !listSearch.trim();
 
   const invalidate = async () => {
     await Promise.all([
@@ -67,7 +71,9 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
         return api(editor === "create" ? path : `${path}/${(editor as ReceivablesGrant).id}`, json(editor === "create" ? "POST" : "PATCH", body));
       }
       if (section === "departments") {
-        const body = { name: values.name, code: values.code || null, sortOrder: values.sortOrder ?? 0, ...(editor !== "create" ? { revision: (editor as ReceivablesDepartment).revision, reason: values.reason } : {}) };
+        const body = editor === "create"
+          ? { name: values.name, code: values.code || null, sortOrder: (currentRows as ReceivablesDepartment[] | undefined)?.length ?? 0 }
+          : { name: values.name, revision: (editor as ReceivablesDepartment).revision, reason: values.reason };
         return api(editor === "create" ? path : `${path}/${(editor as ReceivablesDepartment).id}`, json(editor === "create" ? "POST" : "PATCH", body));
       }
       const body = { ...(editor === "create" ? { category: values.category } : {}), value: values.value, sortOrder: values.sortOrder ?? 0, ...(editor !== "create" ? { revision: (editor as ReceivablesDictionaryOption).revision, reason: values.reason } : {}) };
@@ -113,6 +119,20 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     }
     fail(error);
   } });
+  const setDepartmentVisibility = useMutation({
+    mutationFn: (row: ReceivablesDepartment) => api(`${path}/${row.id}`, json("PATCH", { revision: row.revision, showReceivables: !row.showReceivables })),
+    onSuccess: async () => { message.success("应收账款显示设置已更新"); await invalidate(); },
+    onError: fail,
+  });
+  const reorderDepartments = useMutation({
+    mutationFn: (ordered: ReceivablesDepartment[]) => api(`${path}/reorder`, json("PATCH", { items: ordered.map(({ id, revision }) => ({ id, revision })) })),
+    onSuccess: async () => { message.success("部门顺序已保存"); await invalidate(); },
+    onError: fail,
+  });
+  const moveDepartment = (sourceId: string, targetId: string) => {
+    if (!canReorderDepartments || sourceId === targetId) return;
+    reorderDepartments.mutate(moveReceivablesDepartment(visibleDepartments, sourceId, targetId));
+  };
 
   if (!allowed) return <Alert type="error" showIcon message="当前账号没有此项管理权限" />;
   const title = section === "grants" ? "账号与权限" : section === "departments" ? "财务归属部门" : "业务字典";
@@ -196,9 +216,12 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
         <Button type="primary" onClick={() => openEditor()}>新增部门</Button>
       </div>
       {visibleDepartments.length === 0 ? <div className="receivables-department-empty">{listSearch ? "没有匹配的财务归属部门" : "暂无财务归属部门"}</div> : <div className="receivables-department-grid">
-        {visibleDepartments.map((row) => <article className={`receivables-department-item${row.active ? "" : " is-inactive"}`} key={row.id}>
-          <div className="receivables-department-heading"><strong title={row.name}>{row.name}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "启用" : "停用"}</Tag></div>
-          <div className="receivables-department-meta"><span>代码 <b>{row.code || "—"}</b></span><span>排序 <b>{row.sortOrder}</b></span><span>修订 <b>{row.revision}</b></span></div>
+        {visibleDepartments.map((row) => <article className={`receivables-department-item${row.active ? "" : " is-inactive"}${dragOverDepartmentId === row.id ? " is-drag-over" : ""}`} key={row.id}
+          onDragOver={(event) => { if (!canReorderDepartments || !draggedDepartmentId) return; event.preventDefault(); setDragOverDepartmentId(row.id); }}
+          onDrop={(event) => { event.preventDefault(); if (draggedDepartmentId) moveDepartment(draggedDepartmentId, row.id); setDraggedDepartmentId(undefined); setDragOverDepartmentId(undefined); }}>
+          <div className="receivables-department-heading"><Button type="text" size="small" className="receivables-department-drag" draggable={canReorderDepartments} disabled={!canReorderDepartments || reorderDepartments.isPending} title={canReorderDepartments ? "拖拽或使用方向键调整顺序" : "清除搜索并切换到启用部门后可排序"} aria-label={`调整${row.name}顺序`} icon={<HolderOutlined />} onDragStart={(event) => { setDraggedDepartmentId(row.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDraggedDepartmentId(undefined); setDragOverDepartmentId(undefined); }} onKeyDown={(event) => { const offset = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : 0; if (!offset) return; const index = visibleDepartments.findIndex(({ id }) => id === row.id); const target = visibleDepartments[index + offset]; if (target) { event.preventDefault(); moveDepartment(row.id, target.id); } }} /><strong title={row.name}>{row.name}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "启用" : "停用"}</Tag></div>
+          <div className="receivables-department-meta"><span>代码 <b>{row.code || "—"}</b></span><span>修订 <b>{row.revision}</b></span></div>
+          <div className="receivables-department-visibility"><span>显示应收账款</span><Switch size="small" checked={row.showReceivables} disabled={!row.active || setDepartmentVisibility.isPending || reorderDepartments.isPending} aria-label={`${row.name}显示应收账款`} onChange={() => setDepartmentVisibility.mutate(row)} /></div>
           <div className="receivables-department-actions">
             <Button size="small" disabled={!row.active} onClick={() => openEditor(row)}>编辑</Button>
             <Button size="small" danger disabled={!row.active} onClick={() => openDeactivate(row)}>停用</Button>
@@ -237,7 +260,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
           </> : role === "admin" ? <Alert type="info" showIcon message="财务管理员拥有模块管理权限，无需选择部门范围。" /> : null; }}</Form.Item>
           <Form.Item name="reason" label="变更原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea rows={3} /></Form.Item>
         </>}
-        {section === "departments" && <><Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item><Form.Item name="code" label="代码"><Input /></Form.Item><Form.Item name="sortOrder" label="排序"><InputNumber precision={0} /></Form.Item>{editor !== "create" && <Form.Item name="reason" label="变更原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item>}</>}
+        {section === "departments" && <><Form.Item name="name" label="名称" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>{editor === "create" && <Form.Item name="code" label="代码"><Input /></Form.Item>}{editor !== "create" && <Form.Item name="reason" label="变更原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item>}</>}
         {section === "dictionaries" && <><Form.Item name="category" label="分类" rules={[{ required: true }]}><Select showSearch disabled={editor !== "create"} options={receivablesReferenceCategories.map((value) => ({ value, label: receivablesReferenceCategoryLabels[value] }))} /></Form.Item><Form.Item name="value" label="选项名称" rules={[{ required: true, whitespace: true }]}><Input /></Form.Item><Form.Item name="sortOrder" label="排序"><InputNumber precision={0} /></Form.Item>{editor !== "create" && <Form.Item name="reason" label="变更原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item>}</>}
         {conflict && editor && <><Alert type="warning" showIcon message="服务端数据已变化" description={<pre className="receivables-conflict-detail">{`本地草稿：${JSON.stringify(conflict.draft)}\n服务端最新值：${JSON.stringify(conflict.latest)}`}</pre>} /><Form.Item name="conflictReconfirm" valuePropName="checked" rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error("请核对并再次确认")) }]}><Checkbox>我已核对最新值，使用最新修订号重试</Checkbox></Form.Item></>}
         <Space className="receivables-form-actions"><Button htmlType="button" onClick={closeEditor}>取消</Button><Button type="primary" htmlType="submit" loading={save.isPending}>保存</Button></Space>

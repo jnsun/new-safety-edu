@@ -294,11 +294,22 @@ export type ReceivablesDepartment = {
   name: string;
   code: string | null;
   sortOrder: number;
+  showReceivables: boolean;
   active: boolean;
   revision: number;
   deactivatedAt: string | null;
   deactivateReason: string | null;
 };
+
+export function moveReceivablesDepartment(rows: ReceivablesDepartment[], sourceId: string, targetId: string): ReceivablesDepartment[] {
+  const sourceIndex = rows.findIndex(({ id }) => id === sourceId);
+  const targetIndex = rows.findIndex(({ id }) => id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return rows;
+  const reordered = [...rows];
+  const [source] = reordered.splice(sourceIndex, 1);
+  reordered.splice(targetIndex, 0, source!);
+  return reordered.map((row, sortOrder) => ({ ...row, sortOrder }));
+}
 
 export type ReceivablesDictionaryOption = {
   id: string;
@@ -565,28 +576,28 @@ export const defaultReceivablesColumnWidths: Record<
   ReceivablesColumnId,
   number
 > = {
-  financeDepartmentName: 148,
-  contractNo: 128,
-  projectName: 220,
-  customerName: 180,
-  creditorUnit: 124,
-  debtStatus: 112,
-  finalAmount: 128,
-  invoicedAmount: 128,
-  receivedAmount: 128,
-  internalReceivable: 128,
-  externalReceivable: 128,
-  balance: 128,
-  writeoffAmount: 128,
-  collectionOwner: 112,
-  openingChargeDate: 124,
-  dunningDate: 124,
-  communicationMethod: 104,
+  financeDepartmentName: 128,
+  contractNo: 112,
+  projectName: 200,
+  customerName: 160,
+  creditorUnit: 88,
+  debtStatus: 88,
+  finalAmount: 96,
+  invoicedAmount: 96,
+  receivedAmount: 96,
+  internalReceivable: 96,
+  externalReceivable: 96,
+  balance: 96,
+  writeoffAmount: 96,
+  collectionOwner: 96,
+  openingChargeDate: 104,
+  dunningDate: 104,
+  communicationMethod: 88,
   counterpartyFeedback: 160,
   latestProgress: 180,
   nextPlan: 180,
-  anomaly: 124,
-  updatedAt: 138,
+  anomaly: 104,
+  updatedAt: 104,
 };
 export type ReceivablesImportField = keyof Omit<
   ReceivablesImportData,
@@ -1194,7 +1205,8 @@ export function formatReceivablesMoney(
   if ((padded[decimals] ?? "0") >= "5") scaled += 1n;
   const scaledText = scaled.toString().padStart(decimals + 1, "0");
   const whole = decimals ? scaledText.slice(0, -decimals) : scaledText;
-  const decimal = decimals ? `.${scaledText.slice(-decimals)}` : "";
+  const decimalDigits = decimals ? scaledText.slice(-decimals) : "";
+  const decimal = decimals && !(decimals === 2 && /^0+$/.test(decimalDigits)) ? `.${decimalDigits}` : "";
   return `${sign}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${decimal}`;
 }
 

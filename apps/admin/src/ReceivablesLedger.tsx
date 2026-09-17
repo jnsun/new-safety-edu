@@ -66,13 +66,13 @@ const columnLabels: Record<ReceivablesColumnId, string> = {
   customerName: "客户名称",
   creditorUnit: "单位",
   debtStatus: "债权状态",
-  finalAmount: "决算金额（万元）",
-  invoicedAmount: "开票金额（万元）",
-  receivedAmount: "到账金额（万元）",
-  internalReceivable: "账内应收（万元）",
-  externalReceivable: "账外应收（万元）",
-  balance: "应收余额（万元）",
-  writeoffAmount: "核销金额（万元）",
+  finalAmount: "决算额",
+  invoicedAmount: "开票额",
+  receivedAmount: "到账额",
+  internalReceivable: "账内应收",
+  externalReceivable: "账外应收",
+  balance: "应收余额",
+  writeoffAmount: "核销额",
   collectionOwner: "清收责任人",
   openingChargeDate: "最新挂账时间",
   anomaly: "待核对事项",
@@ -1526,6 +1526,9 @@ export function ReceivablesLedger({
         <div className="receivables-table-tools">
           <Typography.Text type="secondary">
             项目、客户和催收内容最多显示 2 行
+          </Typography.Text>
+          <Typography.Text className="receivables-money-unit">
+            金额单位：万元
           </Typography.Text>
           <Button size="small" onClick={() => void applyCompactWidths()}>
             紧凑列宽

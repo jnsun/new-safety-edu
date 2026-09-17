@@ -1370,6 +1370,7 @@ model ReceivableDepartment {
   name             String                      @unique @db.VarChar(160)
   code             String?                     @unique @db.VarChar(40)
   sortOrder        Int                         @default(0) @map("sort_order")
+  showReceivables  Boolean                     @default(true) @map("show_receivables")
   active           Boolean                     @default(true)
   revision         Int                         @default(1)
   deactivatedAt    DateTime?                   @map("deactivated_at")

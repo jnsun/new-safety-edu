@@ -22,7 +22,8 @@ export type ReceivablesAdminOperation =
   | { type: "grant.update"; id: string; input: (GrantFields & { revision: number; reason: string }) | { revision: number; revoke: true; reason: string } }
   | { type: "department.list" }
   | { type: "department.create"; input: { name: string; code?: string | null | undefined; sortOrder: number } }
-  | { type: "department.update"; id: string; input: { revision: number; name?: string | undefined; code?: string | null | undefined; sortOrder?: number | undefined; active?: false | undefined; reason?: string | undefined } }
+  | { type: "department.update"; id: string; input: { revision: number; name?: string | undefined; code?: string | null | undefined; sortOrder?: number | undefined; showReceivables?: boolean | undefined; active?: false | undefined; reason?: string | undefined } }
+  | { type: "department.reorder"; input: { items: Array<{ id: string; revision: number }> } }
   | { type: "dictionary.list"; category?: string | undefined }
   | { type: "dictionary.create"; input: { category: string; value: string; sortOrder: number } }
   | { type: "dictionary.update"; id: string; input: { revision: number; value?: string | undefined; sortOrder?: number | undefined; active?: false | undefined; reason?: string | undefined } }
@@ -65,7 +66,7 @@ const grantSelect = {
   departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true }, orderBy: { financeDepartmentId: "asc" as const } },
   account: { select: { username: true, status: true, person: { select: { name: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { name: true } } } } } } } },
 } satisfies Prisma.ReceivableAccessGrantSelect;
-const departmentSelect = { id: true, name: true, code: true, sortOrder: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDepartmentSelect;
+const departmentSelect = { id: true, name: true, code: true, sortOrder: true, showReceivables: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDepartmentSelect;
 const dictionarySelect = { id: true, category: true, value: true, sortOrder: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDictionaryOptionSelect;
 type GrantRow = Prisma.ReceivableAccessGrantGetPayload<{ select: typeof grantSelect }>;
 type DepartmentRow = Prisma.ReceivableDepartmentGetPayload<{ select: typeof departmentSelect }>;
@@ -258,7 +259,7 @@ async function createDepartment(context: ReceivablesAdminContext, input: Extract
 }
 
 async function updateDepartment(context: ReceivablesAdminContext, id: string, input: Extract<ReceivablesAdminOperation, { type: "department.update" }>["input"]) {
-  if (input.name === undefined && input.code === undefined && input.sortOrder === undefined && input.active === undefined) throw httpError(400, "RECEIVABLES_DEPARTMENT_CHANGE_REQUIRED", "至少提交一个变更字段");
+  if (input.name === undefined && input.code === undefined && input.sortOrder === undefined && input.showReceivables === undefined && input.active === undefined) throw httpError(400, "RECEIVABLES_DEPARTMENT_CHANGE_REQUIRED", "至少提交一个变更字段");
   if (input.active === false && !input.reason) throw httpError(400, "RECEIVABLES_DEPARTMENT_REASON_REQUIRED", "停用财务归属部门必须填写原因");
   return prisma.$transaction(async (tx) => {
     const access = await requireAction(context, "manageConfiguration", tx);
@@ -272,11 +273,34 @@ async function updateDepartment(context: ReceivablesAdminContext, id: string, in
     if (input.name !== undefined) updateData.name = input.name;
     if (input.code !== undefined) updateData.code = input.code;
     if (input.sortOrder !== undefined) updateData.sortOrder = input.sortOrder;
+    if (input.showReceivables !== undefined) updateData.showReceivables = input.showReceivables;
     if (input.active === false) Object.assign(updateData, { active: false, deactivatedAt: new Date(), deactivatedBy: context.principal.accountId, deactivateReason: input.reason! });
     const result = await tx.receivableDepartment.updateMany({ where: { id, revision: input.revision }, data: updateData });
     if (result.count !== 1) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务归属部门已被其他操作更新");
     const after = await tx.receivableDepartment.findUniqueOrThrow({ where: { id }, select: departmentSelect });
-    await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: input.active === false ? "receivables.admin.department.deactivate" : "receivables.admin.department.update", objectType: "receivable_department", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", ...(input.reason ? { reason: input.reason } : {}), metadata: auditMetadata(before, after, impactCount) });
+    const reason = input.reason ?? (input.showReceivables === undefined ? undefined : input.showReceivables ? "显示部门应收账款" : "隐藏部门应收账款");
+    await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: input.active === false ? "receivables.admin.department.deactivate" : "receivables.admin.department.update", objectType: "receivable_department", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", ...(reason ? { reason } : {}), metadata: auditMetadata(before, after, impactCount) });
+    return after;
+  });
+}
+
+async function reorderDepartments(context: ReceivablesAdminContext, input: Extract<ReceivablesAdminOperation, { type: "department.reorder" }>["input"]) {
+  return prisma.$transaction(async (tx) => {
+    const access = await requireAction(context, "manageConfiguration", tx);
+    const ids = input.items.map(({ id }) => id);
+    if (new Set(ids).size !== ids.length) throw httpError(400, "RECEIVABLES_DEPARTMENT_ORDER_INVALID", "部门排序包含重复项");
+    await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
+    const [before, activeCount] = await Promise.all([
+      tx.receivableDepartment.findMany({ where: { id: { in: ids }, active: true }, select: departmentSelect }),
+      tx.receivableDepartment.count({ where: { active: true } }),
+    ]);
+    if (before.length !== ids.length || activeCount !== ids.length || before.some((row) => input.items.find(({ id }) => id === row.id)?.revision !== row.revision)) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务归属部门已变化，请刷新后重试");
+    for (const [sortOrder, item] of input.items.entries()) {
+      const result = await tx.receivableDepartment.updateMany({ where: { id: item.id, revision: item.revision, active: true }, data: { sortOrder, revision: { increment: 1 } } });
+      if (result.count !== 1) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务归属部门已变化，请刷新后重试");
+    }
+    const after = await tx.receivableDepartment.findMany({ where: { id: { in: ids } }, select: departmentSelect, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] });
+    await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.department.reorder", objectType: "receivable_department_order", objectId: null, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: "拖拽调整部门顺序", metadata: auditMetadata(before, after, 0) });
     return after;
   });
 }
@@ -498,6 +522,7 @@ export async function administerReceivables(context: ReceivablesAdminContext, op
       return prisma.receivableDepartment.findMany({ select: departmentSelect, orderBy: [{ active: "desc" }, { sortOrder: "asc" }, { name: "asc" }] });
     case "department.create": return createDepartment(context, operation.input);
     case "department.update": return updateDepartment(context, operation.id, operation.input);
+    case "department.reorder": return reorderDepartments(context, operation.input);
     case "dictionary.list":
       await requireAction(context, "manageConfiguration");
       return prisma.receivableDictionaryOption.findMany({ ...(operation.category ? { where: { category: operation.category } } : {}), select: dictionarySelect, orderBy: [{ category: "asc" }, { active: "desc" }, { sortOrder: "asc" }, { value: "asc" }] });

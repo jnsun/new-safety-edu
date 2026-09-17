@@ -97,17 +97,18 @@ assert.equal(receivablesPortalMode({ state: "unconfigured", canEnter: false, can
 assert.deepEqual(receivablesNavigation({ canRecover: true } as never), [{ path: "/receivables", label: "初始化状态" }]);
 assert.equal(receivablesNavigation({ canEnter: true, canReadLedger: true, canCreateLedger: true, canImport: false, canExport: false, canManageAccess: false, canManageConfiguration: false } as never).some((item) => item.path === "/receivables/data"), true);
 assert.equal(normalizeReceivablesColumnPreference({ order: defaultReceivablesColumnPreference.order, visible: defaultReceivablesColumnPreference.visible, frozen: defaultReceivablesColumnPreference.frozen }).widths.projectName, defaultReceivablesColumnPreference.widths.projectName);
-assert.equal(defaultReceivablesColumnPreference.widths.projectName, 220);
+assert.equal(defaultReceivablesColumnPreference.widths.projectName, 200);
 assert.equal(defaultReceivablesColumnPreference.widths.latestProgress, 180);
-assert.equal(defaultReceivablesColumnPreference.widths.balance, 128);
+assert.equal(defaultReceivablesColumnPreference.widths.balance, 96);
 assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, widths: { ...defaultReceivablesColumnPreference.widths, projectName: 99999 } }).widths.projectName, 600);
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).order[0], "contractNo");
-assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).widths.projectName, 220);
+assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"] }).widths.projectName, 200);
 assert.equal(defaultReceivablesColumnPreference.moneyDecimals, 2);
 assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, moneyDecimals: 4 }).moneyDecimals, 4);
 assert.equal(normalizeReceivablesColumnPreference({ ...defaultReceivablesColumnPreference, moneyDecimals: 3 }).moneyDecimals, 2);
 assert.equal(normalizeStoredReceivablesColumnPreference({ order: ["contractNo"], visible: ["contractNo"], frozen: ["contractNo"], moneyDecimals: 0 }).moneyDecimals, 0);
-assert.equal(formatReceivablesMoney("145.0000"), "145.00");
+assert.equal(formatReceivablesMoney("145.0000"), "145");
+assert.equal(formatReceivablesMoney("145.2000"), "145.20");
 assert.equal(formatReceivablesMoney("1234.5678", 0), "1,235");
 assert.equal(formatReceivablesMoney("1234.5678", 4), "1,234.5678");
 assert.deepEqual(normalizeReceivablesDashboardPreference([{ id: "balance", w: 99, h: 0, title: "  我的应收  " }, { id: "balance", w: 4, h: 3 }, { id: "bad" }]), [{ id: "balance", w: 12, h: 2, title: "我的应收" }]);
@@ -135,6 +136,7 @@ assert.deepEqual(receivablesLedgerInitialFilters("?status=bad&settlement=bad&ano
   creditorUnit: undefined,
 });
 const dashboardStatements = buildReceivablesDashboardStatements({ filters: {}, readDepartmentIds: null } as never);
+assert.match((dashboardStatements.totals as Prisma.Sql).strings.join(" "), /show_receivables/, "hidden departments stay out of ledger and dashboard queries");
 assert.ok("debtStatuses" in dashboardStatements);
 assert.ok("creditorUnits" in dashboardStatements);
 assert.ok("monthlyCashflow" in dashboardStatements);

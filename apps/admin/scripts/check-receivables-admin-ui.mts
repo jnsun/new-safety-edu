@@ -8,6 +8,7 @@ import {
   receivablesPageTitle,
   receivablesReferenceCategoryLabels,
   receivablesCreditorUnitLabel,
+  moveReceivablesDepartment,
   updateReceivablesSelectedScopes,
 } from "../src/receivables-types.js";
 
@@ -35,11 +36,16 @@ assert.deepEqual(groups[0]?.options.map(({ value }) => value), ["进行中", "�
 assert.equal(groups.find(({ category }) => category === "attach_category")?.total, 0, "empty configured categories remain navigable");
 
 const departments = [
-  { id: "one", name: "物探一公司", code: "WT01", sortOrder: 2, active: true, revision: 1, deactivatedAt: null, deactivateReason: null },
-  { id: "energy", name: "能源物探", code: "NY", sortOrder: 1, active: false, revision: 1, deactivatedAt: null, deactivateReason: null },
+  { id: "one", name: "物探一公司", code: "WT01", sortOrder: 2, showReceivables: true, active: true, revision: 1, deactivatedAt: null, deactivateReason: null },
+  { id: "energy", name: "能源物探", code: "NY", sortOrder: 1, showReceivables: false, active: false, revision: 1, deactivatedAt: null, deactivateReason: null },
 ];
 assert.deepEqual(filterReceivablesDepartments(departments, "物探", "active").map(({ id }) => id), ["one"]);
 assert.deepEqual(filterReceivablesDepartments(departments, "ny", "inactive").map(({ id }) => id), ["energy"], "search includes department code");
+assert.deepEqual(moveReceivablesDepartment(departments, "one", "energy").map(({ id, sortOrder }) => ({ id, sortOrder })), [
+  { id: "energy", sortOrder: 0 },
+  { id: "one", sortOrder: 1 },
+], "dragging produces one canonical contiguous order");
+assert.equal(moveReceivablesDepartment(departments, "missing", "energy"), departments, "unknown drag sources leave the list unchanged");
 
 assert.deepEqual(updateReceivablesSelectedScopes("reporter", ["energy", "one"], [{ departmentId: "one", canRead: true, canWrite: true }]), [
   { departmentId: "energy", canRead: true, canWrite: false },
@@ -76,11 +82,17 @@ assert.match(styles, /\.receivables-filter-grid \.ant-select-single[^\{]*\{[^}]*
 assert.doesNotMatch(styles, /\.receivables-filter-grid \.ant-select-selector[^\{]*\{[^}]*height:/s, "the select inner selector must not overflow its outer layout box");
 assert.match(styles, /\.receivables-resizable-header\s*\{[^}]*position:\s*relative/s, "the resize hit target uses the real header boundary");
 assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\{[^}]*vertical-align:\s*middle/s, "ledger cells are vertically centered");
-assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\{[^}]*padding:\s*4px 8px/s, "ledger rows stay compact when long cells wrap");
-assert.match(ledgerSource, /决算金额（万元）/, "ledger amount headings state the authoritative unit");
+assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\{[^}]*padding:\s*3px 6px/s, "ledger rows stay compact when long cells wrap");
+assert.match(ledgerSource, /金额单位：万元/, "ledger states the monetary unit once above the table");
+assert.doesNotMatch(ledgerSource, /finalAmount:\s*"[^"]*（万元）"/, "money column headings do not repeat the unit");
+assert.match(ledgerSource, /finalAmount:\s*"决算额"/, "money column headings use compact labels");
 assert.match(transfersSource, /合同金额（万元）/, "data entry states the authoritative unit");
 assert.match(adminSource, /receivables-department-toolbar/, "department controls share one compact toolbar");
 assert.match(adminSource, /receivables-department-grid/, "departments use a dense unpaginated grid");
+assert.match(adminSource, /draggable=\{canReorderDepartments\}/, "department cards expose native drag ordering only when the full list is visible");
+assert.match(adminSource, /显示应收账款/, "department cards expose the receivables visibility switch");
+assert.match(adminSource, /`\$\{path\}\/reorder`/, "department order is saved atomically");
+assert.match(adminSource, /section === "departments"[^\n]+name="name"[^\n]+editor === "create"[^\n]+name="code"[^\n]+editor !== "create"[^\n]+name="reason"/, "department editor keeps code create-only and removes manual sorting");
 assert.doesNotMatch(adminSource, /visibleDepartments[^\n]*pagination=/, "department results are not paginated");
 assert.match(mainSource, /import ["']@ant-design\/v5-patch-for-react-19["']/, "React 19 compatibility patch is loaded before Ant Design static modals are used");
 assert.match(adminPackage, /"@ant-design\/v5-patch-for-react-19"/, "React 19 compatibility patch is an explicit admin dependency");

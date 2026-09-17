@@ -137,28 +137,28 @@ export type ReceivablesColumnPreference = {
   moneyDecimals: 0 | 2 | 4;
 };
 const defaultReceivablesColumnWidths: Record<ReceivablesColumnId, number> = {
-  financeDepartmentName: 148,
-  contractNo: 128,
-  projectName: 220,
-  customerName: 180,
-  creditorUnit: 124,
-  debtStatus: 112,
-  finalAmount: 128,
-  invoicedAmount: 128,
-  receivedAmount: 128,
-  internalReceivable: 128,
-  externalReceivable: 128,
-  balance: 128,
-  writeoffAmount: 128,
-  collectionOwner: 112,
-  openingChargeDate: 124,
-  dunningDate: 124,
-  communicationMethod: 104,
+  financeDepartmentName: 128,
+  contractNo: 112,
+  projectName: 200,
+  customerName: 160,
+  creditorUnit: 88,
+  debtStatus: 88,
+  finalAmount: 96,
+  invoicedAmount: 96,
+  receivedAmount: 96,
+  internalReceivable: 96,
+  externalReceivable: 96,
+  balance: 96,
+  writeoffAmount: 96,
+  collectionOwner: 96,
+  openingChargeDate: 104,
+  dunningDate: 104,
+  communicationMethod: 88,
   counterpartyFeedback: 160,
   latestProgress: 180,
   nextPlan: 180,
-  anomaly: 124,
-  updatedAt: 138,
+  anomaly: 104,
+  updatedAt: 104,
 };
 export const defaultReceivablesColumnPreference: ReceivablesColumnPreference = {
   order: [...receivablesColumnIds],
@@ -625,7 +625,7 @@ function filteredCte(scope: QueryScope): Prisma.Sql {
           ELSE NULL
         END AS anomaly
       FROM receivable_ledgers l
-      JOIN receivable_departments d ON d.id = l.finance_department_id
+      JOIN receivable_departments d ON d.id = l.finance_department_id AND d.show_receivables = true
       LEFT JOIN LATERAL (
         SELECT SUM(amount) AS invoiced_amount FROM receivable_invoices WHERE ledger_id = l.id AND status = 'active'
       ) i ON TRUE

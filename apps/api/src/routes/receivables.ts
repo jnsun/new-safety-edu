@@ -36,7 +36,8 @@ const grantUpdateInput = grantFields.extend({ revision: z.number().int().positiv
 const grantRevokeInput = z.object({ revision: z.number().int().positive(), revoke: z.literal(true), reason: reasonInput }).strict();
 const grantPatchInput = z.union([grantRevokeInput, grantUpdateInput]);
 const departmentCreateInput = z.object({ name: z.string().trim().min(1).max(160), code: z.string().trim().min(1).max(40).nullable().optional(), sortOrder: z.number().int().default(0) }).strict();
-const departmentUpdateInput = z.object({ revision: z.number().int().positive(), name: z.string().trim().min(1).max(160).optional(), code: z.string().trim().min(1).max(40).nullable().optional(), sortOrder: z.number().int().optional(), active: z.literal(false).optional(), reason: reasonInput.optional() }).strict();
+const departmentUpdateInput = z.object({ revision: z.number().int().positive(), name: z.string().trim().min(1).max(160).optional(), code: z.string().trim().min(1).max(40).nullable().optional(), sortOrder: z.number().int().optional(), showReceivables: z.boolean().optional(), active: z.literal(false).optional(), reason: reasonInput.optional() }).strict();
+const departmentReorderInput = z.object({ items: z.array(z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict()).min(1).max(500) }).strict();
 const dictionaryCreateInput = z.object({ category: z.string().trim().min(1).max(80), value: z.string().trim().min(1).max(240), sortOrder: z.number().int().default(0) }).strict();
 const dictionaryUpdateInput = z.object({ revision: z.number().int().positive(), value: z.string().trim().min(1).max(240).optional(), sortOrder: z.number().int().optional(), active: z.literal(false).optional(), reason: reasonInput.optional() }).strict();
 const migrationPreviewInput = z.object({ mode: z.literal("preview"), targetId: z.string().uuid() }).strict();
@@ -296,6 +297,7 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     const data = await administerReceivables(adminContext(request), { type: "department.create", input: departmentCreateInput.parse(request.body) });
     return reply.code(201).send({ data });
   });
+  app.patch("/api/receivables/departments/reorder", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "department.reorder", input: departmentReorderInput.parse(request.body) }) }));
   app.patch("/api/receivables/departments/:id", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "department.update", id: idParams.parse(request.params).id, input: departmentUpdateInput.parse(request.body) }) }));
 
   app.get("/api/receivables/dictionary-options", { preHandler: deps.authenticate }, async (request) => {
