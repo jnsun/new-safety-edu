@@ -1,1 +1,60 @@
-<view class="page"><view wx:if="{{loading}}" class="card empty">正在加载…</view><view wx:elif="{{error}}" class="card error">{{error}}</view><block wx:elif="{{record}}"><view class="card"><text class="title">{{record.batch.name}}</text><text class="muted">{{record.typeText}}</text><view class="divider"></view><view class="row"><text>完成时间</text><text>{{record.completedText}}</text></view><view class="row"><text>最终状态</text><text class="status">{{record.statusText}}</text></view><view class="row"><text>本人签字</text><text>{{record.signedAt ? '已于 ' + record.signedAt + ' 提交' : '未签字'}}</text></view></view><view class="card"><text class="title">当时学习内容</text><view wx:for="{{record.coursewares}}" wx:key="progressId" class="row"><text>{{index + 1}}. {{item.title}}（v{{item.version}}）</text><text class="success">已完成</text></view></view><view class="card"><text class="title">考试结果</text><block wx:if="{{record.batch.examRequired && record.latestAttempt}}"><view class="row"><text>考试次数</text><text>第 {{record.latestAttempt.attemptNumber}} 次</text></view><view class="row"><text>成绩</text><text>{{record.latestAttempt.score}} 分</text></view><view class="row"><text>结果</text><text class="{{record.latestAttempt.passed ? 'success' : 'warning'}}">{{record.latestAttempt.passed ? '通过' : '未通过'}}</text></view></block><text wx:else>本次培训不要求考试</text></view></block></view>
+<view class="page detail-page">
+  <view wx:if="{{loading}}" class="state-panel">
+    <text class="state-title">正在加载完整记录</text>
+    <text class="state-copy">请稍候。</text>
+  </view>
+  <view wx:elif="{{error}}" class="state-panel state-error">
+    <text class="state-title">培训记录加载失败</text>
+    <text class="state-copy">{{error}}</text>
+    <button class="secondary retry-button" bindtap="load">重新加载</button>
+  </view>
+
+  <block wx:elif="{{record}}">
+    <view class="record-summary">
+      <text class="record-title">{{record.batch.name}}</text>
+      <text class="record-type">{{record.typeText}}</text>
+      <view class="summary-row"><text>完成时间</text><text>{{record.completedText}}</text></view>
+      <view class="summary-row"><text>记录状态</text><text class="status">{{record.statusText}}</text></view>
+    </view>
+
+    <view class="fact-section">
+      <view class="section-heading">
+        <text class="section-number">01</text>
+        <view><text class="section-title">学习记录</text><text class="section-copy">实际课件版本与完成时间</text></view>
+      </view>
+      <view wx:if="{{!record.coursewares.length}}" class="inline-empty">本次培训没有在线课件记录。</view>
+      <view wx:for="{{record.coursewares}}" wx:key="progressId" class="content-row">
+        <view class="content-copy"><text class="content-title">{{index + 1}}. {{item.title}}</text><text class="content-meta">课件版本 v{{item.version}}</text></view>
+        <view class="content-result"><text>{{item.completedAt ? '已完成' : '未完成'}}</text><text>{{item.completedText}}</text></view>
+      </view>
+    </view>
+
+    <view class="fact-section">
+      <view class="section-heading">
+        <text class="section-number">02</text>
+        <view><text class="section-title">考试记录</text><text class="section-copy">最终一次考试事实</text></view>
+      </view>
+      <view class="fact-row"><text class="fact-label">考试次数</text><text class="fact-value">{{record.examAttemptText}}</text></view>
+      <view class="fact-row"><text class="fact-label">最终成绩</text><text class="fact-value">{{record.examScoreText}}</text></view>
+      <view class="fact-row"><text class="fact-label">考试结果</text><text class="fact-value">{{record.examPassText}}</text></view>
+    </view>
+
+    <view class="fact-section">
+      <view class="section-heading">
+        <text class="section-number">03</text>
+        <view><text class="section-title">本人签字</text><text class="section-copy">与本次培训记录绑定的正式签字</text></view>
+      </view>
+      <view class="fact-row"><text class="fact-label">签字状态</text><text class="fact-value">{{record.signatureText}}</text></view>
+      <view wx:if="{{record.signedAtText}}" class="fact-row"><text class="fact-label">签字时间</text><text class="fact-value">{{record.signedAtText}}</text></view>
+    </view>
+
+    <view class="fact-section">
+      <view class="section-heading">
+        <text class="section-number">04</text>
+        <view><text class="section-title">项目现场确认</text><text class="section-copy">仅记录到场和现场交底事实</text></view>
+      </view>
+      <view class="fact-row"><text class="fact-label">确认状态</text><text class="fact-value">{{record.projectConfirmationText}}</text></view>
+      <view wx:if="{{record.batch.project}}" class="fact-row"><text class="fact-label">所属项目</text><text class="fact-value">{{record.batch.project.name}}</text></view>
+    </view>
+  </block>
+</view>

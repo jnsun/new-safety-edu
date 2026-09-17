@@ -1,1 +1,58 @@
-<view class="page"><view class="card"><text class="title">完整培训记录确认</text><text class="muted">签字表示本人已查看本次培训的学习内容和考试结果。正式提交后本人不可覆盖。</text></view><view class="sign-box"><canvas canvas-id="signature" disable-scroll="true" bindtouchstart="start" bindtouchmove="move"></canvas><text wx:if="{{!touched}}" class="hint">请在此处手写签名</text></view><view class="row"><button class="secondary half" bindtap="clear">清空重签</button><button class="secondary half" bindtap="preview">提交前预览</button></view><button class="primary" loading="{{busy}}" bindtap="submit">确认并正式提交</button><text wx:if="{{error}}" class="error">{{error}}</text></view>
+<view class="page signature-page">
+  <view wx:if="{{loading}}" class="state-panel">
+    <text class="state-title">正在读取培训记录</text>
+    <text class="state-copy">请稍候，签字前会展示服务端保存的学习和考试结果。</text>
+  </view>
+
+  <view wx:elif="{{error && !record}}" class="state-panel state-error">
+    <text class="state-title">培训记录加载失败</text>
+    <text class="state-copy">{{error}}</text>
+    <button class="secondary retry-button" bindtap="load">重新加载</button>
+  </view>
+
+  <block wx:elif="{{record}}">
+    <view class="summary-panel">
+      <text class="eyebrow">签字确认信息</text>
+      <text class="record-title">{{record.batch.name}}</text>
+      <text class="record-type">{{record.typeText}}</text>
+      <view class="facts">
+        <view class="fact-row"><text class="fact-label">学习完成时间</text><text class="fact-value">{{learningCompletedText}}</text></view>
+        <view class="fact-row"><text class="fact-label">考试结果</text><text class="fact-value">{{examResultText}}</text></view>
+        <view class="fact-row"><text class="fact-label">当前状态</text><text class="fact-value">{{record.statusText}}</text></view>
+      </view>
+    </view>
+
+    <view wx:if="{{signedAtText}}" class="submitted-panel">
+      <text class="submitted-kicker">正式签字已提交</text>
+      <text class="submitted-time">{{signedAtText}}</text>
+      <text class="submitted-copy">该签字已绑定本次培训记录，本人不能覆盖或重新提交。</text>
+      <button class="secondary record-button" bindtap="back">返回培训记录</button>
+    </view>
+
+    <view wx:elif="{{!canSign}}" class="state-panel">
+      <text class="state-title">当前不能提交签字</text>
+      <text class="state-copy">请返回任务详情，根据服务端显示的下一步继续完成培训。</text>
+      <button class="secondary retry-button" bindtap="load">刷新状态</button>
+    </view>
+
+    <block wx:else>
+      <view class="instruction-panel">
+        <text class="section-title">请本人手写签字</text>
+        <text class="section-copy">签字表示本人已查看以上学习内容和考试结果。请先预览，再正式提交。</text>
+      </view>
+      <view class="sign-box">
+        <canvas canvas-id="signature" disable-scroll="true" bindtouchstart="start" bindtouchmove="move"></canvas>
+        <text wx:if="{{!touched}}" class="hint">请在此处手写签名</text>
+      </view>
+      <view class="action-row">
+        <button class="secondary action-button" disabled="{{busy}}" bindtap="clear">清空重签</button>
+        <button class="secondary action-button" disabled="{{busy}}" bindtap="preview">预览签字</button>
+      </view>
+      <view class="preview-state {{previewed ? 'preview-ready' : ''}}" aria-live="polite">
+        {{previewed ? '已完成预览，可以正式提交' : '正式提交前必须先预览签字'}}
+      </view>
+      <button class="primary submit-button" loading="{{busy}}" disabled="{{busy || !previewed}}" bindtap="submit">{{busy ? '正在提交…' : '确认并正式提交'}}</button>
+      <text wx:if="{{error}}" class="error" aria-live="assertive">{{error}}</text>
+    </block>
+  </block>
+</view>

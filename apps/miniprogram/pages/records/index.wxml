@@ -1,1 +1,37 @@
-<view class="page"><text class="title">我的培训记录</text><view wx:if="{{loading}}" class="card empty">正在加载…</view><view wx:elif="{{error}}" class="card error">{{error}}</view><view wx:elif="{{!records.length}}" class="card empty">暂无已完成记录</view><view wx:for="{{records}}" wx:key="id" class="card" data-id="{{item.id}}" bindtap="open"><view class="row"><text class="title">{{item.batch.name}}</text><text class="status">{{item.statusText}}</text></view><text class="muted">{{item.typeText}}</text><view class="divider"></view><view class="row"><text>完成时间</text><text>{{item.completedText}}</text></view><block wx:if="{{item.batch.examRequired}}"><view class="row"><text>考试成绩</text><text>{{item.latestAttempt ? item.latestAttempt.score + ' 分' : '—'}}</text></view><view class="row"><text>考试结果</text><text class="{{item.latestAttempt && item.latestAttempt.passed ? 'success' : 'warning'}}">{{item.latestAttempt && item.latestAttempt.passed ? '通过' : '未通过'}}</text></view></block><view wx:else class="row"><text>考试</text><text>本次不要求考试</text></view><view class="row"><text>本人签字</text><text>{{item.signedAt ? '已签字' : '未签字'}}</text></view></view></view>
+<view class="page records-page">
+  <view class="page-heading">
+    <text class="page-title">我的培训记录</text>
+    <text class="page-copy">查看本人已形成的学习、考试、签字和项目确认事实。</text>
+  </view>
+
+  <view wx:if="{{loading}}" class="state-panel">
+    <text class="state-title">正在加载培训记录</text>
+    <text class="state-copy">请稍候。</text>
+  </view>
+  <view wx:elif="{{error}}" class="state-panel state-error">
+    <text class="state-title">培训记录加载失败</text>
+    <text class="state-copy">{{error}}</text>
+    <button class="secondary retry-button" bindtap="load">重新加载</button>
+  </view>
+  <view wx:elif="{{!records.length}}" class="state-panel">
+    <text class="state-title">暂无培训记录</text>
+    <text class="state-copy">完成培训或提交签字后，记录会显示在这里。</text>
+  </view>
+
+  <button wx:for="{{records}}" wx:key="id" class="record-item" data-id="{{item.id}}" bindtap="open">
+    <view class="record-head">
+      <view class="record-heading-copy">
+        <text class="record-title">{{item.batch.name}}</text>
+        <text class="record-type">{{item.typeText}}</text>
+      </view>
+      <text class="status">{{item.statusText}}</text>
+    </view>
+    <view class="record-facts">
+      <view class="fact-row"><text class="fact-label">完成时间</text><text class="fact-value">{{item.completedText}}</text></view>
+      <view class="fact-row"><text class="fact-label">最终成绩</text><text class="fact-value">{{item.finalScoreText}}</text></view>
+      <view class="fact-row"><text class="fact-label">考试结果</text><text class="fact-value {{item.passClass}}">{{item.passText}}</text></view>
+      <view class="fact-row"><text class="fact-label">本人签字</text><text class="fact-value">{{item.signatureText}}</text></view>
+    </view>
+    <text class="detail-link">查看完整记录</text>
+  </button>
+</view>
