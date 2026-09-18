@@ -295,6 +295,26 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-department-drag:active { cursor: grabbing; }
 .receivables-department-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 3px 12px; color: #6e6e73; font-size: 12px; font-variant-numeric: tabular-nums; }
 .receivables-department-actions { margin-top: 7px; display: flex; gap: 5px; }
+@media (hover: hover) and (pointer: fine) {
+  .receivables-department-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-2px);
+    transition: opacity .15s ease, transform .15s ease, visibility 0s linear .15s;
+  }
+  .receivables-department-item:hover .receivables-department-actions,
+  .receivables-department-item:focus-within .receivables-department-actions {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(0);
+    transition-delay: 0s;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .receivables-department-actions { transform: none; transition: none; }
+}
 .receivables-department-migration { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e8e8ed; }
 .receivables-department-migration .ant-select { width: 100%; }
 .receivables-department-empty { min-height: 180px; display: grid; place-items: center; color: #86868b; border: 1px dashed #d2d2d7; border-radius: 12px; background: #fff; }

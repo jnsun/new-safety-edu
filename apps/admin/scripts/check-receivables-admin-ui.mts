@@ -129,6 +129,7 @@ assert.match(pageSource, /查看待补充台账/, "unreliable balance links dire
 assert.match(pageSource, /finalAmountMissingCount\s*>\s*0/, "balance reliability is driven by the missing-final count");
 assert.match(styles, /\.receivables-balance-unavailable\s*\{[^}]*place-content:\s*center/s, "unavailable balance content remains centered when resized");
 assert.match(styles, /\.receivables-department-grid\s*\{[^}]*repeat\(auto-fill,\s*minmax\(/s, "department cards use an adaptive compact grid");
+assert.match(styles, /@media \(hover: hover\) and \(pointer: fine\)[\s\S]*\.receivables-department-item:hover \.receivables-department-actions,[\s\S]*\.receivables-department-item:focus-within \.receivables-department-actions/, "department actions reveal on hover and keyboard focus without hiding touch controls");
 assert.match(pageSource, /receivables-balance-content/, "the available balance uses a centered content group");
 assert.match(styles, /\.receivables-balance-content\s*\{[^}]*place-content:\s*center/s, "the balance content remains centered when its card is resized");
 assert.match(transfersSource, /receivables-entry-section/, "new ledger fields are grouped into readable sections");
