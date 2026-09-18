@@ -389,18 +389,26 @@ function ReceivablesDashboard({
         </div>
       ) : (
         <div className="receivables-balance-content">
+          <Typography.Text className="receivables-card-kicker">
+            当前筛选范围
+          </Typography.Text>
           <div className="receivables-balance-value">
             {money(currentDashboard.amounts.balance)}
           </div>
-          <div className="receivables-balance-footer">
-            <Typography.Text type="secondary">当前筛选范围</Typography.Text>
-            <Button
-              className="receivables-balance-action"
-              onClick={() => navigate(ledgerPath())}
-            >
-              查看当前范围台账
-            </Button>
+          <div className="receivables-summary-grid">
+            {summaryItems.map(([label, value]) => (
+              <div key={label}>
+                <Typography.Text>{label}</Typography.Text>
+                <strong>{value}</strong>
+              </div>
+            ))}
           </div>
+          <Button
+            className="receivables-balance-action"
+            onClick={() => navigate(ledgerPath())}
+          >
+            查看当前范围台账
+          </Button>
         </div>
       );
     if (id === "amounts")

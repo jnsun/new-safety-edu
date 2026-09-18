@@ -130,8 +130,9 @@ assert.match(pageSource, /finalAmountMissingCount\s*>\s*0/, "balance reliability
 assert.match(styles, /\.receivables-balance-unavailable\s*\{[^}]*place-content:\s*center/s, "unavailable balance content remains centered when resized");
 assert.match(styles, /\.receivables-department-grid\s*\{[^}]*repeat\(auto-fill,\s*minmax\(/s, "department cards use an adaptive compact grid");
 assert.match(styles, /@media \(hover: hover\) and \(pointer: fine\)[\s\S]*\.receivables-department-item:hover \.receivables-department-actions,[\s\S]*\.receivables-department-item:focus-within \.receivables-department-actions/, "department actions reveal on hover and keyboard focus without hiding touch controls");
-assert.match(pageSource, /receivables-balance-content/, "the available balance uses a centered content group");
-assert.match(styles, /\.receivables-balance-content\s*\{[^}]*place-content:\s*center/s, "the balance content remains centered when its card is resized");
+assert.match(pageSource, /receivables-balance-content/, "the available balance uses an authoritative content group");
+assert.match(pageSource, /receivables-balance-content[\s\S]*当前筛选范围[\s\S]*summaryItems\.map[\s\S]*查看当前范围台账/, "the balance card restores scope, supporting facts, and its ledger action");
+assert.match(styles, /\.receivables-balance-content\s*\{[^}]*flex-direction:\s*column[^}]*align-items:\s*flex-start/s, "the balance card follows a left-aligned ledger reading order");
 assert.match(transfersSource, /receivables-entry-section/, "new ledger fields are grouped into readable sections");
 assert.match(styles, /\.receivables-entry-section\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s, "new ledger entry uses a dense desktop grid");
 assert.match(transfersSource, /receivables-export-workspace/, "export uses a dedicated compact workspace");
