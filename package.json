@@ -8,6 +8,7 @@
     "dev": "pnpm --filter @safety/contracts build && pnpm --parallel --filter @safety/api --filter @safety/admin dev",
     "dev:api": "pnpm --filter @safety/api dev",
     "dev:admin": "pnpm --filter @safety/admin dev",
+    "test:receivables:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-receivables-local.ps1",
     "build": "pnpm -r build",
     "typecheck": "pnpm --filter @safety/contracts build && pnpm -r typecheck",
     "check:miniprogram": "node scripts/check-miniprogram-production.mjs",

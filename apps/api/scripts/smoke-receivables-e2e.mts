@@ -27,7 +27,7 @@ function assertEnvironment() {
   let api: URL;
   try { database = new URL(databaseUrl); api = new URL(configuredBaseUrl); } catch { throw new Error("RECEIVABLES_E2E_URL_INVALID"); }
   const databaseName = decodeURIComponent(database.pathname.replace(/^\//, ""));
-  if (database.protocol !== "postgresql:" || database.hostname !== "127.0.0.1" || database.port !== "55432" || database.username !== "postgres" || !databaseName.includes("receivables_e2e_test")) throw new Error("RECEIVABLES_E2E_DATABASE_URL_UNSAFE");
+  if (database.protocol !== "postgresql:" || database.hostname !== "127.0.0.1" || !["5432", "55432"].includes(database.port) || database.username !== "postgres" || databaseName !== "receivables_e2e_test") throw new Error("RECEIVABLES_E2E_DATABASE_URL_UNSAFE");
   if (api.protocol !== "http:" || api.hostname !== "127.0.0.1" || api.port !== "55450" || api.pathname !== "/" || api.username !== "" || api.password !== "" || api.search !== "" || api.hash !== "") throw new Error("RECEIVABLES_E2E_API_URL_UNSAFE");
   if (uploadRoot !== resolve(root, "var/receivables-e2e-test")) throw new Error("RECEIVABLES_E2E_UPLOAD_ROOT_UNSAFE");
   if (browserFixture && !existsSync(resolve(root, "apps/admin/dist/index.html"))) throw new Error("RECEIVABLES_BROWSER_BUILD_MISSING");
