@@ -1,1 +1,32 @@
+.detail-page { max-width: 1100rpx; margin: 0 auto; }
+.state-panel, .record-summary, .fact-section { padding: 34rpx; margin-bottom: 24rpx; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.state-panel { padding-top: 58rpx; padding-bottom: 58rpx; text-align: center; }
+.state-title { display: block; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
+.state-copy { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
+.state-error .state-title { color: var(--danger); }
+.retry-button { width: 100%; margin-top: 30rpx; }
+.record-title { display: block; font-size: 40rpx; line-height: 1.3; font-weight: 700; }
+.record-type { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.45; }
+.summary-row, .fact-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 28rpx; padding: 15rpx 0; font-size: 28rpx; line-height: 1.5; }
+.summary-row:first-of-type { padding-top: 24rpx; margin-top: 24rpx; border-top: 1rpx solid var(--line); }
+.summary-row > text:last-child, .fact-value { min-width: 0; text-align: right; }
+.section-heading { display: flex; align-items: flex-start; gap: 20rpx; margin-bottom: 24rpx; }
+.section-number { flex: 0 0 auto; color: var(--action); font-size: 28rpx; line-height: 1.4; font-weight: 700; }
+.section-title { display: block; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
+.section-copy { display: block; margin-top: 6rpx; color: var(--muted); font-size: 28rpx; line-height: 1.45; }
+.fact-row { border-bottom: 1rpx solid var(--line); }
+.fact-row:last-child { border-bottom: 0; }
+.fact-label { flex: 0 0 auto; color: var(--muted); }
+.inline-empty { padding: 24rpx 0; color: var(--muted); font-size: 28rpx; line-height: 1.5; }
+.content-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24rpx; padding: 22rpx 0; border-bottom: 1rpx solid var(--line); }
+.content-row:last-child { border-bottom: 0; }
+.content-copy { min-width: 0; flex: 1; }
+.content-title { display: block; font-size: 30rpx; line-height: 1.45; font-weight: 600; }
+.content-meta { display: block; margin-top: 7rpx; color: var(--muted); font-size: 28rpx; line-height: 1.4; }
+.content-result { flex: 0 0 auto; color: var(--muted); font-size: 28rpx; line-height: 1.45; text-align: right; }
+.content-result text { display: block; }
+.content-result text:first-child { color: var(--success); font-weight: 600; }
 
+@media (min-width: 700px) {
+  .detail-page { max-width: 1240rpx; padding-left: 48rpx; padding-right: 48rpx; }
+}

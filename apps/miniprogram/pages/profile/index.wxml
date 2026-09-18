@@ -12,11 +12,18 @@
     </block>
     <text wx:else class="muted">人员档案尚未绑定或正在审核。</text>
   </view>
+  <view wx:if="{{challengePoints}}" class="card points-summary">
+    <view><text class="title">安全积分</text><text class="muted">积分仅来自日常安全挑战</text></view>
+    <view class="points-numbers"><view><text class="points-number">{{challengePoints.total}}</text><text class="muted">累计</text></view><view><text class="points-number">{{challengePoints.monthPoints}}</text><text class="muted">本月</text></view></view>
+    <view class="row"><button class="secondary" bindtap="openChallenge">今日挑战</button><button class="secondary" bindtap="openLeaderboard">查看排行榜</button></view>
+  </view>
   <view wx:if="{{security}}" class="card">
     <text class="title">账号安全</text>
     <view class="row"><text>登录方式</text><text>{{security.methodText}}</text></view>
     <view class="row"><text>当前有效设备</text><text>{{security.sessions.length}}</text></view>
-    <view wx:if="{{security.roles.length}}" class="course" wx:for="{{security.roles}}" wx:key="id"><text>{{item.text}}</text></view>
+    <block wx:if="{{security.roles.length}}">
+      <view class="course" wx:for="{{security.roles}}" wx:key="id"><text>{{item.text}}</text></view>
+    </block>
     <text wx:else class="muted">普通人员权限</text>
     <input class="field" type="number" maxlength="11" value="{{newPhone}}" bindinput="setNewPhone" placeholder="输入新手机号"/>
     <view class="row"><input class="field" type="number" maxlength="6" value="{{phoneCode}}" bindinput="setPhoneCode" placeholder="短信验证码"/><button class="mini-button" bindtap="sendPhoneCode">发送验证码</button></view>

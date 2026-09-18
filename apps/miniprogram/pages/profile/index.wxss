@@ -4,3 +4,7 @@
 .placeholder { display: flex; align-items: center; justify-content: center; color: #86868b; font-size: 24rpx; }
 .mini-button { margin: 0; width: auto; padding: 0 28rpx; font-size: 26rpx; }
 .hint { display: block; color: #86868b; font-size: 24rpx; line-height: 1.5; margin-top: 18rpx; }
+.points-summary { background: linear-gradient(145deg, #fff, #eef7ff); }
+.points-numbers { display: flex; gap: 80rpx; margin: 24rpx 0; }
+.points-number { display: block; color: var(--action); font-size: 46rpx; font-weight: 750; }
+.points-summary .row button { flex: 1; }

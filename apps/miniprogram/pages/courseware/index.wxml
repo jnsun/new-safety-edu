@@ -1,1 +1,66 @@
-<view class="page"><view wx:if="{{loading}}" class="card empty">正在加载课件…</view><view wx:elif="{{error}}" class="card error">{{error}}</view><block wx:elif="{{content}}"><view class="card"><text class="title">{{content.title}}</text><rich-text wx:if="{{content.type === 'rich_text'}}" nodes="{{content.richText}}"></rich-text><block wx:else><text class="muted">HTML 交互课件将在受控页面中打开，链接五分钟内有效。</text><button class="secondary" bindtap="openHtml">打开 HTML 课件</button></block></view><view class="card"><text class="muted">请确认已浏览到课件末尾，再主动完成本次学习。</text><button class="primary" loading="{{busy}}" bindtap="complete">完成学习</button></view></block></view>
+<view class="page courseware-page">
+  <view wx:if="{{loading}}" class="state-panel">
+    <text class="state-title">正在加载课件</text>
+    <text class="state-copy">正在获取课件内容和上次学习位置，请稍候。</text>
+  </view>
+
+  <view wx:elif="{{error && !content}}" class="state-panel state-error">
+    <text class="state-title">课件加载失败</text>
+    <text class="state-copy">{{error}}</text>
+    <button class="secondary retry-button" bindtap="reloadCourseware">重新加载</button>
+  </view>
+
+  <block wx:elif="{{content}}">
+    <view class="reader-heading">
+      <text class="course-title">{{content.title}}</text>
+      <text wx:if="{{content.type === 'rich_text'}}" class="resume-copy">图文课件 · {{remainingText}}</text>
+      <text wx:elif="{{content.type === 'structured'}}" class="resume-copy">互动图文课件 · 预计 {{content.estimatedMinutes}} 分钟</text>
+      <text wx:else class="resume-copy">HTML 交互课件 · 在受控页面中阅读，页内位置不会同步。</text>
+    </view>
+
+    <view wx:if="{{content.type === 'rich_text' || content.type === 'structured'}}" class="progress-dock" aria-live="polite">
+      <view class="progress-copy-row">
+        <text class="progress-label">学习进度</text>
+        <text wx:if="{{content.type === 'structured' && structuredTotal}}" class="progress-position">第 {{structuredPosition}} / {{structuredTotal}} 项 · {{progressPercent}}%</text>
+        <text wx:else class="progress-position">{{progressPercent}}%</text>
+      </view>
+      <text wx:if="{{content.type === 'structured' && structuredUnitTitle}}" class="progress-unit">{{structuredUnitTitle}}</text>
+      <view class="progress" aria-label="学习进度 {{progressPercent}}%">
+        <view class="progress-bar" style="width: {{progressPercent}}%"></view>
+      </view>
+      <text wx:if="{{syncWarning}}" class="progress-warning">{{syncWarning}}</text>
+    </view>
+
+    <view wx:if="{{content.type === 'rich_text'}}" class="reader-content">
+      <rich-text nodes="{{content.richText}}"></rich-text>
+      <view class="rich-end-action">
+        <button wx:if="{{!atEnd}}" class="secondary end-confirm-button" loading="{{reachingEnd}}" disabled="{{reachingEnd}}" bindtap="attestRichTextComplete">本人确认已阅读至末尾</button>
+        <text wx:else class="attestation-success">已记录本人阅读至末尾。</text>
+      </view>
+    </view>
+
+    <courseware-blocks wx:elif="{{content.type === 'structured'}}" units="{{content.units}}" resume-block-key="{{structuredResumeBlockKey}}" bind:block-reached="onStructuredBlockReached" bind:position-changed="onStructuredPositionChanged"></courseware-blocks>
+
+    <view wx:else class="html-panel">
+      <text class="section-title">打开受控课件</text>
+      <text class="section-copy">链接五分钟内有效。完成阅读后返回本页确认；系统无法读取或恢复 HTML 页面内部的滚动位置。</text>
+      <button class="secondary html-button" bindtap="openHtml">{{htmlNavigationSucceeded ? '再次打开 HTML 课件' : '打开 HTML 课件'}}</button>
+      <button wx:if="{{htmlNavigationSucceeded && !atEnd}}" class="secondary attestation-button" loading="{{reachingEnd}}" disabled="{{reachingEnd}}" bindtap="attestHtmlComplete">本人确认已完成全部互动内容</button>
+      <text wx:if="{{atEnd}}" class="attestation-success">已记录本人完成确认。</text>
+    </view>
+
+    <view wx:if="{{content.type !== 'structured' || atEnd}}" class="finish-panel">
+      <text class="section-title">完成本次学习</text>
+      <text wx:if="{{content.type === 'rich_text' && !atEnd}}" class="section-copy">请阅读至内容末尾并点击“本人确认已阅读至末尾”。</text>
+      <text wx:elif="{{content.type === 'rich_text'}}" class="section-copy success-copy">已到达课件末尾，可以完成本次学习。</text>
+      <text wx:elif="{{content.type === 'structured' && !atEnd}}" class="section-copy">请依次学习内容，并在最后一项点击“本人确认已阅读至末尾”。</text>
+      <text wx:elif="{{content.type === 'structured'}}" class="section-copy success-copy">已记录到达课件末尾，可以完成本次学习。</text>
+      <text wx:elif="{{!htmlNavigationSucceeded}}" class="section-copy">请先打开 HTML 课件并完成互动内容。</text>
+      <text wx:elif="{{!atEnd}}" class="section-copy">返回后点击“本人确认已完成全部互动内容”。</text>
+      <text wx:else class="section-copy success-copy">本人完成确认已记录，可以完成本次学习。</text>
+      <text wx:if="{{syncWarning}}" class="sync-warning">{{syncWarning}}</text>
+      <text wx:if="{{error}}" class="error action-error">{{error}}</text>
+      <button class="primary finish-button" loading="{{busy}}" disabled="{{!atEnd}}" bindtap="complete">完成本次学习</button>
+    </view>
+  </block>
+</view>

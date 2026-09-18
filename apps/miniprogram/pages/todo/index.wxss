@@ -1,1 +1,41 @@
+.todo-page { max-width: 1080rpx; margin: 0 auto; }
+.workspace-head { margin: 6rpx 4rpx 34rpx; }
+.workspace-title { display: block; margin-bottom: 10rpx; font-size: 46rpx; line-height: 1.18; font-weight: 700; letter-spacing: -1rpx; }
+.workspace-copy, .state-copy, .task-meta { display: block; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
+.state-panel { padding: 54rpx 34rpx; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); text-align: center; }
+.state-title { display: block; margin-bottom: 12rpx; font-size: 34rpx; line-height: 1.3; font-weight: 650; }
+.state-error .state-title { color: var(--danger); }
+.retry-button { width: 100%; margin-top: 30rpx; }
+.priority-banner { padding: 26rpx 30rpx; margin-bottom: 30rpx; color: #123452; background: var(--action-soft); border-radius: var(--radius-control); }
+.priority-copy { display: block; margin-bottom: 8rpx; font-size: 32rpx; line-height: 1.35; font-weight: 700; }
+.priority-detail { display: block; font-size: 28rpx; line-height: 1.5; }
+.section-title { display: block; margin: 0 4rpx 16rpx; font-size: 32rpx; line-height: 1.35; font-weight: 650; }
+.primary-section { min-width: 0; margin-bottom: 34rpx; }
+.primary-task { width: 100%; min-height: 320rpx; padding: 34rpx; margin: 0; box-sizing: border-box; color: var(--ink); background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); text-align: left; line-height: 1.4; }
+.task-heading, .task-summary, .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; }
+.task-title { min-width: 0; flex: 1; font-size: 38rpx; line-height: 1.3; font-weight: 700; }
+.task-meta { margin-top: 10rpx; }
+.task-summary { align-items: center; font-size: 28rpx; line-height: 1.45; }
+.task-action, .row-action { color: var(--action); font-weight: 650; }
+.enter-copy { display: flex; align-items: center; justify-content: center; min-height: 88rpx; margin-top: 28rpx; color: #fff; background: var(--action); border-radius: var(--radius-control); font-size: 30rpx; font-weight: 650; }
+.remaining-section { min-width: 0; }
+.section-heading { align-items: center; }
+.section-count { color: var(--muted); font-size: 28rpx; }
+.task-list { overflow: hidden; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.task-row { display: block; width: 100%; min-height: 160rpx; padding: 28rpx 30rpx; margin: 0; box-sizing: border-box; color: var(--ink); background: var(--surface); border-bottom: 1rpx solid var(--line); border-radius: 0; text-align: left; line-height: 1.45; }
+.task-row:last-child { border-bottom: 0; }
+.task-row-title { min-width: 0; flex: 1; font-size: 31rpx; line-height: 1.4; font-weight: 650; }
+.task-row-main { min-width: 0; }
+.row-action { display: block; margin-top: 14rpx; font-size: 28rpx; }
+.challenge-section { margin-top: 36rpx; }
+.challenge-card { display: flex; width: 100%; min-height: 132rpx; margin: 0; padding: 28rpx 30rpx; box-sizing: border-box; align-items: center; justify-content: space-between; gap: 22rpx; color: var(--ink); background: linear-gradient(135deg, #eef7ff, #f7fbff); border: 1rpx solid #cfe6ff; border-radius: var(--radius-card); text-align: left; }
+.challenge-title { display: block; font-size: 31rpx; font-weight: 700; }
+.challenge-action { color: var(--action); font-size: 28rpx; font-weight: 700; }
+.challenge-note { display: block; margin: 12rpx 4rpx 0; color: var(--muted); font-size: 24rpx; line-height: 1.5; }
 
+@media (min-width: 700px) {
+  .todo-page { max-width: 1280rpx; padding-left: 48rpx; padding-right: 48rpx; }
+  .todo-layout { display: flex; align-items: flex-start; gap: 28rpx; }
+  .primary-section { flex: 1.08; margin-bottom: 0; }
+  .remaining-section { flex: .92; }
+}

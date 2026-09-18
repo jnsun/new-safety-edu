@@ -15,14 +15,21 @@ import { coursewareViewerHeaders } from "../courseware-viewer-policy.js";
 import { nextQuestionVersion, questionVersionSnapshot } from "../question-versions.js";
 import { canPublishCourseware } from "../courseware-publish-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
+import { decorateTodoPriority, sortTodoAssignments } from "../training-todo-priority.js";
+import { completionEvidenceError, latestLearningProgress, resumeUpdateData } from "../learning-progress-policy.js";
+import { serializeStructuredCoursewareForLearner } from "../structured-courseware.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
 const idParam = z.object({ id: z.string().uuid() });
 const principalOf = (request: FastifyRequest) => request.principal ?? forbidden("未登录");
 const scopeSchema = z.object({ scopeType: z.enum(["company", "organization", "project"]), scopeId: z.string().uuid().nullable().optional() });
+export const resumeSchema = z.object({
+  blockKey: z.string().trim().min(1).max(120),
+  progressPercent: z.number().int().min(0).max(100)
+});
 
-async function assertScope(principal: Principal, scopeType: ScopeType, scopeId?: string | null) {
+export async function assertScope(principal: Principal, scopeType: ScopeType, scopeId?: string | null) {
   if (scopeType === "company") {
     if (scopeId || !isCompanyAdmin(principal)) forbidden();
   } else if (scopeType === "organization") {
@@ -32,16 +39,21 @@ async function assertScope(principal: Principal, scopeType: ScopeType, scopeId?:
   } else forbidden();
 }
 
-async function assertCoursewareFile(principal: Principal, fileId: string) {
+export async function assertCoursewareFile(principal: Principal, fileId: string) {
   const file = await prisma.privateFile.findFirst({ where: { id: fileId, kind: "courseware", uploadedBy: principal.accountId }, select: { id: true } });
   if (!file) forbidden("HTML 课件文件无效");
 }
 
 async function visibleScope(principal: Principal) {
   if (isCompanyAdmin(principal)) return {};
+  const organizationIds = await accessibleOrganizationIds(principal);
+  const organizationProjectIds = organizationIds.length
+    ? (await prisma.project.findMany({ where: { responsibleOrganizationId: { in: organizationIds } }, select: { id: true } })).map(({ id }) => id)
+    : [];
+  const visibleProjectIds = [...new Set([...projectScopeIds(principal), ...organizationProjectIds])];
   return { OR: [
-    { scopeType: "organization" as const, scopeId: { in: await accessibleOrganizationIds(principal) } },
-    { scopeType: "project" as const, scopeId: { in: projectScopeIds(principal) } }
+    { scopeType: "organization" as const, scopeId: { in: organizationIds } },
+    { scopeType: "project" as const, scopeId: { in: visibleProjectIds } }
   ] };
 }
 
@@ -52,15 +64,28 @@ async function assertAssignment(principal: Principal, assignmentId: string, mana
   forbidden();
 }
 
+async function currentLearnerProgress(tx: Prisma.TransactionClient, assignmentId: string, versionId: string, personId: string) {
+  const rows = await tx.learningProgress.findMany({
+    where: { assignmentId, coursewareVersionId: versionId, assignment: { personId } },
+    select: { id: true, remediationRound: true, openedAt: true, reachedEndAt: true, completedAt: true, resumeState: true }
+  });
+  return latestLearningProgress(rows);
+}
+
+async function lockLearnerAssignment(tx: Prisma.TransactionClient, assignmentId: string, personId: string) {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM training_assignments WHERE id = ${assignmentId}::uuid AND person_id = ${personId}::uuid FOR UPDATE`;
+  if (!rows.length) forbidden("课件只能由本人学习");
+}
+
 const normalize = (value: unknown) => Array.isArray(value) ? [...value].map(String).sort() : [String(value)].sort();
 const sameAnswer = (a: unknown, b: unknown) => JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
 type SnapshotQuestion = { id: string; type: QuestionType; prompt: string; options: unknown; correct: unknown; score: number };
 type ExamSnapshot = { questions: SnapshotQuestion[]; totalScore: number };
 type BatchPaperSnapshot = { mode: "fixed" | "random"; questions: SnapshotQuestion[]; randomCount?: number };
-const publicAttempt = (attempt: { id: string; attemptNumber: number; startedAt: Date; expiresAt: Date; status: string; snapshot: Prisma.JsonValue; answers?: Array<{ questionId: string; answer: Prisma.JsonValue }> }) => {
+export const publicAttempt = (attempt: { id: string; attemptNumber: number; startedAt: Date; expiresAt: Date; status: string; snapshot: Prisma.JsonValue; answers?: Array<{ questionId: string; answer: Prisma.JsonValue }> }) => {
   const snapshot = attempt.snapshot as unknown as ExamSnapshot;
   return { id: attempt.id, attemptNumber: attempt.attemptNumber, startedAt: attempt.startedAt, expiresAt: attempt.expiresAt, status: attempt.status,
-    questions: snapshot.questions.map(({ correct: _correct, ...question }) => question), answers: attempt.answers ?? [] };
+    questions: snapshot.questions.map(({ id, type, prompt, options }) => ({ id, type, prompt, options })), answers: attempt.answers ?? [] };
 };
 
 const learnerAssignmentInclude = {
@@ -176,30 +201,6 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   });
 
   app.get("/api/coursewares", manager, async (request) => ({ data: await prisma.courseware.findMany({ where: await visibleScope(principalOf(request)), include: { versions: { orderBy: { version: "desc" } } }, orderBy: { createdAt: "desc" } }) }));
-  app.post("/api/coursewares", manager, async (request, reply) => {
-    const principal = principalOf(request);
-    const input = scopeSchema.extend({ title: z.string().trim().min(2).max(180), type: z.enum(["rich_text", "single_html"]), richText: z.string().min(1).optional(), fileId: z.string().uuid().optional() }).parse(request.body);
-    await assertScope(principal, input.scopeType, input.scopeId);
-    if (input.type === "rich_text" ? !input.richText : !input.fileId) throw Object.assign(new Error("课件内容不完整"), { statusCode: 400, code: "CONTENT_REQUIRED" });
-    if (input.fileId) await assertCoursewareFile(principal, input.fileId);
-    const content = input.richText ?? input.fileId!;
-    const courseware = await prisma.courseware.create({ data: { title: input.title, type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null,
-      versions: { create: { version: 1, richText: input.richText ?? null, fileId: input.fileId ?? null, contentHash: createHash("sha256").update(content).digest("hex") } } }, include: { versions: true } });
-    audit(principal.accountId, "courseware.create", "courseware", courseware.id);
-    return reply.code(201).send({ data: courseware });
-  });
-  app.post("/api/coursewares/:id/versions", manager, async (request, reply) => {
-    const principal = principalOf(request); const { id } = idParam.parse(request.params);
-    const courseware = await prisma.courseware.findUniqueOrThrow({ where: { id }, include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
-    await assertScope(principal, courseware.scopeType, courseware.scopeId);
-    const input = z.object({ richText: z.string().min(1).optional(), fileId: z.string().uuid().optional() }).parse(request.body);
-    const content = input.richText ?? input.fileId;
-    if (!content || (courseware.type === "rich_text" ? !input.richText : !input.fileId)) throw Object.assign(new Error("课件内容不完整"), { statusCode: 400, code: "CONTENT_REQUIRED" });
-    if (input.fileId) await assertCoursewareFile(principal, input.fileId);
-    const version = await prisma.coursewareVersion.create({ data: { coursewareId: id, version: (courseware.versions[0]?.version ?? 0) + 1, richText: input.richText ?? null, fileId: input.fileId ?? null, contentHash: createHash("sha256").update(content).digest("hex") } });
-    audit(principal.accountId, "courseware.version_create", "courseware_version", version.id);
-    return reply.code(201).send({ data: version });
-  });
   app.post("/api/courseware-versions/:id/publish", manager, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
     const version = await prisma.coursewareVersion.findUniqueOrThrow({ where: { id }, include: { courseware: true } });
@@ -358,6 +359,10 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     if (scope === "todo") where.status = { notIn: ["completed", "cancelled"] };
     if (scope === "records") where.status = { in: ["completed", "confirmation_pending"] };
     const rows = await prisma.trainingAssignment.findMany({ where, include: learnerAssignmentInclude, orderBy: { createdAt: "desc" } });
+    if (scope === "todo") {
+      const now = new Date();
+      return { data: sortTodoAssignments(rows.map((row) => decorateTodoPriority({ ...learnerAssignment(row), trainingType: row.batch.type, dueAt: row.batch.dueAt }, now))) };
+    }
     return { data: rows.map(learnerAssignment) };
   });
   app.get("/api/me/assignments/:id", authenticated, async (request) => {
@@ -372,7 +377,9 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
     if (!principal.personId) forbidden("账号尚未绑定人员档案");
     const row = await prisma.trainingAssignment.findFirstOrThrow({ where: { id, personId: principal.personId, status: { in: ["completed", "confirmation_pending"] } }, include: learnerAssignmentInclude });
-    return { data: learnerAssignment(row) };
+    const confirmation = await prisma.projectConfirmation.findFirst({ where: { assignmentId: row.id }, select: { confirmedAt: true, confirmedBy: true }, orderBy: { confirmedAt: "desc" } });
+    const confirmer = confirmation ? await prisma.account.findUnique({ where: { id: confirmation.confirmedBy }, select: { person: { select: { name: true } } } }) : null;
+    return { data: { ...learnerAssignment(row), projectConfirmation: confirmation ? { confirmedAt: confirmation.confirmedAt, confirmerName: confirmer?.person?.name ?? "项目管理人员" } : null } };
   });
   app.get("/api/assignments/:id/coursewares/:versionId", authenticated, async (request) => {
     const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
@@ -381,9 +388,41 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     if (!progress.openedAt) await prisma.learningProgress.update({ where: { id: progress.id }, data: { openedAt: new Date() } });
     if (assignment.status === "pending_learning") await prisma.$executeRaw`UPDATE training_assignments SET status = 'learning'::"AssignmentStatus", updated_at = now() WHERE id = ${id}::uuid AND status = 'pending_learning'::"AssignmentStatus"`;
     const version = progress.coursewareVersion;
-    if (version.courseware.type === "rich_text") return { data: { title: version.courseware.title, type: version.courseware.type, richText: version.richText } };
+    if (version.courseware.type === "rich_text") return { data: { title: version.courseware.title, type: version.courseware.type, richText: version.richText, resumeState: progress.resumeState, reachedEndAt: progress.reachedEndAt } };
+    if (version.courseware.type === "structured") return { data: {
+      title: version.courseware.title,
+      type: version.courseware.type,
+      ...serializeStructuredCoursewareForLearner(version.structuredContent, progress.resumeState),
+      reachedEndAt: progress.reachedEndAt
+    } };
     const token = await new SignJWT({ assignmentId: id, versionId, accountId: principal.accountId }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("5m").sign(new TextEncoder().encode(deps.env.UPLOAD_SIGNING_SECRET));
-    return { data: { title: version.courseware.title, type: version.courseware.type, viewerUrl: `${deps.env.PUBLIC_BASE_URL}/api/courseware-viewer?token=${encodeURIComponent(token)}` } };
+    return { data: { title: version.courseware.title, type: version.courseware.type, viewerUrl: `${deps.env.PUBLIC_BASE_URL}/api/courseware-viewer?token=${encodeURIComponent(token)}`, resumeState: progress.resumeState, reachedEndAt: progress.reachedEndAt } };
+  });
+  app.patch("/api/assignments/:id/coursewares/:versionId/resume", authenticated, async (request) => {
+    const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
+    if (!principal.personId) forbidden("课件只能由本人学习");
+    const incoming = resumeSchema.parse(request.body);
+    const resumeState = await prisma.$transaction(async (tx) => {
+      await lockLearnerAssignment(tx, id, principal.personId!);
+      const progress = await currentLearnerProgress(tx, id, versionId, principal.personId!);
+      if (!progress) forbidden("课件只能由本人学习");
+      const updated = await tx.learningProgress.update({ where: { id: progress.id }, data: resumeUpdateData(progress.resumeState, incoming), select: { resumeState: true } });
+      return updated.resumeState;
+    });
+    return { data: { resumeState } };
+  });
+  app.post("/api/assignments/:id/coursewares/:versionId/reached-end", authenticated, async (request) => {
+    const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
+    if (!principal.personId) forbidden("课件只能由本人学习");
+    const reachedEndAt = await prisma.$transaction(async (tx) => {
+      await lockLearnerAssignment(tx, id, principal.personId!);
+      const progress = await currentLearnerProgress(tx, id, versionId, principal.personId!);
+      if (!progress) forbidden("课件只能由本人学习");
+      if (!progress.openedAt) throw Object.assign(new Error("请先打开并浏览课件"), { statusCode: 409, code: "COURSEWARE_NOT_OPENED" });
+      if (progress.reachedEndAt) return progress.reachedEndAt;
+      return (await tx.learningProgress.update({ where: { id: progress.id }, data: { reachedEndAt: new Date() }, select: { reachedEndAt: true } })).reachedEndAt;
+    });
+    return { data: { reachedEndAt } };
   });
   app.get("/api/courseware-viewer", { logLevel: "silent" }, async (request, reply) => {
     const token = z.object({ token: z.string().min(1) }).parse(request.query).token;
@@ -398,18 +437,22 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     return reply.send(content);
   });
   app.post("/api/assignments/:id/learning/:versionId/complete", authenticated, async (request) => {
-    const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params); const assignment = await assertAssignment(principal, id);
-    if (principal.personId !== assignment.personId) forbidden("学习只能由本人完成");
-    if (!["pending_learning", "learning", "remediation_required"].includes(assignment.status)) throw Object.assign(new Error("当前任务不可完成学习"), { statusCode: 409, code: "INVALID_ASSIGNMENT_STATE" });
-    const progress = await prisma.learningProgress.findFirst({ where: { assignmentId: id, coursewareVersionId: versionId }, orderBy: { remediationRound: "desc" } });
-    if (!progress || progress.completedAt) throw Object.assign(new Error("课件不属于当前任务或已完成"), { statusCode: 409, code: "INVALID_PROGRESS" });
-    if (!progress.openedAt) throw Object.assign(new Error("请先打开并浏览课件"), { statusCode: 409, code: "COURSEWARE_NOT_OPENED" });
-    const now = new Date(); await prisma.learningProgress.update({ where: { id: progress.id }, data: { reachedEndAt: now, completedAt: now } });
-    const remaining = await prisma.learningProgress.count({ where: { assignmentId: id, completedAt: null } });
-    if (!remaining) {
-      const withBatch = await prisma.trainingAssignment.findUniqueOrThrow({ where: { id }, select: { batch: { select: { paperId: true } } } });
-      await prisma.trainingAssignment.update({ where: { id }, data: { status: withBatch.batch.paperId ? "pending_exam" : "pending_signature" } });
-    }
+    const principal = principalOf(request); const { id, versionId } = z.object({ id: z.string().uuid(), versionId: z.string().uuid() }).parse(request.params);
+    if (!principal.personId) forbidden("学习只能由本人完成");
+    const remaining = await prisma.$transaction(async (tx) => {
+      await lockLearnerAssignment(tx, id, principal.personId!);
+      const assignment = await tx.trainingAssignment.findUniqueOrThrow({ where: { id }, select: { status: true, batch: { select: { paperId: true } } } });
+      if (!["pending_learning", "learning", "remediation_required"].includes(assignment.status)) throw Object.assign(new Error("当前任务不可完成学习"), { statusCode: 409, code: "INVALID_ASSIGNMENT_STATE" });
+      const progress = await currentLearnerProgress(tx, id, versionId, principal.personId!);
+      if (!progress || progress.completedAt) throw Object.assign(new Error("课件不属于当前任务或已完成"), { statusCode: 409, code: "INVALID_PROGRESS" });
+      const evidenceError = completionEvidenceError(progress);
+      if (evidenceError === "COURSEWARE_NOT_OPENED") throw Object.assign(new Error("请先打开并浏览课件"), { statusCode: 409, code: evidenceError });
+      if (evidenceError === "COURSEWARE_END_NOT_REACHED") throw Object.assign(new Error("请先浏览到课件末尾或确认已完成全部互动内容"), { statusCode: 409, code: evidenceError });
+      await tx.learningProgress.update({ where: { id: progress.id }, data: { completedAt: new Date() } });
+      const count = await tx.learningProgress.count({ where: { assignmentId: id, completedAt: null } });
+      if (!count) await tx.trainingAssignment.update({ where: { id }, data: { status: assignment.batch.paperId ? "pending_exam" : "pending_signature" } });
+      return count;
+    });
     return { data: { remaining } };
   });
 

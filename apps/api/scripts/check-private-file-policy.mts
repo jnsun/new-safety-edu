@@ -16,6 +16,8 @@ assert.equal(canReadPrivateFile(principal(null, [{ role: "project_admin", scopeT
 assert.equal(canReadPrivateFile(principal(null, [{ role: "company_admin", scopeType: "company", scopeId: null }]), base), true);
 assert.equal(canReadPrivateFile(principal(null), { ...base, linked: false, uploadedBy: "account-reader" }), true);
 assert.equal(canReadPrivateFile(principal(null), { ...base, uploadedBy: "account-reader" }), false);
+assert.equal(canReadPrivateFile(principal("person-a"), { ...base, coursewares: [{ scopeType: "company", scopeId: null, personIds: ["person-a"] }] }), true, "assigned learner can read an asset linked to the exact courseware version");
+assert.equal(canReadPrivateFile(principal("person-b"), { ...base, coursewares: [{ scopeType: "company", scopeId: null, personIds: ["person-a"] }] }), false, "another learner cannot read an asset by UUID alone");
 
 const receivablesReader = (access: { role: "owner" | "admin" | "reporter" | "readonly" | null; canReadLedger: boolean; canViewAll: boolean; readDepartmentIds: string[] }) => ({ ...principal(null, [{ role: "company_admin", scopeType: "company", scopeId: null }]), receivablesAccess: access });
 const activeReceivable = { financeDepartmentId: "finance-department-a", status: "active" as const };

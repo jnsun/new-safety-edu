@@ -1,1 +1,91 @@
-<view class="page"><view wx:if="{{loading}}" class="card empty">正在加载…</view><view wx:elif="{{error}}" class="card error">{{error}}</view><block wx:elif="{{task}}"><view class="card"><view class="row"><text class="title">{{task.batch.name}}</text><text class="status">{{task.statusText}}</text></view><text class="muted">{{task.typeText}}</text><view class="divider"></view><view class="row"><text>适用范围</text><text>{{task.batch.project ? task.batch.project.name : (task.organization ? task.organization.name : '公司范围')}}</text></view><view class="row"><text>截止时间</text><text>{{task.dueText}}</text></view><view class="row"><text>当前下一步</text><text class="success">{{task.nextAction}}</text></view></view><view class="card"><text class="title">必学课件（{{task.progress.completed}}/{{task.progress.total}}）</text><text wx:if="{{task.status === 'remediation_required'}}" class="warning">本轮需重新完成全部课件后才能再次考试</text><view wx:for="{{task.coursewares}}" wx:key="progressId" class="course" data-version-id="{{item.versionId}}" bindtap="study"><view><text>{{index + 1}}. {{item.title}}</text><text class="muted small">v{{item.version}} · {{item.type === 'rich_text' ? '图文' : 'HTML'}}</text></view><text class="{{item.completedAt ? 'success' : 'warning'}}">{{item.completedAt ? '已完成' : '去学习 ›'}}</text></view></view><view class="card"><text class="title">考试与签字</text><view class="row"><text>考试</text><text>{{!task.batch.examRequired ? '本次不要求考试' : (task.latestAttempt ? (task.latestAttempt.passed ? task.latestAttempt.score + ' 分 · 通过' : task.latestAttempt.score + ' 分 · 未通过') : '尚未考试')}}</text></view><view class="row"><text>签字</text><text>{{task.signedAt ? '已签字' : '未签字'}}</text></view><button wx:if="{{task.status === 'pending_exam' || (task.status === 'remediation_required' && task.progress.completed === task.progress.total)}}" class="primary" bindtap="exam">{{task.latestAttempt ? '继续考试流程' : '开始考试'}}</button><view wx:if="{{task.status === 'locked'}}" class="locked">考试次数已用完，任务已锁定。请联系所属部门或项目管理员解锁。</view><button wx:if="{{task.status === 'pending_signature'}}" class="primary" bindtap="sign">查看记录并本人签字</button><text wx:if="{{task.status === 'confirmation_pending'}}" class="warning">已签字，等待项目管理员确认到场和现场交底。</text><text wx:if="{{task.status === 'completed'}}" class="success">培训已完成，可在“我的记录”中查看。</text></view></block></view>
+<view class="page task-page">
+  <view wx:if="{{loading}}" class="state-panel">
+    <text class="state-title">正在加载培训任务</text>
+    <text class="state-copy">正在获取最新进度和操作状态，请稍候。</text>
+  </view>
+
+  <view wx:elif="{{error}}" class="state-panel state-error">
+    <text class="state-title">任务加载失败</text>
+    <text class="state-copy">{{error}}</text>
+    <button class="secondary retry-button" bindtap="retry">重新加载</button>
+  </view>
+
+  <block wx:elif="{{task}}">
+    <view class="task-summary-panel">
+      <view class="summary-heading">
+        <view class="summary-title-group">
+          <text class="task-title">{{task.batch.name}}</text>
+          <text class="task-type">{{task.typeText}}</text>
+        </view>
+        <text class="status">{{task.statusText}}</text>
+      </view>
+
+      <view class="facts">
+        <view class="fact-row"><text class="fact-label">适用范围</text><text class="fact-value">{{task.batch.project ? task.batch.project.name : (task.organization ? task.organization.name : '公司范围')}}</text></view>
+        <view class="fact-row"><text class="fact-label">截止时间</text><text class="fact-value">{{task.dueText}}</text></view>
+        <view class="fact-row"><text class="fact-label">整体进度</text><text class="fact-value">{{task.progress.completed}}/{{task.progress.total}} 项已学</text></view>
+      </view>
+      <view class="progress" aria-label="已完成 {{task.percent}}%"><view class="progress-bar" style="width: {{task.percent}}%"></view></view>
+
+      <view class="action-zone">
+        <text class="action-label">当前下一步</text>
+        <text class="action-copy">{{task.nextAction}}</text>
+        <button wx:if="{{primaryAction}}" class="primary primary-action" bindtap="runPrimaryAction">{{primaryAction.label}}</button>
+      </view>
+
+      <view wx:if="{{task.status === 'remediation_required'}}" class="status-note warning-note">本轮需重新完成全部课件后才能再次考试。</view>
+      <view wx:if="{{task.status === 'locked'}}" class="status-note danger-note">考试次数已用完，任务已锁定。请联系所属部门或项目管理员解锁。</view>
+      <view wx:if="{{task.status === 'confirmation_pending'}}" class="status-note warning-note">{{confirmationText}}</view>
+      <view wx:if="{{task.status === 'completed'}}" class="status-note success-note">培训已完成，可在“我的记录”中查看。</view>
+    </view>
+
+    <view class="stage-panel">
+      <view class="section-heading">
+        <text class="section-title">任务阶段</text>
+        <text class="section-copy">依次完成学习、考试、签字和完成确认。</text>
+      </view>
+      <view class="stage-list">
+        <view wx:for="{{stageItems}}" wx:key="key" class="stage-item stage-{{item.state}}">
+          <view class="stage-mark"></view>
+          <text class="stage-label">{{item.label}}</text>
+          <text class="stage-state">{{item.stateText}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="detail-grid">
+      <view class="section-panel course-panel">
+        <view class="section-heading">
+          <text class="section-title">必学课件</text>
+          <text class="section-copy">已完成 {{task.progress.completed}}/{{task.progress.total}} 项，所有课件均可查看。</text>
+        </view>
+        <view wx:if="{{!task.coursewares.length}}" class="inline-empty">本任务没有需要在线学习的课件。</view>
+        <button wx:for="{{task.coursewares}}" wx:key="progressId" class="course-row" data-version-id="{{item.versionId}}" bindtap="study">
+          <view class="course-copy">
+            <text class="course-title">{{index + 1}}. {{item.title}}</text>
+            <text class="course-meta">v{{item.version}} · {{item.type === 'rich_text' ? '图文' : 'HTML'}}</text>
+          </view>
+          <view class="course-state">
+            <text class="{{item.completedAt ? 'success' : 'warning'}}">{{item.completedAt ? '已完成' : '未完成'}}</text>
+            <text class="course-link">{{item.completedAt ? '再次查看' : '去学习'}}</text>
+          </view>
+        </button>
+      </view>
+
+      <view class="section-panel result-panel">
+        <view class="section-heading">
+          <text class="section-title">考试与签字</text>
+          <text class="section-copy">结果来自当前培训任务记录。</text>
+        </view>
+        <view class="result-row">
+          <text class="fact-label">考试</text>
+          <text class="result-value">{{examResultText}}</text>
+        </view>
+        <view class="result-row">
+          <text class="fact-label">签字</text>
+          <text class="result-value">{{signatureResultText}}</text>
+        </view>
+      </view>
+    </view>
+  </block>
+</view>

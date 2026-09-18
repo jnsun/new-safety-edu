@@ -1,1 +1,6 @@
-{ "navigationBarTitleText": "学习课件" }
+{
+  "navigationBarTitleText": "学习课件",
+  "usingComponents": {
+    "courseware-blocks": "/components/courseware-blocks/index"
+  }
+}

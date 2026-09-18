@@ -1,1 +1,24 @@
+.records-page { max-width: 1100rpx; margin: 0 auto; }
+.page-heading { margin-bottom: 30rpx; }
+.page-title { display: block; font-size: 44rpx; line-height: 1.2; font-weight: 700; letter-spacing: -1rpx; }
+.page-copy { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
+.state-panel { padding: 58rpx 34rpx; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); text-align: center; }
+.state-title { display: block; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
+.state-copy { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
+.state-error .state-title { color: var(--danger); }
+.retry-button { width: 100%; margin-top: 30rpx; }
+.record-item { display: block; width: 100%; min-height: 88rpx; padding: 32rpx; margin: 0 0 22rpx; box-sizing: border-box; color: var(--ink); background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); text-align: left; line-height: 1.4; }
+.record-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 22rpx; }
+.record-heading-copy { min-width: 0; flex: 1; }
+.record-title { display: block; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
+.record-type { display: block; margin-top: 8rpx; color: var(--muted); font-size: 28rpx; line-height: 1.4; }
+.record-facts { padding-top: 14rpx; margin-top: 22rpx; border-top: 1rpx solid var(--line); }
+.fact-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 28rpx; padding: 12rpx 0; font-size: 28rpx; line-height: 1.5; }
+.fact-label { flex: 0 0 auto; color: var(--muted); }
+.fact-value { min-width: 0; text-align: right; }
+.neutral { color: var(--muted); }
+.detail-link { display: block; margin-top: 18rpx; color: var(--action); font-size: 28rpx; line-height: 1.45; font-weight: 600; text-align: right; }
 
+@media (min-width: 700px) {
+  .records-page { max-width: 1240rpx; padding-left: 48rpx; padding-right: 48rpx; }
+}
