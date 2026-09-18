@@ -17,6 +17,7 @@ import { sendPhoneVerificationCode, verifiedPhoneCode } from "./phone-auth.js";
 import { autoDispatchInTransaction } from "./day2.js";
 import { setCsrfCookie } from "../csrf.js";
 import { getWechatPhoneNumber } from "../wechat-api.js";
+import { issueWechatPhoneVerificationToken, verifyWechatPhoneVerificationToken } from "../wechat-phone-verification.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -89,16 +90,53 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     return { data: { sent: true, expiresIn: 300, purpose } };
   });
 
+  app.post("/api/wechat/identity/wechat-phone", { preHandler: deps.authenticate }, async (request) => {
+    const principal = request.principal!;
+    if (principal.personId) throw Object.assign(new Error("当前微信已绑定人员档案"), { statusCode: 409, code: "WECHAT_ALREADY_BOUND" });
+    const input = z.object({ code: z.string().min(1).max(300) }).parse(request.body);
+    const phone = await getWechatPhoneNumber(input.code, deps.env);
+    const [matches, phoneOwner, activeBinding] = await Promise.all([
+      prisma.person.findMany({ where: { phone, status: "active" }, take: 3, include: { organizations: { where: { active: true, primary: true }, include: { organization: { select: { type: true } } } }, account: { include: { wechatBindings: { where: { active: true } } } } } }),
+      prisma.account.findUnique({ where: { verifiedPhone: phone }, select: { id: true, personId: true } }),
+      prisma.wechatBinding.findFirst({ where: { accountId: principal.accountId, active: true }, select: { id: true } })
+    ]);
+    if (!activeBinding) throw Object.assign(new Error("绑定上下文无效"), { statusCode: 409, code: "WECHAT_BIND_CONTEXT_INVALID" });
+
+    const matched = matches.length === 1 ? matches[0]! : null;
+    const primary = matched?.organizations[0];
+    const validPrimary = primary && ["business_entity", "department"].includes(primary.organization.type);
+    const accountConflict = Boolean((phoneOwner && phoneOwner.id !== principal.accountId && phoneOwner.personId !== matched?.id) || (matched?.account && !["active", "pending"].includes(matched.account.status)));
+    if (matched && validPrimary && !accountConflict) {
+      const purpose = matched.account && matched.account.id !== principal.accountId && matched.account.wechatBindings.length ? "wechat_rebind" : "wechat_bind";
+      const accountId = await prisma.$transaction(async (tx) => {
+        const targetAccountId = await attachProvisionalWechatAccount(tx, { provisionalAccountId: principal.accountId, personId: matched.id, verifiedPhone: phone, actorId: principal.accountId, reason: `本人微信手机号验证后${purpose === "wechat_rebind" ? "更换微信" : "首次绑定微信"}` });
+        await activatePendingRoles(tx, { personId: matched.id, accountId: targetAccountId, actorId: principal.accountId });
+        await tx.changeRequest.updateMany({ where: { personId: matched.id, type: "account_opening", status: "pending" }, data: { status: "approved", reviewedBy: principal.accountId, reviewedAt: new Date(), reviewNote: "本人完成微信及手机号验证" } });
+        await writeCriticalAudit(tx, { actorId: targetAccountId, action: purpose === "wechat_rebind" ? "auth.wechat_rebind" : "auth.wechat_bind", objectType: "person", objectId: matched.id, metadata: { organizationId: primary.organizationId, phoneVerified: true, phoneVerificationMethod: "wechat" } });
+        return targetAccountId;
+      }, { isolationLevel: "Serializable" });
+      if (matched.type === "employee") await prisma.$transaction((tx) => autoDispatchInTransaction(tx, "three_level", matched.id, deps.env));
+      return { data: { status: "bound", ...await issueSession(accountId, deps.env, { clientKind: "miniprogram", loginMethod: "wechat", userAgent: request.headers["user-agent"] }) } };
+    }
+
+    return { data: {
+      status: "profile_required",
+      maskedPhone: `${phone.slice(0, 3)}****${phone.slice(-4)}`,
+      wechatPhoneVerificationToken: await issueWechatPhoneVerificationToken(principal.accountId, phone, deps.env),
+      matchStatus: matches.length === 0 ? "none" : matches.length > 1 ? "multiple" : accountConflict ? "conflict" : "organization_required"
+    } };
+  });
+
   app.post("/api/wechat/identity/confirm", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!;
     const details = { name: z.string().trim().min(2).max(80), organizationId: z.string().uuid(), reason: z.string().trim().max(500).default("") };
     const input = z.union([
       z.object({ ...details, phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/)), code: z.string().regex(/^\d{6}$/), purpose: z.string() }),
-      z.object({ ...details, wechatPhoneCode: z.string().min(1).max(300) })
+      z.object({ ...details, wechatPhoneVerificationToken: z.string().min(1).max(2000) })
     ]).parse(request.body);
     const smsPurpose = "purpose" in input ? assertWechatVerificationPurpose(input.purpose) : null;
     const verification = "code" in input ? await verifiedPhoneCode(input.phone, input.code, smsPurpose!, deps.env) : null;
-    const phone = "wechatPhoneCode" in input ? await getWechatPhoneNumber(input.wechatPhoneCode, deps.env) : input.phone;
+    const phone = "wechatPhoneVerificationToken" in input ? await verifyWechatPhoneVerificationToken(input.wechatPhoneVerificationToken, principal.accountId, deps.env) : input.phone;
     const verificationMethod = verification ? "sms" : "wechat";
     const [organization, matches, phoneOwner, activeBinding] = await Promise.all([
       prisma.organization.findFirst({ where: { id: input.organizationId, type: { in: ["business_entity", "department"] } }, select: { id: true, type: true } }),
@@ -235,7 +273,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     const input = z.object({ action: z.enum(["bind_existing", "update_phone_and_bind", "create_employee_and_bind", "repair_membership_and_bind", "escalate_company", "reject"]), personId: z.string().uuid().optional(), note: z.string().trim().min(2).max(500) }).parse(request.body);
     const row = await prisma.changeRequest.findFirst({ where: { id, type: "binding", status: "pending" } });
     if (!row?.accountId) throw Object.assign(new Error("绑定申请不存在或已处理"), { statusCode: 404, code: "BINDING_REQUEST_NOT_FOUND" });
-    const payload = z.object({ name: z.string().min(2), phone: z.string().regex(/^1\d{10}$/), phoneVerified: z.literal(true), phoneVerificationId: z.string().uuid(), organizationId: z.string().uuid(), escalatedToCompany: z.boolean().optional() }).passthrough().parse(row.payload);
+    const payload = z.object({ name: z.string().min(2), phone: z.string().regex(/^1\d{10}$/), phoneVerified: z.literal(true), phoneVerificationId: z.string().uuid().optional(), organizationId: z.string().uuid(), escalatedToCompany: z.boolean().optional() }).passthrough().parse(row.payload);
     if (!canReviewWechatIdentityRequest(request.principal!, payload.organizationId, payload.escalatedToCompany === true)) forbidden();
     if (input.action === "escalate_company") {
       if (isCompanyAdmin(request.principal!)) throw Object.assign(new Error("申请已由公司管理员处理"), { statusCode: 409, code: "ALREADY_COMPANY_REVIEW" });

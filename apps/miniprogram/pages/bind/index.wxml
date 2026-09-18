@@ -1,2 +1,35 @@
-<view class="page"><view class="card"><text class="title">人员身份确认与微信绑定</text><text class="muted">微信验证手机号后，系统会匹配人员档案和部门；无法安全匹配时提交部门管理员审核。</text><text class="label">姓名</text><input class="field" maxlength="80" placeholder="请输入真实姓名" value="{{name}}" bindinput="setName"/><text class="label">所属部门</text><picker range="{{departments}}" range-key="name" bindchange="chooseDepartment"><view class="field">{{departmentIndex >= 0 ? departments[departmentIndex].name : '请选择部门'}}</view></picker><text class="label">情况说明（选填）</text><textarea class="field" maxlength="500" placeholder="例如：档案手机号或部门信息已变更" value="{{reason}}" bindinput="setReason"/><button class="primary" open-type="getPhoneNumber" bindgetphonenumber="verifyWechatPhone" loading="{{wechatPhoneBusy}}" disabled="{{name.length < 2 || departmentIndex < 0 || wechatPhoneBusy}}">使用微信手机号验证并继续</button><text class="privacy-note">仅在您点击并同意后获取本次授权的手机号。</text><button class="text-button" bindtap="toggleSmsFallback">{{showSmsFallback ? '收起短信验证' : '无法使用微信手机号？改用短信验证'}}</button><view wx:if="{{showSmsFallback}}" class="sms-panel"><text class="label">本人手机号</text><input class="field" type="number" maxlength="11" placeholder="请输入手机号" value="{{phone}}" bindinput="setPhone"/><view class="code-row"><input class="field code-input" type="number" maxlength="6" placeholder="6 位验证码" value="{{code}}" bindinput="setCode"/><button class="secondary code-button" loading="{{sending}}" disabled="{{countdown > 0}}" bindtap="sendCode">{{countdown > 0 ? countdown + ' 秒' : '获取验证码'}}</button></view><button class="secondary" loading="{{busy}}" bindtap="submit">短信验证并继续</button></view><text wx:if="{{error}}" class="error">{{error}}</text></view></view>
+<view class="page">
+  <view class="card">
+    <text class="title">人员身份确认与微信绑定</text>
+    <text class="muted">先验证微信手机号。若后台有唯一匹配的有效人员档案，将自动绑定并进入学习。</text>
+
+    <block wx:if="{{!profileRequired && !showSmsFallback}}">
+      <button class="primary" open-type="getPhoneNumber" bindgetphonenumber="verifyWechatPhone" loading="{{wechatPhoneBusy}}" disabled="{{wechatPhoneBusy}}">使用微信手机号验证并继续</button>
+      <text class="privacy-note">仅在您点击并同意后获取本次授权的手机号。</text>
+    </block>
+
+    <block wx:if="{{profileRequired || showSmsFallback}}">
+      <view wx:if="{{profileRequired}}" class="match-note">
+        <text>已验证手机号：{{maskedPhone}}</text>
+        <text class="muted">后台未能安全匹配人员档案，请补充本人信息并提交审核。</text>
+      </view>
+      <text class="label">姓名</text>
+      <input class="field" maxlength="80" placeholder="请输入真实姓名" value="{{name}}" bindinput="setName"/>
+      <text class="label">所属部门</text>
+      <picker range="{{departments}}" range-key="name" bindchange="chooseDepartment"><view class="field">{{departmentIndex >= 0 ? departments[departmentIndex].name : '请选择部门'}}</view></picker>
+      <text class="label">情况说明（选填）</text>
+      <textarea class="field" maxlength="500" placeholder="例如：档案手机号或部门信息已变更" value="{{reason}}" bindinput="setReason"/>
+      <button wx:if="{{profileRequired}}" class="primary" loading="{{busy}}" bindtap="submitWechatProfile">提交身份确认申请</button>
+    </block>
+
+    <button wx:if="{{!profileRequired}}" class="text-button" bindtap="toggleSmsFallback">{{showSmsFallback ? '返回微信手机号验证' : '无法使用微信手机号？改用短信验证'}}</button>
+    <view wx:if="{{showSmsFallback}}" class="sms-panel">
+      <text class="label">本人手机号</text>
+      <input class="field" type="number" maxlength="11" placeholder="请输入手机号" value="{{phone}}" bindinput="setPhone"/>
+      <view class="code-row"><input class="field code-input" type="number" maxlength="6" placeholder="6 位验证码" value="{{code}}" bindinput="setCode"/><button class="secondary code-button" loading="{{sending}}" disabled="{{countdown > 0}}" bindtap="sendCode">{{countdown > 0 ? countdown + ' 秒' : '获取验证码'}}</button></view>
+      <button class="secondary" loading="{{busy}}" bindtap="submit">短信验证并继续</button>
+    </view>
+    <text wx:if="{{error}}" class="error">{{error}}</text>
+  </view>
+</view>
 <environment-badge />

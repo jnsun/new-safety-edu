@@ -3,3 +3,4 @@
 .text-button { margin-top: 20rpx; background: transparent; color: #475467; font-size: 26rpx; }
 .text-button::after { border: 0; }
 .sms-panel { margin-top: 20rpx; padding-top: 20rpx; border-top: 1rpx solid #eaecf0; }
+.match-note { display: flex; flex-direction: column; gap: 10rpx; margin: 24rpx 0; padding: 20rpx; border-radius: 20rpx; background: #f2f7ff; color: #175cd3; }
