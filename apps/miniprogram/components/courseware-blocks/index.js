@@ -13,11 +13,12 @@ Component({
     resumeBlockKey: {
       type: String,
       value: '',
-      observer() { this.scheduleResumeScroll() }
+      observer() { this.activateResumeBlock() }
     }
   },
-  data: { preparedUnits: [], totalBlocks: 0 },
+  data: { preparedUnits: [], totalBlocks: 0, activeGlobalIndex: 0 },
   lifetimes: {
+    attached() { this._detached = false },
     detached() { this._detached = true; this._renderGeneration = (this._renderGeneration || 0) + 1 }
   },
   methods: {
@@ -48,9 +49,9 @@ Component({
       }))
       this._renderGeneration = (this._renderGeneration || 0) + 1
       const generation = this._renderGeneration
-      this.setData({ preparedUnits, totalBlocks })
+      this.setData({ preparedUnits, totalBlocks, activeGlobalIndex: 0 })
+      this.activateResumeBlock()
       this.downloadImages(generation)
-      this.scheduleResumeScroll()
     },
     async downloadImages(generation) {
       for (let unitIndex = 0; unitIndex < this.data.preparedUnits.length; unitIndex += 1) {
@@ -78,18 +79,43 @@ Component({
       this.downloadImage(Number(unitIndex), Number(blockIndex))
     },
     scheduleResumeScroll() {
-      const key = this.data.resumeBlockKey
-      if (!key || !this.data.preparedUnits.length) return
-      const block = this.data.preparedUnits.flatMap((unit) => unit.blocks).find((item) => item.key === key)
-      if (!block) return
+      if (!this.data.preparedUnits.length) return
       wx.nextTick(() => {
         const query = wx.createSelectorQuery().in(this)
         query.selectViewport().scrollOffset()
-        query.select(`#${block.domId}`).boundingClientRect()
+        query.select('.active-block').boundingClientRect()
         query.exec(([viewport, target]) => {
-          if (target) wx.pageScrollTo({ scrollTop: Math.max(0, (viewport?.scrollTop || 0) + target.top - 16), duration: 0 })
+          if (target) wx.pageScrollTo({ scrollTop: Math.max(0, (viewport?.scrollTop || 0) + target.top - 118), duration: 180 })
         })
       })
+    },
+    activateResumeBlock() {
+      const blocks = this.data.preparedUnits.flatMap((unit) => unit.blocks)
+      if (!blocks.length) return
+      const savedIndex = this.data.resumeBlockKey ? blocks.findIndex((block) => block.key === this.data.resumeBlockKey) : -1
+      this.activateBlock(savedIndex < 0 ? 0 : Math.min(savedIndex + 1, blocks.length - 1), false)
+    },
+    activateBlock(globalIndex, shouldScroll = true) {
+      const boundedIndex = Math.max(0, Math.min(Number(globalIndex) || 0, Math.max(0, this.data.totalBlocks - 1)))
+      let activeBlock = null
+      const preparedUnits = this.data.preparedUnits.map((unit) => {
+        const blocks = unit.blocks.map((block) => {
+          const active = block.globalIndex === boundedIndex
+          if (active) activeBlock = block
+          return { ...block, active }
+        })
+        return { ...unit, blocks, active: blocks.some((block) => block.active) }
+      })
+      this.setData({ preparedUnits, activeGlobalIndex: boundedIndex })
+      if (activeBlock) {
+        const activeUnit = preparedUnits.find((unit) => unit.active)
+        this.triggerEvent('position-changed', {
+          position: boundedIndex + 1,
+          total: this.data.totalBlocks,
+          unitTitle: activeUnit?.title || ''
+        })
+      }
+      if (shouldScroll) this.scheduleResumeScroll()
     },
     selectCheckpointOption(event) {
       const { unitIndex, blockIndex, optionIndex } = event.currentTarget.dataset
@@ -132,6 +158,7 @@ Component({
       const block = this.data.preparedUnits[Number(unitIndex)]?.blocks[Number(blockIndex)]
       if (!block) return
       this.triggerEvent('block-reached', { blockKey: block.key, progressPercent: block.progressPercent, isLast: block.isLast, confirmed: true })
+      if (!block.isLast) this.activateBlock(block.globalIndex + 1)
     }
   }
 })

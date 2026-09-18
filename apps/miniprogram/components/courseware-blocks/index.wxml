@@ -1,12 +1,18 @@
 <view class="courseware-document">
-  <view wx:for="{{preparedUnits}}" wx:key="key" wx:for-item="unit" wx:for-index="unitIndex" class="courseware-unit">
+  <view wx:if="{{!totalBlocks}}" class="empty-content">
+    <text class="unknown-title">课件暂无可学习内容</text>
+    <text class="unknown-copy">请联系培训管理员检查课件内容后再试。</text>
+  </view>
+  <block wx:for="{{preparedUnits}}" wx:key="key" wx:for-item="unit" wx:for-index="unitIndex">
+  <view wx:if="{{unit.active}}" class="courseware-unit">
     <view class="unit-heading">
       <text class="unit-kicker">单元 {{unitIndex + 1}}</text>
       <text class="unit-title">{{unit.title}}</text>
       <text class="unit-meta">预计 {{unit.estimatedMinutes}} 分钟</text>
     </view>
 
-    <view wx:for="{{unit.blocks}}" wx:key="key" wx:for-item="block" wx:for-index="blockIndex" id="{{block.domId}}" class="content-block content-block-{{block.type}}">
+    <block wx:for="{{unit.blocks}}" wx:key="key" wx:for-item="block" wx:for-index="blockIndex">
+    <view wx:if="{{block.active}}" id="{{block.domId}}" class="content-block active-block content-block-{{block.type}}">
       <block wx:if="{{block.type === 'knowledge'}}">
         <text class="block-label">知识要点</text>
         <text class="block-title">{{block.title}}</text>
@@ -80,5 +86,7 @@
 
       <button class="continue-button" data-unit-index="{{unitIndex}}" data-block-index="{{blockIndex}}" disabled="{{!block.known || block.type === 'checkpoint' && !block.feedback || block.type === 'scenario' && !block.scenarioFeedback}}" bindtap="confirmBlockReached">{{!block.known ? '请升级小程序后继续' : block.isLast ? '本人确认已阅读至末尾' : '继续下一项'}}</button>
     </view>
+    </block>
   </view>
+  </block>
 </view>

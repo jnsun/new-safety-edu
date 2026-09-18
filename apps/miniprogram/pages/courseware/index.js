@@ -3,7 +3,7 @@ const api = require('../../utils/api')
 const remainingText = (percent) => percent >= 100 ? '已阅读至末尾' : (percent ? `约剩 ${100 - percent}%` : '全部内容待阅读')
 
 Page({
-  data: { assignmentId: '', versionId: '', content: null, progressPercent: 0, remainingText: '全部内容待阅读', structuredResumeBlockKey: '', atEnd: false, htmlNavigationSucceeded: false, reachingEnd: false, loading: true, busy: false, error: '', syncWarning: '' },
+  data: { assignmentId: '', versionId: '', content: null, progressPercent: 0, remainingText: '全部内容待阅读', structuredResumeBlockKey: '', structuredPosition: 0, structuredTotal: 0, structuredUnitTitle: '', atEnd: false, htmlNavigationSucceeded: false, reachingEnd: false, loading: true, busy: false, error: '', syncWarning: '' },
   async onLoad(options) {
     this._destroyed = false
     this.setData({ assignmentId: options.assignmentId, versionId: options.versionId })
@@ -29,7 +29,7 @@ Page({
         this._savedPercent = progressPercent
         this._queuedPercent = progressPercent
         const structuredResumeBlockKey = content.type === 'structured' && typeof content.resumeState?.blockKey === 'string' ? content.resumeState.blockKey : ''
-        this.setData({ content, progressPercent, remainingText: remainingText(progressPercent), structuredResumeBlockKey, atEnd })
+        this.setData({ content, progressPercent, remainingText: remainingText(progressPercent), structuredResumeBlockKey, structuredPosition: 0, structuredTotal: 0, structuredUnitTitle: '', atEnd })
         if (content.type === 'rich_text' && progressPercent && !atEnd) wx.nextTick(() => this.restorePosition(Math.min(progressPercent, 95)))
       } catch (error) {
         if (!this._destroyed) this.setData({ error: error.message || '课件加载失败，请重试' })
@@ -114,6 +114,10 @@ Page({
     this.setData({ progressPercent, remainingText: remainingText(progressPercent) })
     await this.persistResume(progressPercent, detail.blockKey)
     if (detail.isLast && detail.confirmed) await this.recordReachedEnd()
+  },
+  onStructuredPositionChanged({ detail }) {
+    if (!Number.isInteger(detail?.position) || !Number.isInteger(detail?.total)) return
+    this.setData({ structuredPosition: detail.position, structuredTotal: detail.total, structuredUnitTitle: detail.unitTitle || '' })
   },
   recordReachedEnd() {
     if (this.data.atEnd || this._reachedEndPending) return this._reachedEndPending

@@ -13,12 +13,22 @@
   <block wx:elif="{{content}}">
     <view class="reader-heading">
       <text class="course-title">{{content.title}}</text>
-      <text wx:if="{{content.type === 'rich_text'}}" class="resume-copy">图文课件 · 单元进度 {{progressPercent}}% · {{remainingText}}</text>
-      <text wx:elif="{{content.type === 'structured'}}" class="resume-copy">互动图文课件 · 预计 {{content.estimatedMinutes}} 分钟 · 学习进度 {{progressPercent}}%</text>
+      <text wx:if="{{content.type === 'rich_text'}}" class="resume-copy">图文课件 · {{remainingText}}</text>
+      <text wx:elif="{{content.type === 'structured'}}" class="resume-copy">互动图文课件 · 预计 {{content.estimatedMinutes}} 分钟</text>
       <text wx:else class="resume-copy">HTML 交互课件 · 在受控页面中阅读，页内位置不会同步。</text>
-      <view wx:if="{{content.type === 'rich_text' || content.type === 'structured'}}" class="progress" aria-label="单元进度 {{progressPercent}}%">
+    </view>
+
+    <view wx:if="{{content.type === 'rich_text' || content.type === 'structured'}}" class="progress-dock" aria-live="polite">
+      <view class="progress-copy-row">
+        <text class="progress-label">学习进度</text>
+        <text wx:if="{{content.type === 'structured' && structuredTotal}}" class="progress-position">第 {{structuredPosition}} / {{structuredTotal}} 项 · {{progressPercent}}%</text>
+        <text wx:else class="progress-position">{{progressPercent}}%</text>
+      </view>
+      <text wx:if="{{content.type === 'structured' && structuredUnitTitle}}" class="progress-unit">{{structuredUnitTitle}}</text>
+      <view class="progress" aria-label="学习进度 {{progressPercent}}%">
         <view class="progress-bar" style="width: {{progressPercent}}%"></view>
       </view>
+      <text wx:if="{{syncWarning}}" class="progress-warning">{{syncWarning}}</text>
     </view>
 
     <view wx:if="{{content.type === 'rich_text'}}" class="reader-content">
@@ -29,7 +39,7 @@
       </view>
     </view>
 
-    <courseware-blocks wx:elif="{{content.type === 'structured'}}" units="{{content.units}}" resume-block-key="{{structuredResumeBlockKey}}" bind:block-reached="onStructuredBlockReached"></courseware-blocks>
+    <courseware-blocks wx:elif="{{content.type === 'structured'}}" units="{{content.units}}" resume-block-key="{{structuredResumeBlockKey}}" bind:block-reached="onStructuredBlockReached" bind:position-changed="onStructuredPositionChanged"></courseware-blocks>
 
     <view wx:else class="html-panel">
       <text class="section-title">打开受控课件</text>
@@ -39,7 +49,7 @@
       <text wx:if="{{atEnd}}" class="attestation-success">已记录本人完成确认。</text>
     </view>
 
-    <view class="finish-panel">
+    <view wx:if="{{content.type !== 'structured' || atEnd}}" class="finish-panel">
       <text class="section-title">完成本次学习</text>
       <text wx:if="{{content.type === 'rich_text' && !atEnd}}" class="section-copy">请阅读至内容末尾并点击“本人确认已阅读至末尾”。</text>
       <text wx:elif="{{content.type === 'rich_text'}}" class="section-copy success-copy">已到达课件末尾，可以完成本次学习。</text>

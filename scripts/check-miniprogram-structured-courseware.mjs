@@ -3,13 +3,14 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-const [componentSource, componentTemplate, componentStyle, componentConfig, pageSource, pageTemplate] = await Promise.all([
+const [componentSource, componentTemplate, componentStyle, componentConfig, pageSource, pageTemplate, pageStyle] = await Promise.all([
   "apps/miniprogram/components/courseware-blocks/index.js",
   "apps/miniprogram/components/courseware-blocks/index.wxml",
   "apps/miniprogram/components/courseware-blocks/index.wxss",
   "apps/miniprogram/components/courseware-blocks/index.json",
   "apps/miniprogram/pages/courseware/index.js",
-  "apps/miniprogram/pages/courseware/index.wxml"
+  "apps/miniprogram/pages/courseware/index.wxml",
+  "apps/miniprogram/pages/courseware/index.wxss"
 ].map(read));
 
 for (const type of ["knowledge", "do_dont", "steps", "checkpoint", "scenario", "summary"]) {
@@ -21,12 +22,16 @@ assert.doesNotMatch(componentSource, /attempts|\/answers|\/submit/, "随堂题�
 assert.match(componentSource, /triggerEvent\('checkpoint-answered'/, "随堂题必须产生本地学习反馈事件");
 assert.match(componentSource, /triggerEvent\('block-reached'/, "内容块必须显式上报学习位置");
 assert.match(componentTemplate, /bindtap="confirmBlockReached"/, "到达内容块必须由学习者显式确认");
+assert.match(componentTemplate, /wx:if="\{\{unit\.active\}\}"/, "结构化课件每次只能展示当前单元");
+assert.match(componentTemplate, /wx:if="\{\{block\.active\}\}"/, "结构化课件每次只能展示当前内容项");
 assert.match(componentTemplate, /disabled="\{\{!block\.known \|\| block\.type === 'checkpoint' && !block\.feedback \|\| block\.type === 'scenario' && !block\.scenarioFeedback\}\}"/, "未完成互动或无法识别内容时不得继续");
 assert.match(componentStyle, /\.continue-button\[disabled\]/, "禁用的继续按钮必须有清晰状态");
 assert.match(pageSource, /persistResume\(progressPercent, detail\.blockKey\)/, "续学位置必须保存 blockKey");
 assert.match(pageSource, /Math\.max\([^)]*progressPercent/, "结构化续学进度必须单调递增");
 assert.match(pageSource, /detail\.isLast[\s\S]*recordReachedEnd\(\)/, "只有显式到达最后内容块才能记录末尾证据");
 assert.match(pageTemplate, /courseware-blocks/, "课件页必须挂载结构化课件组件");
+assert.match(pageTemplate, /bind:position-changed="onStructuredPositionChanged"/, "课件页必须接收当前学习项位置");
+assert.match(pageStyle, /\.progress-dock[^{]*\{[^}]*position:\s*sticky/s, "学习进度必须使用置顶进度栏");
 assert.match(pageTemplate, /bindtap="reloadCourseware">重新加载<\/button>/, "加载失败必须提供明确的重新加载操作");
 assert.match(pageSource, /reloadCourseware\(\)/, "课件页必须提供可复用的重新加载处理器");
 assert.equal(JSON.parse(componentConfig).component, true, "渲染器必须注册为小程序组件");
@@ -76,6 +81,22 @@ instance.selectCheckpointOption({ currentTarget: { dataset: { unitIndex: 0, bloc
 assert.deepEqual(Array.from(instance.data.preparedUnits[0].blocks[0].options, (option) => option.selected), [false, true], "单选和判断只能保留一个选项");
 instance.submitCheckpoint({ currentTarget: { dataset: { unitIndex: 0, blockIndex: 0 } } });
 assert.equal(instance.lastEvent.detail.correct, true, "判断题必须支持本地即时反馈");
+
+instance.prepareUnits([{ key: "u3", title: "分段学习", estimatedMinutes: 2, blocks: [
+  { key: "k1", type: "knowledge", title: "第一项", body: "第一项内容" },
+  { key: "k2", type: "knowledge", title: "第二项", body: "第二项内容" }
+] }]);
+assert.equal(instance.data.preparedUnits[0].blocks.filter((block) => block.active).length, 1, "首次只应展示一个内容项");
+assert.equal(instance.data.preparedUnits[0].blocks[0].active, true, "首次应展示第一项");
+instance.confirmBlockReached({ currentTarget: { dataset: { unitIndex: 0, blockIndex: 0 } } });
+assert.equal(instance.data.preparedUnits[0].blocks[1].active, true, "点击继续下一项后必须切换到下一项");
+assert.equal(instance.lastEvent.name, "position-changed", "切换内容项后必须向页面报告新位置");
+instance.data.resumeBlockKey = "k1";
+instance.prepareUnits(instance.data.units = [{ key: "u3", title: "分段学习", estimatedMinutes: 2, blocks: [
+  { key: "k1", type: "knowledge", title: "第一项", body: "第一项内容" },
+  { key: "k2", type: "knowledge", title: "第二项", body: "第二项内容" }
+] }]);
+assert.equal(instance.data.preparedUnits[0].blocks[1].active, true, "恢复学习时应进入已确认内容的下一项");
 
 let pageDefinition;
 let loadingAttempts = 0;
