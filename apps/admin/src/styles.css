@@ -258,6 +258,8 @@ html.receivables-column-resizing, html.receivables-column-resizing * { cursor: c
 .receivables-export-filter-grid .ant-select, .receivables-export-filter-grid .ant-input-affix-wrapper { width: 100% !important; min-width: 0 !important; }
 .receivables-export-category-grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .receivables-export-form > .ant-alert { margin-bottom: 10px; }
+.receivables-export-preview { margin-bottom: 10px; border: 1px solid #e8e8ed; border-radius: 10px; overflow: hidden; }
+.receivables-export-preview .ant-table-thead > tr > th, .receivables-export-preview .ant-table-tbody > tr > td { padding: 6px 8px !important; }
 .receivables-export-form .ant-checkbox-group { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 5px 12px; }
 .receivables-export-history { margin-top: 10px; overflow: hidden; border-radius: 14px; }
 .receivables-export-history .ant-card-head { min-height: 40px; }

@@ -1257,8 +1257,24 @@ function ReceivablesExports({
               <Alert
                 type={currentPreview.rowCount ? "info" : "warning"}
                 showIcon
-                message={`匹配 ${currentPreview.rowCount} 条记录`}
+                message={`匹配 ${currentPreview.rowCount} 条记录${currentPreview.rowCount > 50 ? "，下表展示前 50 条" : ""}`}
               />
+              {currentPreview.previewRows.length > 0 && (
+                <Table
+                  className="receivables-export-preview"
+                  size="small"
+                  rowKey="id"
+                  pagination={false}
+                  scroll={{ x: 760, y: 300 }}
+                  dataSource={currentPreview.previewRows}
+                  columns={[
+                    { title: "合同编号", dataIndex: "contractNo", width: 130 },
+                    { title: "财务归属部门", dataIndex: "financeDepartmentName", width: 150 },
+                    { title: "项目名称", dataIndex: "projectName", ellipsis: true },
+                    { title: "客户名称", dataIndex: "customerName", ellipsis: true },
+                  ]}
+                />
+              )}
               <Form.Item label="导出字段（默认选择有内容的字段）">
                 <Checkbox.Group
                   value={columns}

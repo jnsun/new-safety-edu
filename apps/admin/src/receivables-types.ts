@@ -468,6 +468,13 @@ export type ReceivablesExportCategoryFilters = Partial<
 >;
 export type ReceivablesExportPreview = {
   rowCount: number;
+  previewRows: Array<{
+    id: string;
+    contractNo: string;
+    projectName: string | null;
+    customerName: string | null;
+    financeDepartmentName: string;
+  }>;
   categoryOptions: Record<
     ReceivablesExportCategoryId,
     Array<{ value: string; label: string }>

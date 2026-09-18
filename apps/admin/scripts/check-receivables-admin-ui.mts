@@ -136,5 +136,7 @@ assert.match(styles, /\.receivables-entry-section\s*\{[^}]*grid-template-columns
 assert.match(transfersSource, /receivables-export-workspace/, "export uses a dedicated compact workspace");
 assert.match(styles, /\.receivables-export-filter-grid\s*\{[^}]*display:\s*grid/s, "export filters use a stable compact grid");
 assert.match(transfersSource, /receivables-export-history/, "export history is visually separated from filter controls");
+assert.match(transfersSource, /receivables-export-preview/, "export preview identifies the matching ledgers");
+assert.match(transfersSource, /currentPreview\.previewRows/, "export preview renders server-authorized matching rows");
 
 console.log("RECEIVABLES_ADMIN_UI_OK");

@@ -1415,6 +1415,19 @@ export async function previewReceivablesExport(
         'counterpartyFeedback', COUNT(f.feedback)::int, 'latestProgress', COUNT(f.latest_progress)::int, 'nextPlan', COUNT(f.next_plan)::int,
         'status', COUNT(f.status)::int, 'anomaly', COUNT(f.anomaly)::int, 'updatedAt', COUNT(f.updated_at)::int
       ) AS counts FROM filtered f`);
+      const previewRows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          contract_no: string;
+          project_name: string | null;
+          customer_name: string | null;
+          finance_department_name: string;
+        }>
+      >(Prisma.sql`${cte}
+      SELECT f.id, f.contract_no, f.project_name, f.customer_name, f.finance_department_name
+      FROM filtered f
+      ORDER BY f.updated_at DESC, f.id DESC
+      LIMIT 50`);
       const actual = await tx.$queryRaw<
         Array<{
           category: ReceivablesExportCategoryId;
@@ -1457,6 +1470,13 @@ export async function previewReceivablesExport(
       }
       return {
         rowCount: summary?.row_count ?? 0,
+        previewRows: previewRows.map((row) => ({
+          id: row.id,
+          contractNo: row.contract_no,
+          projectName: row.project_name,
+          customerName: row.customer_name,
+          financeDepartmentName: row.finance_department_name,
+        })),
         categoryOptions: Object.fromEntries(
           receivablesExportCategoryIds.map((category) => [
             category,
