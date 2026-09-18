@@ -18,11 +18,12 @@ type DictionaryRenameInput =
 export type ReceivablesAdminOperation =
   | { type: "candidate.list"; search: string }
   | { type: "grant.list" }
-  | { type: "grant.create"; input: GrantFields & { accountId: string; reason: string } }
+  | { type: "grant.create"; input: GrantFields & { personId: string; reason: string } }
   | { type: "grant.update"; id: string; input: (GrantFields & { revision: number; reason: string }) | { revision: number; revoke: true; reason: string } }
   | { type: "department.list" }
   | { type: "department.create"; input: { name: string; code?: string | null | undefined; sortOrder: number } }
-  | { type: "department.update"; id: string; input: { revision: number; name?: string | undefined; code?: string | null | undefined; sortOrder?: number | undefined; active?: false | undefined; reason?: string | undefined } }
+  | { type: "department.update"; id: string; input: { revision: number; name?: string | undefined; code?: string | null | undefined; sortOrder?: number | undefined; showReceivables?: boolean | undefined; active?: false | undefined; reason?: string | undefined } }
+  | { type: "department.reorder"; input: { items: Array<{ id: string; revision: number }> } }
   | { type: "dictionary.list"; category?: string | undefined }
   | { type: "dictionary.create"; input: { category: string; value: string; sortOrder: number } }
   | { type: "dictionary.update"; id: string; input: { revision: number; value?: string | undefined; sortOrder?: number | undefined; active?: false | undefined; reason?: string | undefined } }
@@ -38,9 +39,16 @@ const migrationStateChanged = () => httpError(409, "RECEIVABLES_MIGRATION_STATE_
 const auditMetadata = (before: unknown, after: unknown, impactCount: number) => JSON.parse(JSON.stringify({ before, after, impactCount })) as Prisma.InputJsonValue;
 
 export function assertReceivablesGrantManagement(actorRole: "owner" | "admin" | ReceivableGrantRole | null, existingRole: ReceivableGrantRole | null, requestedRole: ReceivableGrantRole | null): void {
-  if (actorRole === "owner" && existingRole !== "reporter" && existingRole !== "readonly" && requestedRole !== "reporter" && requestedRole !== "readonly") return;
+  if (actorRole === "owner") return;
   if (actorRole === "admin" && existingRole !== "admin" && requestedRole !== "admin") return;
-  throw httpError(403, "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", "负责人只管理财务管理员，财务管理员管理报账员和只读授权");
+  throw httpError(403, "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", "财务管理员只能管理报账员和只读授权");
+}
+
+export function receivablesGrantSubjectDisposition(input: { personType: string; personStatus: string; accountStatus: string | null }): "existing" | "create_pending" {
+  if (input.personType !== "employee" || input.personStatus !== "active" || (input.accountStatus !== null && input.accountStatus !== "pending" && input.accountStatus !== "active")) {
+    throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是有效正式员工，且账号不得停用或合并");
+  }
+  return input.accountStatus === null ? "create_pending" : "existing";
 }
 
 async function runMigrationApply<T>(apply: () => Promise<T>) {
@@ -56,13 +64,23 @@ const grantSelect = {
   id: true, accountId: true, role: true, canCreate: true, canExport: true, canViewAll: true, canMaintainCollection: true, active: true, revision: true,
   grantedBy: true, grantedAt: true, revokedAt: true, revokedBy: true, revokeReason: true,
   departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true }, orderBy: { financeDepartmentId: "asc" as const } },
+  account: { select: { username: true, status: true, person: { select: { name: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { name: true } } } } } } } },
 } satisfies Prisma.ReceivableAccessGrantSelect;
-const departmentSelect = { id: true, name: true, code: true, sortOrder: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDepartmentSelect;
+const departmentSelect = { id: true, name: true, code: true, sortOrder: true, showReceivables: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDepartmentSelect;
+const departmentSummarySelect = {
+  ...departmentSelect,
+  _count: {
+    select: {
+      grantDepartments: { where: { grant: { active: true, revokedAt: null }, OR: [{ canRead: true }, { canWrite: true }] } },
+      ledgers: true,
+    },
+  },
+} satisfies Prisma.ReceivableDepartmentSelect;
 const dictionarySelect = { id: true, category: true, value: true, sortOrder: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDictionaryOptionSelect;
 type GrantRow = Prisma.ReceivableAccessGrantGetPayload<{ select: typeof grantSelect }>;
 type DepartmentRow = Prisma.ReceivableDepartmentGetPayload<{ select: typeof departmentSelect }>;
 type DictionaryRow = Prisma.ReceivableDictionaryOptionGetPayload<{ select: typeof dictionarySelect }>;
-type CandidateRow = { accountId: string; name: string; username: string | null; hasActiveGrant: boolean };
+type CandidateRow = { personId: string; accountId: string | null; accountStatus: "pending" | "active" | null; name: string; username: string | null; hasActiveGrant: boolean };
 export type ReceivablesAdminResult = CandidateRow[] | GrantRow | GrantRow[] | DepartmentRow | DepartmentRow[] | DictionaryRow | DictionaryRow[] | { impactCount: number } | { impactCount: number; token: string; expiresAt: string };
 
 const migrationTokenPayload = z.object({
@@ -132,9 +150,17 @@ async function validateGrantDepartments(tx: Prisma.TransactionClient, input: Gra
   if (count !== ids.length) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "授权范围包含不存在或已停用的财务归属部门");
 }
 
-async function assertActiveGrantSubject(tx: Prisma.TransactionClient, accountId: string) {
-  const account = await tx.account.findUnique({ where: { id: accountId }, select: { status: true, personId: true, person: { select: { status: true } } } });
-  if (!account || account.status !== "active" || !account.personId || account.person?.status !== "active") throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是已启用账号并关联已启用人员");
+async function grantAccountForPerson(tx: Prisma.TransactionClient, personId: string) {
+  const person = await tx.person.findUnique({ where: { id: personId }, select: { id: true, type: true, status: true, account: { select: { id: true, status: true } } } });
+  if (!person) throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是有效正式员工，且账号不得停用或合并");
+  const disposition = receivablesGrantSubjectDisposition({ personType: person.type, personStatus: person.status, accountStatus: person.account?.status ?? null });
+  return disposition === "existing" ? person.account! : tx.account.upsert({ where: { personId }, update: {}, create: { personId, status: "pending" }, select: { id: true, status: true } });
+}
+
+async function assertGrantAccountEligible(tx: Prisma.TransactionClient, accountId: string) {
+  const account = await tx.account.findUnique({ where: { id: accountId }, select: { status: true, person: { select: { type: true, status: true } } } });
+  if (!account?.person) throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是有效正式员工，且账号不得停用或合并");
+  receivablesGrantSubjectDisposition({ personType: account.person.type, personStatus: account.person.status, accountStatus: account.status });
 }
 
 type DictionaryMigration = {
@@ -193,10 +219,10 @@ async function createGrant(context: ReceivablesAdminContext, input: Extract<Rece
   return prisma.$transaction(async (tx) => {
     const access = await requireAction(context, "manageAccess", tx);
     assertReceivablesGrantManagement(access.role, null, input.role);
-    await assertActiveGrantSubject(tx, input.accountId);
+    const account = await grantAccountForPerson(tx, input.personId);
     await validateGrantDepartments(tx, input);
     const created = await tx.receivableAccessGrant.create({ data: {
-      accountId: input.accountId, role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, grantedBy: context.principal.accountId,
+      accountId: account.id, role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, grantedBy: context.principal.accountId,
       departments: { create: input.departments.map(({ departmentId, canRead, canWrite }) => ({ financeDepartmentId: departmentId, canRead, canWrite })) },
     }, select: grantSelect });
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.grant.create", objectType: "receivable_access_grant", objectId: created.id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata(null, created, 1) });
@@ -220,7 +246,7 @@ async function updateGrant(context: ReceivablesAdminContext, id: string, input: 
       await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.grant.revoke", objectType: "receivable_access_grant", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata(before, after, 1) });
       return after;
     }
-    await assertActiveGrantSubject(tx, before.accountId);
+    await assertGrantAccountEligible(tx, before.accountId);
     await validateGrantDepartments(tx, input);
     const result = await tx.receivableAccessGrant.updateMany({ where: { id, revision: input.revision, active: true, revokedAt: null }, data: { role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, revision: { increment: 1 } } });
     if (result.count !== 1) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务授权已被其他操作更新");
@@ -242,7 +268,7 @@ async function createDepartment(context: ReceivablesAdminContext, input: Extract
 }
 
 async function updateDepartment(context: ReceivablesAdminContext, id: string, input: Extract<ReceivablesAdminOperation, { type: "department.update" }>["input"]) {
-  if (input.name === undefined && input.code === undefined && input.sortOrder === undefined && input.active === undefined) throw httpError(400, "RECEIVABLES_DEPARTMENT_CHANGE_REQUIRED", "至少提交一个变更字段");
+  if (input.name === undefined && input.code === undefined && input.sortOrder === undefined && input.showReceivables === undefined && input.active === undefined) throw httpError(400, "RECEIVABLES_DEPARTMENT_CHANGE_REQUIRED", "至少提交一个变更字段");
   if (input.active === false && !input.reason) throw httpError(400, "RECEIVABLES_DEPARTMENT_REASON_REQUIRED", "停用财务归属部门必须填写原因");
   return prisma.$transaction(async (tx) => {
     const access = await requireAction(context, "manageConfiguration", tx);
@@ -256,11 +282,34 @@ async function updateDepartment(context: ReceivablesAdminContext, id: string, in
     if (input.name !== undefined) updateData.name = input.name;
     if (input.code !== undefined) updateData.code = input.code;
     if (input.sortOrder !== undefined) updateData.sortOrder = input.sortOrder;
+    if (input.showReceivables !== undefined) updateData.showReceivables = input.showReceivables;
     if (input.active === false) Object.assign(updateData, { active: false, deactivatedAt: new Date(), deactivatedBy: context.principal.accountId, deactivateReason: input.reason! });
     const result = await tx.receivableDepartment.updateMany({ where: { id, revision: input.revision }, data: updateData });
     if (result.count !== 1) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务归属部门已被其他操作更新");
     const after = await tx.receivableDepartment.findUniqueOrThrow({ where: { id }, select: departmentSelect });
-    await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: input.active === false ? "receivables.admin.department.deactivate" : "receivables.admin.department.update", objectType: "receivable_department", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", ...(input.reason ? { reason: input.reason } : {}), metadata: auditMetadata(before, after, impactCount) });
+    const reason = input.reason ?? (input.showReceivables === undefined ? undefined : input.showReceivables ? "显示部门应收账款" : "隐藏部门应收账款");
+    await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: input.active === false ? "receivables.admin.department.deactivate" : "receivables.admin.department.update", objectType: "receivable_department", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", ...(reason ? { reason } : {}), metadata: auditMetadata(before, after, impactCount) });
+    return after;
+  });
+}
+
+async function reorderDepartments(context: ReceivablesAdminContext, input: Extract<ReceivablesAdminOperation, { type: "department.reorder" }>["input"]) {
+  return prisma.$transaction(async (tx) => {
+    const access = await requireAction(context, "manageConfiguration", tx);
+    const ids = input.items.map(({ id }) => id);
+    if (new Set(ids).size !== ids.length) throw httpError(400, "RECEIVABLES_DEPARTMENT_ORDER_INVALID", "部门排序包含重复项");
+    await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
+    const [before, activeCount] = await Promise.all([
+      tx.receivableDepartment.findMany({ where: { id: { in: ids }, active: true }, select: departmentSelect }),
+      tx.receivableDepartment.count({ where: { active: true } }),
+    ]);
+    if (before.length !== ids.length || activeCount !== ids.length || before.some((row) => input.items.find(({ id }) => id === row.id)?.revision !== row.revision)) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务归属部门已变化，请刷新后重试");
+    for (const [sortOrder, item] of input.items.entries()) {
+      const result = await tx.receivableDepartment.updateMany({ where: { id: item.id, revision: item.revision, active: true }, data: { sortOrder, revision: { increment: 1 } } });
+      if (result.count !== 1) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务归属部门已变化，请刷新后重试");
+    }
+    const after = await tx.receivableDepartment.findMany({ where: { id: { in: ids } }, select: departmentSelect, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] });
+    await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.department.reorder", objectType: "receivable_department_order", objectId: null, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: "拖拽调整部门顺序", metadata: auditMetadata(before, after, 0) });
     return after;
   });
 }
@@ -459,15 +508,18 @@ export async function administerReceivables(context: ReceivablesAdminContext, op
   switch (operation.type) {
     case "candidate.list": {
       await requireAction(context, "manageAccess");
-      const accounts = await prisma.account.findMany({
+      const people = await prisma.person.findMany({
         where: {
-          status: "active", person: { status: "active" },
-          OR: [{ username: { contains: operation.search, mode: "insensitive" } }, { person: { name: { contains: operation.search, mode: "insensitive" } } }],
+          type: "employee", status: "active",
+          AND: [
+            { OR: [{ account: { is: null } }, { account: { is: { status: { in: ["pending", "active"] } } } }] },
+            { OR: [{ name: { contains: operation.search, mode: "insensitive" } }, { account: { is: { username: { contains: operation.search, mode: "insensitive" } } } }] },
+          ],
         },
-        select: { id: true, username: true, person: { select: { name: true } }, receivableGrants: { where: { active: true, revokedAt: null }, select: { id: true }, take: 1 } },
-        orderBy: [{ person: { name: "asc" } }, { id: "asc" }], take: 50,
+        select: { id: true, name: true, account: { select: { id: true, username: true, status: true, receivableGrants: { where: { active: true, revokedAt: null }, select: { id: true }, take: 1 } } } },
+        orderBy: [{ name: "asc" }, { id: "asc" }], take: 50,
       });
-      return accounts.map((account) => ({ accountId: account.id, name: account.person!.name, username: account.username, hasActiveGrant: account.receivableGrants.length > 0 }));
+      return people.map((person) => ({ personId: person.id, accountId: person.account?.id ?? null, accountStatus: person.account?.status === "active" || person.account?.status === "pending" ? person.account.status : null, name: person.name, username: person.account?.username ?? null, hasActiveGrant: (person.account?.receivableGrants.length ?? 0) > 0 }));
     }
     case "grant.list":
       await requireAction(context, "manageAccess");
@@ -476,9 +528,11 @@ export async function administerReceivables(context: ReceivablesAdminContext, op
     case "grant.update": return updateGrant(context, operation.id, operation.input);
     case "department.list":
       await requireAction(context, "manageConfiguration");
-      return prisma.receivableDepartment.findMany({ select: departmentSelect, orderBy: [{ active: "desc" }, { sortOrder: "asc" }, { name: "asc" }] });
+      return (await prisma.receivableDepartment.findMany({ select: departmentSummarySelect, orderBy: [{ active: "desc" }, { sortOrder: "asc" }, { name: "asc" }] }))
+        .map(({ _count, ...department }) => ({ ...department, accountCount: _count.grantDepartments, receivableCount: _count.ledgers }));
     case "department.create": return createDepartment(context, operation.input);
     case "department.update": return updateDepartment(context, operation.id, operation.input);
+    case "department.reorder": return reorderDepartments(context, operation.input);
     case "dictionary.list":
       await requireAction(context, "manageConfiguration");
       return prisma.receivableDictionaryOption.findMany({ ...(operation.category ? { where: { category: operation.category } } : {}), select: dictionarySelect, orderBy: [{ category: "asc" }, { active: "desc" }, { sortOrder: "asc" }, { value: "asc" }] });

@@ -8,10 +8,12 @@
     "build": "tsc -b && vite build",
     "check:account-form": "tsx scripts/check-account-form.mts",
     "check:platform-access": "tsx scripts/check-platform-access.mts",
+    "check:receivables-admin-ui": "tsx scripts/check-receivables-admin-ui.mts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",
+    "@ant-design/v5-patch-for-react-19": "1.0.3",
     "@safety/contracts": "workspace:*",
     "@tanstack/react-query": "^5.90.2",
     "antd": "^5.27.4",

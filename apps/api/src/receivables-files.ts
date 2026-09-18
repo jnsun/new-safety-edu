@@ -152,6 +152,9 @@ const auditScope = (access: ReceivablesAccess, departmentId: string) => ({ actor
 const requireAttachmentUpload = (access: ReceivablesAccess) => {
   if (!access.canManageAll && (access.role !== "reporter" || !access.canMaintainCollection)) throw ledgerNotFound();
 };
+export function assertReceivableAttachmentDeletionAllowed(access: Pick<ReceivablesAccess, "canManageAll" | "role">) {
+  if (!access.canManageAll || (access.role !== "owner" && access.role !== "admin")) throw attachmentNotFound();
+}
 export async function authorizeReceivableAttachmentUpload(principal: Principal, ledgerId: string) {
   const access = await resolveReceivablesAccess(principal);
   if (!access.canWriteLedger) throw ledgerNotFound();
@@ -212,4 +215,45 @@ export async function voidReceivableAttachment(context: ReceivablesFilesContext,
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.attachment.void", objectType: "receivable_attachment", objectId: attachment.id, requestId: context.requestId, ...auditScope(access, ledger.financeDepartmentId), reason: input.reason, metadata: { ledgerId: ledger.id, departmentId: ledger.financeDepartmentId, fileId: attachment.fileId, attachmentId: attachment.id, before: { ledger: snapshot(ledger), attachment: snapshot(attachment) }, after: { ledger: snapshot(afterLedger), attachment: snapshot(afterAttachment) } } });
     return afterAttachment;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+}
+
+export async function deleteReceivableAttachment(context: ReceivablesFilesContext, input: { ledgerId: string; attachmentId: string; ledgerRevision: number; revision: number; reason: string }, uploadRoot: string) {
+  let quarantined: { originalPath: string; quarantinePath: string } | undefined;
+  let committed = false;
+  try {
+    const deleted = await prisma.$transaction(async (tx) => {
+      const access = await lockAuthority(tx, context.principal);
+      assertReceivableAttachmentDeletionAllowed(access);
+      const ledger = await writableLedger(tx, access, input.ledgerId);
+      if (ledger.revision !== input.ledgerRevision) throw conflict();
+      const [locked] = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM receivable_attachments WHERE id = ${input.attachmentId}::uuid AND ledger_id = ${ledger.id}::uuid FOR UPDATE`;
+      if (!locked) throw attachmentNotFound();
+      const attachment = await tx.receivableAttachment.findUniqueOrThrow({ where: { id: input.attachmentId }, include: { file: true } });
+      if (attachment.revision !== input.revision) throw conflict();
+      const originalPath = receivableAttachmentStoragePath(uploadRoot, attachment.file.storageKey);
+      const quarantinePath = `${originalPath}.${randomUUID()}.deleting`;
+      try {
+        const details = await lstat(originalPath);
+        if (!details.isFile() || details.isSymbolicLink()) throw httpError(409, "RECEIVABLES_ATTACHMENT_FILE_INVALID", "财务附件文件无效");
+        await rename(originalPath, quarantinePath);
+        quarantined = { originalPath, quarantinePath };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await tx.receivableAttachment.delete({ where: { id: attachment.id } });
+      await tx.privateFile.delete({ where: { id: attachment.fileId } });
+      const afterLedger = await updateLedger(tx, context, access, ledger, input.reason);
+      await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.attachment.delete", objectType: "receivable_attachment", objectId: attachment.id, requestId: context.requestId, ...auditScope(access, ledger.financeDepartmentId), reason: input.reason, metadata: { ledgerId: ledger.id, departmentId: ledger.financeDepartmentId, fileId: attachment.fileId, attachmentId: attachment.id, before: { ledger: snapshot(ledger), attachment: snapshot(attachment) }, after: { ledger: snapshot(afterLedger), attachment: null } } });
+      return { id: attachment.id, fileId: attachment.fileId };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    committed = true;
+    if (quarantined) await unlink(quarantined.quarantinePath);
+    return deleted;
+  } catch (error) {
+    if (!committed && quarantined) {
+      try { await rename(quarantined.quarantinePath, quarantined.originalPath); }
+      catch (restoreError) { throw new AggregateError([error, restoreError], "附件删除失败且隔离文件恢复失败"); }
+    }
+    throw error;
+  }
 }

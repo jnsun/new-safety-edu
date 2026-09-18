@@ -323,6 +323,17 @@ try {
   await expect(`/api/files/${uploaded[0]!.file.id}`, reporterToken, 403); await expect(`/api/files/${uploaded[0]!.file.id}`, viewAllToken, 403); await expect(`/api/files/${uploaded[1]!.file.id}`, ownerToken, 200); await expect(`/api/files/${uploaded[2]!.file.id}`, adminToken, 200);
   await unchanged(ledger.id, () => expect(voidPath(uploaded[0]!), reporterToken, 409, voidBody("again", 2)));
   assert.equal(await prisma.auditLog.count({ where: { action: "receivables.attachment.void", objectId: { in: uploaded.map(({ id }) => id) } } }), 3);
+  const deletePath = (attachment: Attachment) => `${attachmentPath}/${attachment.id}/delete`;
+  const deleteBody = (reason: string, revision: number) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ledgerRevision, revision, reason, confirm: true }) });
+  await unchanged(ledger.id, () => expect(deletePath(uploaded[4]!), reporterToken, 404, deleteBody("reporter forbidden", 1)));
+  await expect(deletePath(uploaded[2]!), adminToken, 200, deleteBody("remove obsolete voided file", 2)); ledgerRevision += 1;
+  assert.equal(await prisma.receivableAttachment.count({ where: { id: uploaded[2]!.id } }), 0);
+  assert.equal(await prisma.privateFile.count({ where: { id: uploaded[2]!.file.id } }), 0);
+  await assert.rejects(() => stat(resolve(uploadRoot, uploaded[2]!.file.storageKey)), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  const deleteAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.attachment.delete", objectId: uploaded[2]!.id } });
+  const deleteMetadata = deleteAudit.metadata as Record<string, unknown> | null;
+  assert.equal(deleteMetadata?.reason, "remove obsolete voided file");
+  assert.ok(deleteAudit.metadata && typeof deleteAudit.metadata === "object" && !Array.isArray(deleteAudit.metadata) && "before" in deleteAudit.metadata, "delete audit must retain the deleted attachment snapshot");
   await prisma.receivableDepartment.update({ where: { id: department.id }, data: { active: false } });
   const inactiveHistoryUpload = (await expect<Attachment>(attachmentPath, reporterToken, 201, { method: "POST", body: form(ledgerRevision, fixtures[0]!) })).body!.data!;
   uploaded.push(inactiveHistoryUpload); ids.files.push(inactiveHistoryUpload.file.id); ledgerRevision += 1;

@@ -231,8 +231,10 @@ try {
   await post("/api/receivables/exports", reporterToken, { filters: { financeDepartmentId: departmentA.id, search: `${marker}-missing-idempotency-key` } }, 400);
 
   const categoryFilters = { creditorUnit: [`${marker}-unit-a`, `${marker}-unit-b`], projectStatus: [`${marker}-status-x`] };
-  const preview = await post<{ rowCount: number; columns: Array<{ id: string; label: string; nonEmptyCount: number }> }>("/api/receivables/exports/preview", reporterToken, { filters: { settlement: "all" }, categoryFilters });
+  const preview = await post<{ rowCount: number; previewRows: Array<{ id: string; contractNo: string; projectName: string | null; customerName: string | null; financeDepartmentName: string }>; columns: Array<{ id: string; label: string; nonEmptyCount: number }> }>("/api/receivables/exports/preview", reporterToken, { filters: { settlement: "all" }, categoryFilters });
   assert.equal(preview.body!.data!.rowCount, 2, "category OR/AND filtering returned the wrong row count");
+  assert.equal(preview.body!.data!.previewRows.length, 2, "export preview did not identify the matching ledgers");
+  assert.deepEqual(new Set(preview.body!.data!.previewRows.map(({ contractNo }) => contractNo)), new Set([ledgerA.contractNo, ledgerB.contractNo]));
   assert.equal(preview.body!.data!.columns.find(({ id }) => id === "customerName")?.nonEmptyCount, 0);
   assert.equal(preview.body!.data!.columns.find(({ id }) => id === "latestProgress")?.nonEmptyCount, 1);
   const selectedHeaders = ["合同编号", "项目名称", "最新进展"];

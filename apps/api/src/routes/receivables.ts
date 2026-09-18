@@ -6,11 +6,11 @@ import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import { administerReceivables } from "../receivables-admin.js";
 import { assertReceivablesFinanceOrganization, receivablesFinanceOrganizationName, requireReceivables, resolveReceivablesAccess, selectReceivablesFinanceOrganization } from "../receivables-access.js";
-import { getReceivablesColumnPreference, getReceivablesReferenceData, previewReceivablesExport, queryReceivables, receivablesColumnPreferenceSchema, receivablesExportCategoryIds, receivablesExportColumnIds, saveReceivablesColumnPreference } from "../receivables-query.js";
+import { getReceivablesColumnPreference, getReceivablesDashboardPreference, getReceivablesReferenceData, previewReceivablesExport, queryReceivables, receivablesColumnPreferenceSchema, receivablesDashboardPreferenceSchema, receivablesExportCategoryIds, receivablesExportColumnIds, saveReceivablesColumnPreference, saveReceivablesDashboardPreference } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
-import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
-import { applyReceivablesImport, authorizeReceivablesImport, listReceivablesImports, previewReceivablesImport, rollbackReceivablesImport } from "../receivables-import.js";
+import { authorizeReceivableAttachmentUpload, createReceivableAttachment, deleteReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
+import { applyReceivablesImport, authorizeReceivablesImport, inspectReceivablesImport, listReceivablesImports, previewReceivablesImport, receivablesImportFields, rollbackReceivablesImport, type ReceivablesImportColumnMappings } from "../receivables-import.js";
 import { consumeReceivablesExport, createReceivablesExportJob, issueReceivablesExportToken, listReceivablesExports, removeConsumedReceivablesExport } from "../receivables-export.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
@@ -31,12 +31,13 @@ const grantFields = z.object({
   canMaintainCollection: z.boolean().default(false),
   departments: z.array(departmentScopeInput).max(200).default([]),
 }).strict();
-const grantCreateInput = grantFields.extend({ accountId: z.string().uuid(), reason: reasonInput }).strict();
+const grantCreateInput = grantFields.extend({ personId: z.string().uuid(), reason: reasonInput }).strict();
 const grantUpdateInput = grantFields.extend({ revision: z.number().int().positive(), reason: reasonInput }).strict();
 const grantRevokeInput = z.object({ revision: z.number().int().positive(), revoke: z.literal(true), reason: reasonInput }).strict();
 const grantPatchInput = z.union([grantRevokeInput, grantUpdateInput]);
 const departmentCreateInput = z.object({ name: z.string().trim().min(1).max(160), code: z.string().trim().min(1).max(40).nullable().optional(), sortOrder: z.number().int().default(0) }).strict();
-const departmentUpdateInput = z.object({ revision: z.number().int().positive(), name: z.string().trim().min(1).max(160).optional(), code: z.string().trim().min(1).max(40).nullable().optional(), sortOrder: z.number().int().optional(), active: z.literal(false).optional(), reason: reasonInput.optional() }).strict();
+const departmentUpdateInput = z.object({ revision: z.number().int().positive(), name: z.string().trim().min(1).max(160).optional(), code: z.string().trim().min(1).max(40).nullable().optional(), sortOrder: z.number().int().optional(), showReceivables: z.boolean().optional(), active: z.literal(false).optional(), reason: reasonInput.optional() }).strict();
+const departmentReorderInput = z.object({ items: z.array(z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict()).min(1).max(500) }).strict();
 const dictionaryCreateInput = z.object({ category: z.string().trim().min(1).max(80), value: z.string().trim().min(1).max(240), sortOrder: z.number().int().default(0) }).strict();
 const dictionaryUpdateInput = z.object({ revision: z.number().int().positive(), value: z.string().trim().min(1).max(240).optional(), sortOrder: z.number().int().optional(), active: z.literal(false).optional(), reason: reasonInput.optional() }).strict();
 const migrationPreviewInput = z.object({ mode: z.literal("preview"), targetId: z.string().uuid() }).strict();
@@ -99,9 +100,22 @@ const receiptParams = z.object({ id: z.string().uuid(), receiptId: z.string().uu
 const writeoffInput = z.object({ ledgerRevision: z.number().int().positive(), reason: reasonInput, writeoffAmount: amountInput }).strict();
 const attachmentFields = z.object({ ledgerRevision: z.coerce.number().int().positive(), category: z.string().trim().min(1).max(120).default("general") }).strict();
 const attachmentVoidInput = z.object({ ledgerRevision: z.number().int().positive(), revision: z.number().int().positive(), reason: reasonInput }).strict();
+const attachmentDeleteInput = attachmentVoidInput.extend({ confirm: z.literal(true) }).strict();
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() }).strict();
-const importApplyInput = z.object({ revision: z.number().int().positive(), decisions: z.array(z.object({ rowNumber: z.number().int().min(2), decision: z.enum(["skip", "update"]) }).strict()).max(200_000) }).strict();
+const importApplyInput = z.object({ revision: z.number().int().positive(), openingBalanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), decisions: z.array(z.object({ rowNumber: z.number().int().min(2), decision: z.enum(["skip", "update"]) }).strict()).max(200_000) }).strict();
 const importRollbackInput = z.object({ revision: z.number().int().positive(), reason: reasonInput }).strict();
+const columnMappingsField = z.string().max(20_000).optional().transform((value, ctx): ReceivablesImportColumnMappings => {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !Object.entries(parsed).every(([source, target]) => source.trim() && typeof target === "string" && receivablesImportFields.includes(target as never))) throw new Error();
+    return parsed as ReceivablesImportColumnMappings;
+  } catch {
+    ctx.addIssue({ code: "custom", message: "字段映射无效" });
+    return z.NEVER;
+  }
+});
+const importPreviewFields = z.object({ openingBalanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), columnMappings: columnMappingsField }).strict();
 const grantCandidateInput = z.object({ search: z.string().trim().min(2).max(80) }).strict();
 
 const httpError = (statusCode: number, code: string, message: string) => Object.assign(new Error(message), { statusCode, code });
@@ -160,6 +174,12 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.put("/api/receivables/preferences/columns", { preHandler: deps.authenticate }, async (request) => ({
     data: await saveReceivablesColumnPreference(request.principal as Principal, receivablesColumnPreferenceSchema.parse(request.body)),
   }));
+  app.get("/api/receivables/preferences/dashboard", { preHandler: deps.authenticate }, async (request) => ({
+    data: await getReceivablesDashboardPreference(request.principal as Principal),
+  }));
+  app.put("/api/receivables/preferences/dashboard", { preHandler: deps.authenticate }, async (request) => ({
+    data: await saveReceivablesDashboardPreference(request.principal as Principal, receivablesDashboardPreferenceSchema.parse(request.body)),
+  }));
   app.get("/api/receivables/reference-data", { preHandler: deps.authenticate }, async (request) => ({ data: await getReceivablesReferenceData(request.principal as Principal) }));
   app.get("/api/receivables/exports", { preHandler: deps.authenticate }, async (request) => ({
     data: await listReceivablesExports(request.principal as Principal, receivablesExportListInput.parse(request.query), exportEnvironment),
@@ -191,18 +211,26 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     return reply.send(file.handle.createReadStream({ start: 0, autoClose: false }));
   });
   app.get("/api/receivables/imports", { preHandler: deps.authenticate }, async (request) => ({ data: await listReceivablesImports(request.principal as Principal) }));
+  app.post("/api/receivables/imports/inspect", { preHandler: deps.authenticate }, async (request) => {
+    const part = await request.file({ limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+    if (!part) throw httpError(400, "FILE_REQUIRED", "请选择文件");
+    const content = await part.toBuffer();
+    if (part.file.truncated) throw httpError(413, "FILE_TOO_LARGE", "导入文件不得超过 10 MiB");
+    return { data: await inspectReceivablesImport(adminContext(request), { originalName: part.filename, mimeType: part.mimetype, content }) };
+  });
   app.post("/api/receivables/imports/preview", { preHandler: deps.authenticate }, async (request, reply) => {
     await authorizeReceivablesImport(request.principal as Principal);
     const part = await request.file({ limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
     if (!part) throw httpError(400, "FILE_REQUIRED", "请选择文件");
     const content = await part.toBuffer();
     if (part.file.truncated) throw httpError(413, "FILE_TOO_LARGE", "导入文件不得超过 10 MiB");
-    const data = await previewReceivablesImport(adminContext(request), { originalName: part.filename, mimeType: part.mimetype, content }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads" });
+    const input = importPreviewFields.parse(multipartFields(part.fields as Record<string, unknown>));
+    const data = await previewReceivablesImport(adminContext(request), { originalName: part.filename, mimeType: part.mimetype, content }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads", openingBalanceDate: input.openingBalanceDate, columnMappings: input.columnMappings });
     return reply.code(201).send({ data });
   });
   app.post("/api/receivables/imports/:id/apply", { preHandler: deps.authenticate }, async (request) => {
     const input = importApplyInput.parse(request.body);
-    return { data: await applyReceivablesImport(adminContext(request), idParams.parse(request.params).id, { revision: input.revision, rows: input.decisions }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads" }) };
+    return { data: await applyReceivablesImport(adminContext(request), idParams.parse(request.params).id, { revision: input.revision, rows: input.decisions }, { uploadRoot: process.env.UPLOAD_ROOT ?? "var/uploads", openingBalanceDate: input.openingBalanceDate }) };
   });
   app.post("/api/receivables/imports/:id/rollback", { preHandler: deps.authenticate }, async (request) => ({ data: await rollbackReceivablesImport(adminContext(request), idParams.parse(request.params).id, importRollbackInput.parse(request.body)) }));
   app.post("/api/receivables/ledgers", { preHandler: deps.authenticate }, async (request, reply) => {
@@ -270,6 +298,11 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
     const data = await administerReceivables(adminContext(request), { type: "department.create", input: departmentCreateInput.parse(request.body) });
     return reply.code(201).send({ data });
   });
+  app.post("/api/receivables/ledgers/:id/attachments/:attachmentId/delete", { preHandler: deps.authenticate }, async (request) => {
+    const params = attachmentParams.parse(request.params);
+    return { data: await deleteReceivableAttachment(ledgerContext(request), { ledgerId: params.id, attachmentId: params.attachmentId, ...attachmentDeleteInput.parse(request.body) }, process.env.UPLOAD_ROOT ?? "var/uploads") };
+  });
+  app.patch("/api/receivables/departments/reorder", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "department.reorder", input: departmentReorderInput.parse(request.body) }) }));
   app.patch("/api/receivables/departments/:id", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "department.update", id: idParams.parse(request.params).id, input: departmentUpdateInput.parse(request.body) }) }));
 
   app.get("/api/receivables/dictionary-options", { preHandler: deps.authenticate }, async (request) => {
