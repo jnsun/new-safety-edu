@@ -439,23 +439,23 @@ model AuthSecurityEvent {
 }
 
 model Organization {
-  id                      String                      @id @default(uuid()) @db.Uuid
-  name                    String                      @db.VarChar(120)
-  type                    OrganizationType
-  parentId                String?                     @map("parent_id") @db.Uuid
-  reportingEnabled        Boolean                     @default(false) @map("reporting_enabled")
-  parent                  Organization?               @relation("OrganizationTree", fields: [parentId], references: [id])
-  children                Organization[]              @relation("OrganizationTree")
-  memberships             OrganizationMembership[]
-  projects                Project[]
-  qualifications          OrganizationQualification[]
-  monthlyReports          ProjectMonthlyReport[]
-  departmentMonthStatuses DepartmentMonthStatus[]
-  receivableSetting       ReceivableSetting?
-  challengePointLedgers   ChallengePointLedger[]
+  id                        String                                 @id @default(uuid()) @db.Uuid
+  name                      String                                 @db.VarChar(120)
+  type                      OrganizationType
+  parentId                  String?                                @map("parent_id") @db.Uuid
+  reportingEnabled          Boolean                                @default(false) @map("reporting_enabled")
+  parent                    Organization?                          @relation("OrganizationTree", fields: [parentId], references: [id])
+  children                  Organization[]                         @relation("OrganizationTree")
+  memberships               OrganizationMembership[]
+  projects                  Project[]
+  qualifications            OrganizationQualification[]
+  monthlyReports            ProjectMonthlyReport[]
+  departmentMonthStatuses   DepartmentMonthStatus[]
+  receivableSetting         ReceivableSetting?
+  challengePointLedgers     ChallengePointLedger[]
   challengeMonthlySnapshots ChallengeMonthlyOrganizationSnapshot[]
-  createdAt               DateTime                    @default(now()) @map("created_at")
-  updatedAt               DateTime                    @updatedAt @map("updated_at")
+  createdAt                 DateTime                               @default(now()) @map("created_at")
+  updatedAt                 DateTime                               @updatedAt @map("updated_at")
 
   @@unique([parentId, name])
   @@map("organizations")
@@ -932,6 +932,7 @@ model Courseware {
   type      CoursewareType
   scopeType ScopeType           @map("scope_type")
   scopeId   String?             @map("scope_id") @db.Uuid
+  active    Boolean             @default(true)
   versions  CoursewareVersion[]
   createdAt DateTime            @default(now()) @map("created_at")
   updatedAt DateTime            @updatedAt @map("updated_at")
@@ -941,27 +942,27 @@ model Courseware {
 }
 
 model CoursewareVersion {
-  id                String                 @id @default(uuid()) @db.Uuid
-  coursewareId      String                 @map("courseware_id") @db.Uuid
-  courseware        Courseware             @relation(fields: [coursewareId], references: [id])
+  id                String                   @id @default(uuid()) @db.Uuid
+  coursewareId      String                   @map("courseware_id") @db.Uuid
+  courseware        Courseware               @relation(fields: [coursewareId], references: [id])
   version           Int
-  status            PublishStatus          @default(draft)
-  richText          String?                @map("rich_text")
-  structuredContent Json?                  @map("structured_content")
-  schemaVersion     Int?                    @map("schema_version")
-  estimatedMinutes Int?                    @map("estimated_minutes")
-  fileId            String?                @map("file_id") @db.Uuid
-  file              PrivateFile?           @relation(fields: [fileId], references: [id])
-  contentHash       String                 @map("content_hash") @db.VarChar(64)
-  publishedAt       DateTime?              @map("published_at")
+  status            PublishStatus            @default(draft)
+  richText          String?                  @map("rich_text")
+  structuredContent Json?                    @map("structured_content")
+  schemaVersion     Int?                     @map("schema_version")
+  estimatedMinutes  Int?                     @map("estimated_minutes")
+  fileId            String?                  @map("file_id") @db.Uuid
+  file              PrivateFile?             @relation(fields: [fileId], references: [id])
+  contentHash       String                   @map("content_hash") @db.VarChar(64)
+  publishedAt       DateTime?                @map("published_at")
   templateItems     TrainingTemplateItem[]
   progress          LearningProgress[]
   assets            CoursewareVersionAsset[]
-  importSessionId   String?                @map("import_session_id") @db.Uuid
+  importSessionId   String?                  @map("import_session_id") @db.Uuid
   importSession     CoursewareImportSession? @relation(fields: [importSessionId], references: [id], onDelete: Restrict)
-  importCourseCode  String?                @map("import_course_code") @db.VarChar(120)
-  createdAt         DateTime               @default(now()) @map("created_at")
-  updatedAt         DateTime               @updatedAt @map("updated_at")
+  importCourseCode  String?                  @map("import_course_code") @db.VarChar(120)
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
 
   @@unique([coursewareId, version])
   @@unique([importSessionId, importCourseCode])
@@ -969,30 +970,30 @@ model CoursewareVersion {
 }
 
 model CoursewareImportSession {
-  id                String                   @id @default(uuid()) @db.Uuid
-  sourceFileId      String?                  @map("source_file_id") @db.Uuid
-  sourceFile        PrivateFile?             @relation(fields: [sourceFileId], references: [id], onDelete: Restrict)
-  originalFilename String                   @map("original_filename") @db.VarChar(240)
-  sourceHash        String                   @map("source_hash") @db.Char(64)
-  templateVersion   Int                      @map("template_version")
-  parserVersion     Int                      @map("parser_version")
-  scopeType         ScopeType                @map("scope_type")
-  scopeId           String?                  @map("scope_id") @db.Uuid
-  actionPlan        Json                     @map("action_plan")
-  hasGlobalErrors   Boolean                  @map("has_global_errors")
-  containsAssets    Boolean                  @map("contains_assets")
-  parsedResult      Json                     @map("parsed_result")
-  previewResult     Json                     @map("preview_result")
-  confirmationKey  String                   @unique @map("confirmation_key") @db.Char(64)
-  status            CoursewareImportStatus   @default(previewed)
-  createdBy         String                   @map("created_by") @db.Uuid
-  creator           Account                  @relation(fields: [createdBy], references: [id], onDelete: Restrict)
-  expiresAt         DateTime                 @map("expires_at")
-  confirmedAt       DateTime?                @map("confirmed_at")
-  confirmResult     Json?                    @map("confirm_result")
-  versions          CoursewareVersion[]
-  createdAt         DateTime                 @default(now()) @map("created_at")
-  updatedAt         DateTime                 @updatedAt @map("updated_at")
+  id               String                 @id @default(uuid()) @db.Uuid
+  sourceFileId     String?                @map("source_file_id") @db.Uuid
+  sourceFile       PrivateFile?           @relation(fields: [sourceFileId], references: [id], onDelete: Restrict)
+  originalFilename String                 @map("original_filename") @db.VarChar(240)
+  sourceHash       String                 @map("source_hash") @db.Char(64)
+  templateVersion  Int                    @map("template_version")
+  parserVersion    Int                    @map("parser_version")
+  scopeType        ScopeType              @map("scope_type")
+  scopeId          String?                @map("scope_id") @db.Uuid
+  actionPlan       Json                   @map("action_plan")
+  hasGlobalErrors  Boolean                @map("has_global_errors")
+  containsAssets   Boolean                @map("contains_assets")
+  parsedResult     Json                   @map("parsed_result")
+  previewResult    Json                   @map("preview_result")
+  confirmationKey  String                 @unique @map("confirmation_key") @db.Char(64)
+  status           CoursewareImportStatus @default(previewed)
+  createdBy        String                 @map("created_by") @db.Uuid
+  creator          Account                @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  expiresAt        DateTime               @map("expires_at")
+  confirmedAt      DateTime?              @map("confirmed_at")
+  confirmResult    Json?                  @map("confirm_result")
+  versions         CoursewareVersion[]
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
 
   @@unique([id, sourceHash])
   @@index([createdBy, status, expiresAt])
@@ -1068,6 +1069,7 @@ model QuestionBank {
   name      String      @db.VarChar(160)
   scopeType ScopeType   @map("scope_type")
   scopeId   String?     @map("scope_id") @db.Uuid
+  active    Boolean     @default(true)
   questions Question[]
   papers    ExamPaper[]
   createdAt DateTime    @default(now()) @map("created_at")
@@ -1077,41 +1079,41 @@ model QuestionBank {
 }
 
 model Question {
-  id             String            @id @default(uuid()) @db.Uuid
-  bankId         String            @map("bank_id") @db.Uuid
-  bank           QuestionBank      @relation(fields: [bankId], references: [id])
-  type           QuestionType
-  prompt         String
-  options        Json
-  correct        Json
-  explanation    String?
-  active         Boolean           @default(true)
-  challengeEnabled    Boolean      @default(false) @map("challenge_enabled")
-  challengeCategory   String?      @map("challenge_category") @db.VarChar(80)
-  challengeDifficulty String?      @map("challenge_difficulty") @db.VarChar(20)
-  currentVersion Int               @default(1) @map("current_version")
-  versions       QuestionVersion[]
-  paperItems     ExamPaperItem[]
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
+  id                  String            @id @default(uuid()) @db.Uuid
+  bankId              String            @map("bank_id") @db.Uuid
+  bank                QuestionBank      @relation(fields: [bankId], references: [id])
+  type                QuestionType
+  prompt              String
+  options             Json
+  correct             Json
+  explanation         String?
+  active              Boolean           @default(true)
+  challengeEnabled    Boolean           @default(false) @map("challenge_enabled")
+  challengeCategory   String?           @map("challenge_category") @db.VarChar(80)
+  challengeDifficulty String?           @map("challenge_difficulty") @db.VarChar(20)
+  currentVersion      Int               @default(1) @map("current_version")
+  versions            QuestionVersion[]
+  paperItems          ExamPaperItem[]
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
 
   @@map("questions")
 }
 
 model QuestionVersion {
-  id          String          @id @default(uuid()) @db.Uuid
-  questionId  String          @map("question_id") @db.Uuid
-  question    Question        @relation(fields: [questionId], references: [id], onDelete: Restrict)
-  version     Int
-  type        QuestionType
-  prompt      String
-  options     Json
-  correct     Json
-  explanation String?
-  createdBy   String?         @map("created_by") @db.Uuid
-  paperItems  ExamPaperItem[]
+  id               String            @id @default(uuid()) @db.Uuid
+  questionId       String            @map("question_id") @db.Uuid
+  question         Question          @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  version          Int
+  type             QuestionType
+  prompt           String
+  options          Json
+  correct          Json
+  explanation      String?
+  createdBy        String?           @map("created_by") @db.Uuid
+  paperItems       ExamPaperItem[]
   challengeAnswers ChallengeAnswer[]
-  createdAt   DateTime        @default(now()) @map("created_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
 
   @@unique([questionId, version])
   @@index([questionId, createdAt])
@@ -1135,15 +1137,15 @@ model ChallengeAttempt {
 }
 
 model ChallengeAnswer {
-  id                String          @id @default(uuid()) @db.Uuid
-  attemptId         String          @map("attempt_id") @db.Uuid
-  attempt           ChallengeAttempt @relation(fields: [attemptId], references: [id], onDelete: Restrict)
-  questionVersionId String          @map("question_version_id") @db.Uuid
-  questionVersion   QuestionVersion @relation(fields: [questionVersionId], references: [id], onDelete: Restrict)
+  id                String                @id @default(uuid()) @db.Uuid
+  attemptId         String                @map("attempt_id") @db.Uuid
+  attempt           ChallengeAttempt      @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+  questionVersionId String                @map("question_version_id") @db.Uuid
+  questionVersion   QuestionVersion       @relation(fields: [questionVersionId], references: [id], onDelete: Restrict)
   answer            Json
   correct           Boolean
-  pointsAwarded     Int             @default(0) @map("points_awarded")
-  submittedAt       DateTime        @default(now()) @map("submitted_at")
+  pointsAwarded     Int                   @default(0) @map("points_awarded")
+  submittedAt       DateTime              @default(now()) @map("submitted_at")
   pointLedger       ChallengePointLedger?
 
   @@unique([attemptId, questionVersionId])
@@ -1152,23 +1154,23 @@ model ChallengeAnswer {
 }
 
 model ChallengePointLedger {
-  id                     String          @id @default(uuid()) @db.Uuid
-  personId               String          @map("person_id") @db.Uuid
-  person                 Person          @relation(fields: [personId], references: [id], onDelete: Restrict)
-  organizationIdSnapshot String?         @map("organization_id_snapshot") @db.Uuid
-  organizationSnapshot   Organization?   @relation(fields: [organizationIdSnapshot], references: [id], onDelete: Restrict)
-  answerId               String?         @unique @map("answer_id") @db.Uuid
+  id                     String           @id @default(uuid()) @db.Uuid
+  personId               String           @map("person_id") @db.Uuid
+  person                 Person           @relation(fields: [personId], references: [id], onDelete: Restrict)
+  organizationIdSnapshot String?          @map("organization_id_snapshot") @db.Uuid
+  organizationSnapshot   Organization?    @relation(fields: [organizationIdSnapshot], references: [id], onDelete: Restrict)
+  answerId               String?          @unique @map("answer_id") @db.Uuid
   answer                 ChallengeAnswer? @relation(fields: [answerId], references: [id], onDelete: Restrict)
-  sourceType             String          @map("source_type") @db.VarChar(40)
-  sourceKey              String          @unique @map("source_key") @db.VarChar(180)
+  sourceType             String           @map("source_type") @db.VarChar(40)
+  sourceKey              String           @unique @map("source_key") @db.VarChar(180)
   points                 Int
-  occurredAt             DateTime        @default(now()) @map("occurred_at")
-  voidedAt               DateTime?       @map("voided_at")
-  voidedBy               String?         @map("voided_by") @db.Uuid
-  voidedByAccount        Account?        @relation("ChallengePointLedgerVoidedBy", fields: [voidedBy], references: [id], onDelete: Restrict)
-  voidReason             String?         @map("void_reason") @db.VarChar(500)
-  createdAt              DateTime        @default(now()) @map("created_at")
-  updatedAt              DateTime        @updatedAt @map("updated_at")
+  occurredAt             DateTime         @default(now()) @map("occurred_at")
+  voidedAt               DateTime?        @map("voided_at")
+  voidedBy               String?          @map("voided_by") @db.Uuid
+  voidedByAccount        Account?         @relation("ChallengePointLedgerVoidedBy", fields: [voidedBy], references: [id], onDelete: Restrict)
+  voidReason             String?          @map("void_reason") @db.VarChar(500)
+  createdAt              DateTime         @default(now()) @map("created_at")
+  updatedAt              DateTime         @updatedAt @map("updated_at")
 
   @@index([personId, occurredAt])
   @@index([organizationIdSnapshot, occurredAt])
@@ -1202,6 +1204,7 @@ model ExamPaper {
   bankId            String?                    @map("bank_id") @db.Uuid
   bank              QuestionBank?              @relation(fields: [bankId], references: [id])
   randomCount       Int?                       @map("random_count")
+  active            Boolean                    @default(true)
   items             ExamPaperItem[]
   batches           TrainingBatch[]
   automationConfigs TrainingAutomationConfig[]
@@ -1542,26 +1545,26 @@ model ReceivableDepartment {
 }
 
 model ReceivableAccessGrant {
-  id           String                      @id @default(uuid()) @db.Uuid
-  accountId    String                      @map("account_id") @db.Uuid
-  account      Account                     @relation("ReceivableGrantAccount", fields: [accountId], references: [id], onDelete: Restrict)
-  role         ReceivableGrantRole
-  canCreate    Boolean                     @default(false) @map("can_create")
-  canExport    Boolean                     @default(false) @map("can_export")
-  canViewAll   Boolean                     @default(false) @map("can_view_all")
-  canMaintainCollection Boolean            @default(false) @map("can_maintain_collection")
-  active       Boolean                     @default(true)
-  revision     Int                         @default(1)
-  grantedBy    String                      @map("granted_by") @db.Uuid
-  grantor      Account                     @relation("ReceivableGrantGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
-  grantedAt    DateTime                    @default(now()) @map("granted_at")
-  revokedAt    DateTime?                   @map("revoked_at")
-  revokedBy    String?                     @map("revoked_by") @db.Uuid
-  revoker      Account?                    @relation("ReceivableGrantRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
-  revokeReason String?                     @map("revoke_reason") @db.VarChar(500)
-  departments  ReceivableGrantDepartment[]
-  createdAt    DateTime                    @default(now()) @map("created_at")
-  updatedAt    DateTime                    @updatedAt @map("updated_at")
+  id                    String                      @id @default(uuid()) @db.Uuid
+  accountId             String                      @map("account_id") @db.Uuid
+  account               Account                     @relation("ReceivableGrantAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  role                  ReceivableGrantRole
+  canCreate             Boolean                     @default(false) @map("can_create")
+  canExport             Boolean                     @default(false) @map("can_export")
+  canViewAll            Boolean                     @default(false) @map("can_view_all")
+  canMaintainCollection Boolean                     @default(false) @map("can_maintain_collection")
+  active                Boolean                     @default(true)
+  revision              Int                         @default(1)
+  grantedBy             String                      @map("granted_by") @db.Uuid
+  grantor               Account                     @relation("ReceivableGrantGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+  grantedAt             DateTime                    @default(now()) @map("granted_at")
+  revokedAt             DateTime?                   @map("revoked_at")
+  revokedBy             String?                     @map("revoked_by") @db.Uuid
+  revoker               Account?                    @relation("ReceivableGrantRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+  revokeReason          String?                     @map("revoke_reason") @db.VarChar(500)
+  departments           ReceivableGrantDepartment[]
+  createdAt             DateTime                    @default(now()) @map("created_at")
+  updatedAt             DateTime                    @updatedAt @map("updated_at")
 
   @@index([accountId, active])
   @@index([role, active])
@@ -1743,30 +1746,30 @@ model ReceivableDictionaryOption {
 }
 
 model ReceivableImportBatch {
-  id             String                     @id @default(uuid()) @db.Uuid
-  originalFileId String                     @unique @map("original_file_id") @db.Uuid
-  originalFile   PrivateFile                @relation("ReceivableImportOriginalFile", fields: [originalFileId], references: [id], onDelete: Restrict)
-  checksum       String                     @db.VarChar(64)
-  status         ReceivableImportStatus     @default(previewed)
-  revision       Int                        @default(1)
-  rowCount       Int                        @default(0) @map("row_count")
-  errorCount     Int                        @default(0) @map("error_count")
-  openingBalanceDate DateTime?              @map("opening_balance_date") @db.Date
-  columnMappings     Json?                  @map("column_mappings")
-  requestedBy    String                     @map("requested_by") @db.Uuid
-  requester      Account                    @relation("ReceivableImportRequestedBy", fields: [requestedBy], references: [id], onDelete: Restrict)
-  appliedAt      DateTime?                  @map("applied_at")
-  appliedBy      String?                    @map("applied_by") @db.Uuid
-  applier        Account?                   @relation("ReceivableImportAppliedBy", fields: [appliedBy], references: [id], onDelete: Restrict)
-  rolledBackAt   DateTime?                  @map("rolled_back_at")
-  rolledBackBy   String?                    @map("rolled_back_by") @db.Uuid
-  rollbackActor  Account?                   @relation("ReceivableImportRolledBackBy", fields: [rolledBackBy], references: [id], onDelete: Restrict)
-  rollbackReason String?                    @map("rollback_reason") @db.VarChar(500)
-  items          ReceivableImportItem[]
-  createdLedgers ReceivableLedger[]         @relation("ReceivableImportCreatedLedgers")
-  revisions      ReceivableLedgerRevision[] @relation("ReceivableImportRevisions")
-  createdAt      DateTime                   @default(now()) @map("created_at")
-  updatedAt      DateTime                   @updatedAt @map("updated_at")
+  id                 String                     @id @default(uuid()) @db.Uuid
+  originalFileId     String                     @unique @map("original_file_id") @db.Uuid
+  originalFile       PrivateFile                @relation("ReceivableImportOriginalFile", fields: [originalFileId], references: [id], onDelete: Restrict)
+  checksum           String                     @db.VarChar(64)
+  status             ReceivableImportStatus     @default(previewed)
+  revision           Int                        @default(1)
+  rowCount           Int                        @default(0) @map("row_count")
+  errorCount         Int                        @default(0) @map("error_count")
+  openingBalanceDate DateTime?                  @map("opening_balance_date") @db.Date
+  columnMappings     Json?                      @map("column_mappings")
+  requestedBy        String                     @map("requested_by") @db.Uuid
+  requester          Account                    @relation("ReceivableImportRequestedBy", fields: [requestedBy], references: [id], onDelete: Restrict)
+  appliedAt          DateTime?                  @map("applied_at")
+  appliedBy          String?                    @map("applied_by") @db.Uuid
+  applier            Account?                   @relation("ReceivableImportAppliedBy", fields: [appliedBy], references: [id], onDelete: Restrict)
+  rolledBackAt       DateTime?                  @map("rolled_back_at")
+  rolledBackBy       String?                    @map("rolled_back_by") @db.Uuid
+  rollbackActor      Account?                   @relation("ReceivableImportRolledBackBy", fields: [rolledBackBy], references: [id], onDelete: Restrict)
+  rollbackReason     String?                    @map("rollback_reason") @db.VarChar(500)
+  items              ReceivableImportItem[]
+  createdLedgers     ReceivableLedger[]         @relation("ReceivableImportCreatedLedgers")
+  revisions          ReceivableLedgerRevision[] @relation("ReceivableImportRevisions")
+  createdAt          DateTime                   @default(now()) @map("created_at")
+  updatedAt          DateTime                   @updatedAt @map("updated_at")
 
   @@index([status, createdAt])
   @@index([requestedBy, createdAt])

@@ -12,7 +12,7 @@ import { prisma } from "../db.js";
 import type { Env } from "../env.js";
 import { parseQuestionImport, questionImportTemplate } from "../question-import.js";
 import { coursewareViewerHeaders } from "../courseware-viewer-policy.js";
-import { nextQuestionVersion, questionVersionSnapshot } from "../question-versions.js";
+import { questionVersionSnapshot } from "../question-versions.js";
 import { canPublishCourseware } from "../courseware-publish-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 import { decorateTodoPriority, sortTodoAssignments } from "../training-todo-priority.js";
@@ -59,6 +59,7 @@ async function visibleScope(principal: Principal) {
 
 async function assertAssignment(principal: Principal, assignmentId: string, manager = false) {
   const assignment = await prisma.trainingAssignment.findUniqueOrThrow({ where: { id: assignmentId }, include: { batch: true } });
+  if (!manager && assignment.status === "cancelled") throw Object.assign(new Error("培训任务已撤回"), { statusCode: 409, code: "ASSIGNMENT_CANCELLED" });
   if (!manager && principal.personId === assignment.personId) return assignment;
   if (await canAccessPerson(principal, assignment.personId) && (!assignment.batch.projectId || await canAccessProject(principal, assignment.batch.projectId))) return assignment;
   forbidden();
@@ -73,7 +74,7 @@ async function currentLearnerProgress(tx: Prisma.TransactionClient, assignmentId
 }
 
 async function lockLearnerAssignment(tx: Prisma.TransactionClient, assignmentId: string, personId: string) {
-  const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM training_assignments WHERE id = ${assignmentId}::uuid AND person_id = ${personId}::uuid FOR UPDATE`;
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM training_assignments WHERE id = ${assignmentId}::uuid AND person_id = ${personId}::uuid AND status <> 'cancelled'::"AssignmentStatus" FOR UPDATE`;
   if (!rows.length) forbidden("课件只能由本人学习");
 }
 
@@ -200,7 +201,11 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     return reply.code(201).send({ data: row });
   });
 
-  app.get("/api/coursewares", manager, async (request) => ({ data: await prisma.courseware.findMany({ where: await visibleScope(principalOf(request)), include: { versions: { orderBy: { version: "desc" } } }, orderBy: { createdAt: "desc" } }) }));
+  app.get("/api/coursewares", manager, async (request) => ({ data: await prisma.courseware.findMany({
+    where: { ...(await visibleScope(principalOf(request))), active: true },
+    include: { versions: { where: { status: { not: "retired" } }, orderBy: { version: "desc" } } },
+    orderBy: { createdAt: "desc" }
+  }) }));
   app.post("/api/courseware-versions/:id/publish", manager, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
     const version = await prisma.coursewareVersion.findUniqueOrThrow({ where: { id }, include: { courseware: true } });
@@ -212,12 +217,12 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     return { data: updated };
   });
 
-  app.get("/api/training-templates", manager, async (request) => ({ data: await prisma.trainingTemplate.findMany({ where: await visibleScope(principalOf(request)), include: { items: { include: { coursewareVersion: { include: { courseware: true } } }, orderBy: { sortOrder: "asc" } } } }) }));
+  app.get("/api/training-templates", manager, async (request) => ({ data: await prisma.trainingTemplate.findMany({ where: { ...(await visibleScope(principalOf(request))), active: true }, include: { items: { include: { coursewareVersion: { include: { courseware: true } } }, orderBy: { sortOrder: "asc" } } } }) }));
   app.post("/api/training-templates", manager, async (request, reply) => {
     const principal = principalOf(request);
     const input = scopeSchema.extend({ name: z.string().trim().min(2).max(180), type: z.enum(["three_level", "project_induction", "routine", "change_update"]), coursewareVersionIds: z.array(z.string().uuid()).min(1) }).parse(request.body);
     await assertScope(principal, input.scopeType, input.scopeId);
-    const versions = await prisma.coursewareVersion.findMany({ where: { id: { in: input.coursewareVersionIds }, status: "published" }, include: { courseware: true } });
+    const versions = await prisma.coursewareVersion.findMany({ where: { id: { in: input.coursewareVersionIds }, status: "published", courseware: { active: true } }, include: { courseware: true } });
     if (versions.length !== new Set(input.coursewareVersionIds).size) throw Object.assign(new Error("模板只能引用已发布课件版本"), { statusCode: 400, code: "UNPUBLISHED_COURSEWARE" });
     for (const version of versions) await assertScope(principal, version.courseware.scopeType, version.courseware.scopeId);
     const template = await prisma.trainingTemplate.create({ data: { name: input.name, type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null, items: { create: [...new Set(input.coursewareVersionIds)].map((coursewareVersionId, sortOrder) => ({ coursewareVersionId, sortOrder })) } }, include: { items: true } });
@@ -225,7 +230,34 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     return reply.code(201).send({ data: template });
   });
 
-  app.get("/api/question-banks", manager, async (request) => ({ data: await prisma.questionBank.findMany({ where: await visibleScope(principalOf(request)), include: { questions: true } }) }));
+  app.patch("/api/training-templates/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params);
+    const input = z.object({ name: z.string().trim().min(2).max(180), type: z.enum(["three_level", "project_induction", "routine", "change_update"]), coursewareVersionIds: z.array(z.string().uuid()).min(1) }).parse(request.body);
+    const template = await prisma.trainingTemplate.findUniqueOrThrow({ where: { id } }); await assertScope(principal, template.scopeType, template.scopeId);
+    const versionIds = [...new Set(input.coursewareVersionIds)];
+    const versions = await prisma.coursewareVersion.findMany({ where: { id: { in: versionIds }, status: "published", courseware: { active: true } }, include: { courseware: true } });
+    if (versions.length !== versionIds.length) throw Object.assign(new Error("模板只能引用当前已发布课件"), { statusCode: 400, code: "UNPUBLISHED_COURSEWARE" });
+    for (const version of versions) await assertScope(principal, version.courseware.scopeType, version.courseware.scopeId);
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.trainingTemplateItem.deleteMany({ where: { templateId: id } });
+      return tx.trainingTemplate.update({ where: { id }, data: { name: input.name, type: input.type, items: { create: versionIds.map((coursewareVersionId, sortOrder) => ({ coursewareVersionId, sortOrder })) } }, include: { items: { include: { coursewareVersion: { include: { courseware: true } } }, orderBy: { sortOrder: "asc" } } } });
+    });
+    audit(principal.accountId, "training_template.update", "training_template", id);
+    return { data: updated };
+  });
+
+  app.delete("/api/training-templates/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params);
+    const template = await prisma.trainingTemplate.findUniqueOrThrow({ where: { id } }); await assertScope(principal, template.scopeType, template.scopeId);
+    await prisma.$transaction(async (tx) => {
+      await tx.trainingAutomationConfig.updateMany({ where: { templateId: id, active: true }, data: { active: false } });
+      await tx.trainingTemplate.update({ where: { id }, data: { active: false } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "training_template.delete", objectType: "training_template", objectId: id, result: "success" } });
+    });
+    return { data: { id, deleted: true } };
+  });
+
+  app.get("/api/question-banks", manager, async (request) => ({ data: await prisma.questionBank.findMany({ where: { ...(await visibleScope(principalOf(request))), active: true }, include: { _count: { select: { questions: { where: { active: true } } } } }, orderBy: { createdAt: "desc" } }) }));
   app.post("/api/question-banks", manager, async (request, reply) => {
     const principal = principalOf(request); const input = scopeSchema.extend({ name: z.string().trim().min(2).max(160) }).parse(request.body);
     await assertScope(principal, input.scopeType, input.scopeId);
@@ -233,9 +265,29 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     audit(principal.accountId, "question_bank.create", "question_bank", bank.id);
     return reply.code(201).send({ data: bank });
   });
+  app.patch("/api/question-banks/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const { name } = z.object({ name: z.string().trim().min(2).max(160) }).parse(request.body);
+    const bank = await prisma.questionBank.findFirstOrThrow({ where: { id, active: true } }); await assertScope(principal, bank.scopeType, bank.scopeId);
+    const updated = await prisma.questionBank.update({ where: { id }, data: { name } }); audit(principal.accountId, "question_bank.update", "question_bank", id); return { data: updated };
+  });
+  app.delete("/api/question-banks/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const bank = await prisma.questionBank.findUniqueOrThrow({ where: { id } }); await assertScope(principal, bank.scopeType, bank.scopeId);
+    const paperCount = await prisma.examPaper.count({ where: { active: true, OR: [{ bankId: id }, { items: { some: { question: { bankId: id } } } }] } });
+    if (paperCount) throw Object.assign(new Error("题库仍被试卷使用，请先编辑或删除相关试卷"), { statusCode: 409, code: "QUESTION_BANK_IN_ACTIVE_PAPER" });
+    await prisma.$transaction(async (tx) => { await tx.question.updateMany({ where: { bankId: id }, data: { active: false, challengeEnabled: false } }); await tx.questionBank.update({ where: { id }, data: { active: false } }); await tx.auditLog.create({ data: { actorId: principal.accountId, action: "question_bank.delete", objectType: "question_bank", objectId: id, result: "success" } }); });
+    return { data: { id, deleted: true } };
+  });
+  app.get("/api/question-banks/:id/questions", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params);
+    const query = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(10).max(100).default(20), keyword: z.string().trim().max(100).optional(), type: z.enum(["single_choice", "multiple_choice", "true_false"]).optional() }).parse(request.query);
+    const bank = await prisma.questionBank.findFirstOrThrow({ where: { id, active: true } }); await assertScope(principal, bank.scopeType, bank.scopeId);
+    const where: Prisma.QuestionWhereInput = { bankId: id, active: true, ...(query.keyword ? { prompt: { contains: query.keyword, mode: "insensitive" } } : {}), ...(query.type ? { type: query.type } : {}) };
+    const [items, total] = await Promise.all([prisma.question.findMany({ where, orderBy: { createdAt: "desc" }, skip: (query.page - 1) * query.pageSize, take: query.pageSize }), prisma.question.count({ where })]);
+    return { data: { items, total, page: query.page, pageSize: query.pageSize } };
+  });
   app.post("/api/question-banks/:id/questions", manager, async (request, reply) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
-    const bank = await prisma.questionBank.findUniqueOrThrow({ where: { id } }); await assertScope(principal, bank.scopeType, bank.scopeId);
+    const bank = await prisma.questionBank.findFirstOrThrow({ where: { id, active: true } }); await assertScope(principal, bank.scopeType, bank.scopeId);
     const input = z.object({ type: z.enum(["single_choice", "multiple_choice", "true_false"]), prompt: z.string().trim().min(2), options: z.array(z.string()).min(2), correct: z.array(z.string()).min(1), explanation: z.string().optional() }).parse(request.body);
     if (input.correct.some((answer) => !input.options.includes(answer))) throw Object.assign(new Error("正确答案必须来自选项"), { statusCode: 400, code: "INVALID_ANSWER" });
     const question = await prisma.question.create({ data: { bankId: id, type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, versions: { create: { version: 1, type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, createdBy: principal.accountId } } } }); audit(principal.accountId, "question.create", "question", question.id);
@@ -246,11 +298,19 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     if (input.correct.some((answer) => !input.options.includes(answer))) throw Object.assign(new Error("正确答案必须来自选项"), { statusCode: 400, code: "INVALID_ANSWER" });
     const question = await prisma.question.findUniqueOrThrow({ where: { id }, include: { bank: true } }); await assertScope(principal, question.bank.scopeType, question.bank.scopeId);
     return { data: await prisma.$transaction(async (tx) => {
-      const version = nextQuestionVersion(question.currentVersion);
-      await tx.questionVersion.create({ data: { questionId: id, version, type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, createdBy: principal.accountId } });
-      const updated = await tx.question.update({ where: { id }, data: { type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, currentVersion: version, ...(input.active === undefined ? {} : { active: input.active }) } });
-      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "question.version_create", objectType: "question", objectId: id, result: "success", metadata: { fromVersion: question.currentVersion, toVersion: version } } }); return updated;
+      const version = await tx.questionVersion.findFirst({ where: { questionId: id, version: question.currentVersion }, orderBy: { createdAt: "desc" } });
+      if (version) await tx.questionVersion.update({ where: { id: version.id }, data: { type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null } });
+      else await tx.questionVersion.create({ data: { questionId: id, version: question.currentVersion, type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, createdBy: principal.accountId } });
+      const updated = await tx.question.update({ where: { id }, data: { type: input.type, prompt: input.prompt, options: input.options, correct: input.correct, explanation: input.explanation ?? null, ...(input.active === undefined ? {} : { active: input.active }) } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "question.update", objectType: "question", objectId: id, result: "success" } }); return updated;
     }, { isolationLevel: "Serializable" }) };
+  });
+  app.delete("/api/questions/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const question = await prisma.question.findUniqueOrThrow({ where: { id }, include: { bank: true } }); await assertScope(principal, question.bank.scopeType, question.bank.scopeId);
+    const paperCount = await prisma.examPaper.count({ where: { active: true, items: { some: { questionId: id } } } });
+    if (paperCount) throw Object.assign(new Error("题目仍被固定试卷使用，请先编辑或删除相关试卷"), { statusCode: 409, code: "QUESTION_IN_ACTIVE_PAPER" });
+    await prisma.$transaction(async (tx) => { await tx.question.update({ where: { id }, data: { active: false, challengeEnabled: false } }); await tx.auditLog.create({ data: { actorId: principal.accountId, action: "question.delete", objectType: "question", objectId: id, result: "success" } }); });
+    return { data: { id, deleted: true } };
   });
   app.get("/api/question-import-template.csv", manager, async (_request, reply) => reply
     .header("Content-Type", "text/csv; charset=utf-8")
@@ -258,7 +318,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     .send(questionImportTemplate()));
   app.post("/api/question-banks/:id/questions/import", manager, async (request, reply) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params);
-    const bank = await prisma.questionBank.findUniqueOrThrow({ where: { id } }); await assertScope(principal, bank.scopeType, bank.scopeId);
+    const bank = await prisma.questionBank.findFirstOrThrow({ where: { id, active: true } }); await assertScope(principal, bank.scopeType, bank.scopeId);
     const part = await request.file({ limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
     if (!part) throw Object.assign(new Error("请选择导入文件"), { statusCode: 400, code: "FILE_REQUIRED" });
     const parsed = await parseQuestionImport(await part.toBuffer(), part.filename);
@@ -274,7 +334,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
 
   app.get("/api/exam-papers", manager, async (request) => {
     const principal = principalOf(request); const scopeWhere = await visibleScope(principal);
-    const where = isCompanyAdmin(principal) ? {} : { OR: [{ bank: scopeWhere }, { items: { some: { question: { bank: scopeWhere } } } }] };
+    const where = isCompanyAdmin(principal) ? { active: true } : { active: true, OR: [{ bank: scopeWhere }, { items: { some: { question: { bank: scopeWhere } } } }] };
     return { data: await prisma.examPaper.findMany({ where, include: { items: { include: { question: true }, orderBy: { sortOrder: "asc" } }, bank: true } }) };
   });
   app.post("/api/exam-papers", manager, async (request, reply) => {
@@ -283,13 +343,41 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
       z.object({ name: z.string().min(2).max(160), mode: z.literal("fixed"), items: z.array(z.object({ questionId: z.string().uuid(), score: z.number().positive() })).min(1) }),
       z.object({ name: z.string().min(2).max(160), mode: z.literal("random"), bankId: z.string().uuid(), randomCount: z.number().int().positive().max(200) })
     ]).parse(request.body);
-    if (input.mode === "random") { const bank = await prisma.questionBank.findUniqueOrThrow({ where: { id: input.bankId } }); await assertScope(principal, bank.scopeType, bank.scopeId); }
-    else for (const item of input.items) { const question = await prisma.question.findUniqueOrThrow({ where: { id: item.questionId }, include: { bank: true } }); await assertScope(principal, question.bank.scopeType, question.bank.scopeId); }
+    if (input.mode === "random") { const bank = await prisma.questionBank.findFirstOrThrow({ where: { id: input.bankId, active: true } }); await assertScope(principal, bank.scopeType, bank.scopeId); }
+    else for (const item of input.items) { const question = await prisma.question.findFirstOrThrow({ where: { id: item.questionId, active: true }, include: { bank: true } }); await assertScope(principal, question.bank.scopeType, question.bank.scopeId); }
     const currentVersions = new Map<string, string>();
     if (input.mode === "fixed") for (const version of await prisma.questionVersion.findMany({ where: { questionId: { in: input.items.map(({ questionId }) => questionId) } }, orderBy: { version: "desc" } })) if (!currentVersions.has(version.questionId)) currentVersions.set(version.questionId, version.id);
     const paper = await prisma.examPaper.create({ data: input.mode === "fixed" ? { name: input.name, mode: input.mode, items: { create: input.items.map((item, sortOrder) => ({ ...item, ...(currentVersions.get(item.questionId) ? { questionVersionId: currentVersions.get(item.questionId)! } : {}), sortOrder })) } } : { name: input.name, mode: input.mode, bankId: input.bankId, randomCount: input.randomCount }, include: { items: true } });
     audit(principal.accountId, "exam_paper.create", "exam_paper", paper.id);
     return reply.code(201).send({ data: paper });
+  });
+  app.patch("/api/exam-papers/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params);
+    const input = z.discriminatedUnion("mode", [
+      z.object({ name: z.string().trim().min(2).max(160), mode: z.literal("fixed"), items: z.array(z.object({ questionId: z.string().uuid(), score: z.number().positive() })).min(1) }),
+      z.object({ name: z.string().trim().min(2).max(160), mode: z.literal("random"), bankId: z.string().uuid(), randomCount: z.number().int().positive().max(200) })
+    ]).parse(request.body);
+    const existing = await prisma.examPaper.findUniqueOrThrow({ where: { id }, include: { bank: true, items: { include: { question: { include: { bank: true } } } } } });
+    if (existing.bank) await assertScope(principal, existing.bank.scopeType, existing.bank.scopeId); else for (const item of existing.items) await assertScope(principal, item.question.bank.scopeType, item.question.bank.scopeId);
+    if (input.mode === "random") { const bank = await prisma.questionBank.findFirstOrThrow({ where: { id: input.bankId, active: true } }); await assertScope(principal, bank.scopeType, bank.scopeId); }
+    else for (const item of input.items) { const question = await prisma.question.findFirstOrThrow({ where: { id: item.questionId, active: true }, include: { bank: true } }); await assertScope(principal, question.bank.scopeType, question.bank.scopeId); }
+    const currentVersions = new Map<string, string>();
+    if (input.mode === "fixed") for (const version of await prisma.questionVersion.findMany({ where: { questionId: { in: input.items.map(({ questionId }) => questionId) } }, orderBy: { version: "desc" } })) if (!currentVersions.has(version.questionId)) currentVersions.set(version.questionId, version.id);
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.examPaperItem.deleteMany({ where: { paperId: id } });
+      const data = input.mode === "fixed"
+        ? { name: input.name, mode: input.mode, bankId: null, randomCount: null, items: { create: input.items.map((item, sortOrder) => ({ ...item, ...(currentVersions.get(item.questionId) ? { questionVersionId: currentVersions.get(item.questionId)! } : {}), sortOrder })) } }
+        : { name: input.name, mode: input.mode, bankId: input.bankId, randomCount: input.randomCount };
+      const paper = await tx.examPaper.update({ where: { id }, data, include: { items: { include: { question: true }, orderBy: { sortOrder: "asc" } }, bank: true } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "exam_paper.update", objectType: "exam_paper", objectId: id, result: "success" } }); return paper;
+    });
+    return { data: updated };
+  });
+  app.delete("/api/exam-papers/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id }, include: { bank: true, items: { include: { question: { include: { bank: true } } } } } });
+    if (paper.bank) await assertScope(principal, paper.bank.scopeType, paper.bank.scopeId); else for (const item of paper.items) await assertScope(principal, item.question.bank.scopeType, item.question.bank.scopeId);
+    await prisma.$transaction(async (tx) => { await tx.trainingAutomationConfig.updateMany({ where: { paperId: id, active: true }, data: { active: false } }); await tx.examPaper.update({ where: { id }, data: { active: false } }); await tx.auditLog.create({ data: { actorId: principal.accountId, action: "exam_paper.delete", objectType: "exam_paper", objectId: id, result: "success" } }); });
+    return { data: { id, deleted: true } };
   });
 
   app.get("/api/training-batches", manager, async (request) => {
@@ -303,11 +391,11 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     if (["three_level", "project_induction"].includes(input.type) && !input.paperId) throw Object.assign(new Error("三级教育和项目入场教育必须配置考试"), { statusCode: 400, code: "EXAM_REQUIRED" });
     if (input.type === "project_induction" && !input.projectId) throw Object.assign(new Error("项目入场教育必须绑定项目"), { statusCode: 400, code: "PROJECT_REQUIRED" });
     if (input.projectId) { if (!await canAccessProject(principal, input.projectId)) forbidden(); const project = await prisma.project.findUniqueOrThrow({ where: { id: input.projectId }, select: { status: true } }); if (project.status !== "active") throw Object.assign(new Error("暂停或结束项目不能下发新培训"), { statusCode: 409, code: "PROJECT_READ_ONLY" }); }
-    const template = await prisma.trainingTemplate.findUniqueOrThrow({ where: { id: input.templateId } }); await assertScope(principal, template.scopeType, template.scopeId);
+    const template = await prisma.trainingTemplate.findFirstOrThrow({ where: { id: input.templateId, active: true } }); await assertScope(principal, template.scopeType, template.scopeId);
     if (template.type !== input.type) throw Object.assign(new Error("模板培训类型不匹配"), { statusCode: 400, code: "TYPE_MISMATCH" });
     let paperSnapshot: BatchPaperSnapshot | undefined;
     if (input.paperId) {
-      const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id: input.paperId }, include: { bank: true, items: { include: { question: { include: { bank: true } } } } } });
+      const paper = await prisma.examPaper.findFirstOrThrow({ where: { id: input.paperId, active: true }, include: { bank: true, items: { include: { question: { include: { bank: true } } } } } });
       if (paper.bank) await assertScope(principal, paper.bank.scopeType, paper.bank.scopeId);
       for (const item of paper.items) await assertScope(principal, item.question.bank.scopeType, item.question.bank.scopeId);
       paperSnapshot = await freezePaper(input.paperId);
@@ -332,6 +420,27 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const batch = await prisma.$transaction(async (tx) => { const created = await tx.trainingBatch.create({ data: { businessKey: `manual:${randomUUID()}`, name: input.name, type: input.type, templateId: input.templateId, paperId: input.paperId ?? null, paperSnapshot: paperSnapshot as unknown as Prisma.InputJsonValue, projectId: input.projectId ?? null, dueAt: input.dueAt ?? null, durationMin: input.durationMin, passScore: input.passScore, maxAttempts: input.maxAttempts } }); await createAssignments(tx, created.id, input.templateId, persons.map(({ id }) => id), deps.env); return created; });
     audit(principal.accountId, "training_batch.dispatch", "training_batch", batch.id, { assignmentCount: persons.length });
     return reply.code(201).send({ data: { ...batch, assignmentCount: persons.length } });
+  });
+  app.patch("/api/training-batches/:id", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const input = z.object({ name: z.string().trim().min(2).max(180), dueAt: z.coerce.date().nullable() }).parse(request.body);
+    const batch = await prisma.trainingBatch.findUniqueOrThrow({ where: { id }, include: { assignments: { select: { personId: true } } } });
+    if (batch.projectId && !await canAccessProject(principal, batch.projectId)) forbidden();
+    for (const assignment of batch.assignments) if (!await canAccessPerson(principal, assignment.personId)) forbidden();
+    const updated = await prisma.$transaction(async (tx) => { const row = await tx.trainingBatch.update({ where: { id }, data: { name: input.name, dueAt: input.dueAt } }); await tx.auditLog.create({ data: { actorId: principal.accountId, action: "training_batch.update", objectType: "training_batch", objectId: id, result: "success", metadata: { name: input.name, dueAt: input.dueAt?.toISOString() ?? null } } }); return row; });
+    return { data: updated };
+  });
+  app.post("/api/training-batches/:id/cancel", manager, async (request) => {
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    const batch = await prisma.trainingBatch.findUniqueOrThrow({ where: { id }, include: { assignments: { select: { personId: true, status: true } } } });
+    if (batch.projectId && !await canAccessProject(principal, batch.projectId)) forbidden();
+    for (const assignment of batch.assignments) if (!await canAccessPerson(principal, assignment.personId)) forbidden();
+    const result = await prisma.$transaction(async (tx) => {
+      const cancelled = await tx.trainingAssignment.updateMany({ where: { batchId: id, status: { notIn: ["completed", "cancelled"] } }, data: { status: "cancelled", cancelledAt: new Date() } });
+      const completed = await tx.trainingAssignment.count({ where: { batchId: id, status: "completed" } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "training_batch.cancel", objectType: "training_batch", objectId: id, result: "success", metadata: { reason, cancelled: cancelled.count, completedPreserved: completed } } });
+      return { cancelled: cancelled.count, completedPreserved: completed };
+    });
+    return { data: result };
   });
   app.post("/api/training-batches/bootstrap-three-level", manager, async (request) => {
     const principal = principalOf(request);
@@ -430,7 +539,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     try { const verified = await jwtVerify(token, new TextEncoder().encode(deps.env.UPLOAD_SIGNING_SECRET)); payload = z.object({ assignmentId: z.string().uuid(), versionId: z.string().uuid(), accountId: z.string().uuid() }).parse(verified.payload); }
     catch { throw Object.assign(new Error("课件链接已失效"), { statusCode: 401, code: "VIEWER_LINK_EXPIRED" }); }
     const account = await prisma.account.findUnique({ where: { id: payload.accountId }, select: { status: true, personId: true } });
-    const progress = account?.status === "active" && account.personId ? await prisma.learningProgress.findFirst({ where: { assignmentId: payload.assignmentId, coursewareVersionId: payload.versionId, assignment: { personId: account.personId } }, include: { coursewareVersion: { include: { file: true } } } }) : null;
+    const progress = account?.status === "active" && account.personId ? await prisma.learningProgress.findFirst({ where: { assignmentId: payload.assignmentId, coursewareVersionId: payload.versionId, assignment: { personId: account.personId, status: { not: "cancelled" } } }, include: { coursewareVersion: { include: { file: true } } } }) : null;
     if (!progress?.coursewareVersion.file) forbidden("无权读取课件");
     const content = await readFile(resolve(deps.env.UPLOAD_ROOT, progress.coursewareVersion.file.storageKey));
     reply.header("Content-Type", "text/html; charset=utf-8"); for (const [name, value] of Object.entries(coursewareViewerHeaders())) reply.header(name, value);

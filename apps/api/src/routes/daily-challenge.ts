@@ -231,7 +231,14 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
   app.get("/api/challenge/admin/questions", manager, async (request) => {
     const principal = principalOf(request);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
-    return { data: await prisma.question.findMany({ include: { bank: { select: { id: true, name: true, scopeType: true, scopeId: true } } }, orderBy: [{ bankId: "asc" }, { createdAt: "asc" }] }) };
+    const query = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(10).max(100).default(20), keyword: z.string().trim().max(100).optional(), enabled: z.enum(["all", "enabled", "disabled"]).default("all") }).parse(request.query);
+    const where: Prisma.QuestionWhereInput = { active: true, bank: { active: true }, ...(query.keyword ? { prompt: { contains: query.keyword, mode: "insensitive" } } : {}), ...(query.enabled === "enabled" ? { challengeEnabled: true } : query.enabled === "disabled" ? { challengeEnabled: false } : {}) };
+    const [items, total, enabledCount] = await Promise.all([
+      prisma.question.findMany({ where, include: { bank: { select: { id: true, name: true, scopeType: true, scopeId: true } } }, orderBy: [{ bankId: "asc" }, { createdAt: "asc" }], skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
+      prisma.question.count({ where }),
+      prisma.question.count({ where: { active: true, challengeEnabled: true, bank: { active: true } } })
+    ]);
+    return { data: { items, total, enabledCount, page: query.page, pageSize: query.pageSize } };
   });
 
   app.patch("/api/challenge/admin/questions/:id", manager, async (request) => {
@@ -245,6 +252,18 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
       return question;
     });
     return { data: updated };
+  });
+
+  app.post("/api/challenge/admin/questions/bulk", manager, async (request) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
+    const input = z.object({ ids: z.array(z.string().uuid()).min(1).max(100), challengeEnabled: z.boolean() }).strict().parse(request.body);
+    const result = await prisma.$transaction(async (tx) => {
+      const changed = await tx.question.updateMany({ where: { id: { in: [...new Set(input.ids)] }, active: true, bank: { active: true } }, data: { challengeEnabled: input.challengeEnabled } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "challenge.questions_bulk_configure", objectType: "question", result: "success", metadata: { count: changed.count, challengeEnabled: input.challengeEnabled } } });
+      return changed.count;
+    });
+    return { data: { updated: result } };
   });
 
   app.get("/api/challenge/admin/points", manager, async (request) => {

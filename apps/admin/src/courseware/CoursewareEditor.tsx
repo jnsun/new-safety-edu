@@ -71,7 +71,7 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, cour
       await onSave(parsed.data);
       dispatch({ type: "saved", revision });
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "草稿保存失败，请稍后重试");
+      setSaveError(error instanceof Error ? error.message : "课件保存失败，请稍后重试");
     } finally {
       setSaving(false);
       onSavingChange?.(false);
@@ -85,14 +85,14 @@ export function CoursewareEditor({ initialDocument, initiallyDirty = false, cour
         <Typography.Text type="secondary">纵向组织内容块，右侧同步预览员工手机上的阅读效果。</Typography.Text>
       </div>
       <Space wrap>
-        <Typography.Text type={state.dirty ? "warning" : "secondary"}>{saving ? "正在保存…" : !state.dirty && state.savedRevision === state.revision ? "草稿已保存" : state.dirty ? "有未保存更改" : "草稿无更改"}</Typography.Text>
-        <Button onClick={onClose}>返回版本列表</Button>
-        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存草稿</Button>
+        <Typography.Text type={state.dirty ? "warning" : "secondary"}>{saving ? "正在保存…" : !state.dirty && state.savedRevision === state.revision ? "修改已保存" : state.dirty ? "有未保存更改" : "没有修改"}</Typography.Text>
+        <Button onClick={onClose}>返回课件列表</Button>
+        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()}>保存修改</Button>
       </Space>
     </div>
-    <Alert type="info" showIcon message="保存草稿不会发布课件" description="确认内容无误后，请返回课件版本列表，使用单独的“发布”操作。" />
+    <Alert type="info" showIcon message="直接维护当前课件" description="尚未使用的内容会直接更新；已有学习记录时，系统在后台保留原记录所需内容，日常列表只显示当前课件。" />
     {validationErrors.length > 0 && <Alert type="error" showIcon message="请先修正以下内容" description={<ul className="courseware-error-list">{validationErrors.map((error) => <li key={error}>{error}</li>)}</ul>} />}
-    {saveError && <Alert type="error" showIcon message="草稿未保存" description={`${saveError}。当前编辑内容仍保留在本页面，可修正后重试。`} />}
+    {saveError && <Alert type="error" showIcon message="课件未保存" description={`${saveError}。当前编辑内容仍保留在本页面，可修正后重试。`} />}
 
     <div className="courseware-editor-layout">
       <main className="courseware-editor-main">

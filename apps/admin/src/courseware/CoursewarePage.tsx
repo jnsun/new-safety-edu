@@ -9,9 +9,9 @@ import { CoursewareEditor } from "./CoursewareEditor";
 import { exportCoursewareVersion, ImportCoursewareModal } from "./ImportCoursewareModal";
 import { coursewareNavigationDecision, createEmptyCoursewareDocument, editorDismissalBlockMessage, replaceSavingEditorIfStillActive, validateCoursewareDocument, type StructuredCoursewareDocument } from "./types";
 
-type Version = { id: string; version: number; status: string; structuredContent?: unknown };
+type Version = { id: string; version: number; status: string; richText?: string | null; fileId?: string | null; structuredContent?: unknown };
 type Courseware = { id: string; title: string; type: string; versions: Version[] };
-type Template = { id: string; name: string; type: string; items: Array<{ coursewareVersion: { courseware: { title: string }; version: number } }> };
+type Template = { id: string; name: string; type: string; items: Array<{ coursewareVersion: { id: string; courseware: { title: string }; version: number } }> };
 type Project = { id: string; name: string; status: string; responsibleOrganizationId?: string };
 type Organization = { id: string; name: string; type: string };
 type Principal = { roles: Array<{ role: string; scopeType: string; scopeId?: string | null }> };
@@ -48,6 +48,8 @@ export function CoursewarePage() {
 
   const [courseOpen, setCourseOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
+  const [editingCourseware, setEditingCourseware] = useState<Courseware>();
+  const [editingTemplate, setEditingTemplate] = useState<Template>();
   const [grantOpen, setGrantOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [grantScopeType, setGrantScopeType] = useState<"organization" | "project">("organization");
@@ -72,28 +74,12 @@ export function CoursewarePage() {
     onSuccess: () => { setCourseOpen(false); message.success("课件草稿已创建"); void qc.invalidateQueries({ queryKey: ["coursewares"] }); },
     onError: (error) => message.error(error.message)
   });
-  const createTemplate = useMutation({ mutationFn: (value: unknown) => api("/api/training-templates", json("POST", { scopeType: "company", scopeId: null, ...(value as object) })), onSuccess: () => { setTemplateOpen(false); void qc.invalidateQueries({ queryKey: ["training-templates"] }); }, onError: (error) => message.error(error.message) });
+  const saveTemplate = useMutation({ mutationFn: (value: unknown) => editingTemplate ? api(`/api/training-templates/${editingTemplate.id}`, json("PATCH", value)) : api("/api/training-templates", json("POST", { scopeType: "company", scopeId: null, ...(value as object) })), onSuccess: () => { setTemplateOpen(false); setEditingTemplate(undefined); message.success("模板已保存"); void qc.invalidateQueries({ queryKey: ["training-templates"] }); }, onError: (error) => message.error(error.message) });
   const publishVersion = useMutation({
     mutationFn: (versionId: string) => api(`/api/courseware-versions/${versionId}/publish`, { method: "POST" }),
     onSuccess: () => { message.success("课件版本已发布"); void qc.invalidateQueries({ queryKey: ["coursewares"] }); },
     onError: (error) => message.error(`发布失败：${error.message}`)
   });
-  const createVersion = useMutation({
-    mutationFn: async ({ courseware, document }: { courseware: Courseware; version: Version; document: StructuredCoursewareDocument }) => ({
-      courseware,
-      version: await api<Version>(`/api/coursewares/${courseware.id}/versions`, json("POST", { structuredContent: document }))
-    }),
-    onSuccess: ({ courseware, version }) => {
-      const parsed = validateCoursewareDocument(version.structuredContent);
-      if (!parsed.success) { message.error("新草稿内容不符合当前结构化课件规范"); return; }
-      setEditorDirty(false);
-      setStructuredEditor({ mode: "edit", coursewareId: courseware.id, versionId: version.id, coursewareTitle: courseware.title, document: parsed.data });
-      message.success("已从已发布内容创建新草稿版本");
-      void qc.invalidateQueries({ queryKey: ["coursewares"] });
-    },
-    onError: (error) => message.error(`创建新版本失败：${error.message}`)
-  });
-
   const upload: NonNullable<UploadProps["customRequest"]> = async ({ file, onSuccess, onError }) => { try { const body = new FormData(); body.append("file", file as Blob); const result = await api<{ id: string }>("/api/files?kind=courseware", { method: "POST", body }); setFileId(result.id); onSuccess?.(result); } catch (error) { onError?.(error as Error); } };
   const versionOptions = (coursewares.data ?? []).flatMap((courseware) => courseware.versions.filter((version) => version.status === "published").map((version) => ({ value: version.id, label: `${courseware.title} v${version.version}` })));
 
@@ -139,11 +125,6 @@ export function CoursewarePage() {
     setEditorDirty(false);
     setStructuredEditor({ mode: "edit", coursewareId: courseware.id, versionId: version.id, coursewareTitle: courseware.title, document: parsed.data });
   };
-  const newStructuredVersion = (courseware: Courseware, version: Version) => {
-    const parsed = validateCoursewareDocument(version.structuredContent);
-    if (!parsed.success) { message.error("该已发布版本不符合当前结构化课件规范，无法复制"); return; }
-    createVersion.mutate({ courseware, version, document: parsed.data });
-  };
   const saveStructured = async (document: StructuredCoursewareDocument) => {
     const savingEditor = structuredEditor;
     if (!savingEditor) return;
@@ -155,9 +136,9 @@ export function CoursewarePage() {
       const savedEditor: EditorTarget = { mode: "edit", coursewareId: created.id, versionId: version.id, coursewareTitle: created.title, document };
       setStructuredEditor((current) => replaceSavingEditorIfStillActive(current, savingEditor, savedEditor));
     } else {
-      await api(`/api/courseware-versions/${savingEditor.versionId}/draft`, json("PUT", { structuredContent: { ...document, title: savingEditor.coursewareTitle } }));
+      await api(`/api/coursewares/${savingEditor.coursewareId}`, json("PATCH", { title: savingEditor.coursewareTitle, structuredContent: { ...document, title: savingEditor.coursewareTitle } }));
     }
-    message.success("结构化课件草稿已保存");
+    message.success("结构化课件已保存");
     void qc.invalidateQueries({ queryKey: ["coursewares"] });
   };
 
@@ -166,21 +147,23 @@ export function CoursewarePage() {
     : <Table rowKey="id" loading={coursewares.isLoading || coursewares.isFetching} locale={{ emptyText: "暂无课件，点击“新建课件”开始制作" }} dataSource={coursewares.data ?? []} columns={[
       { title: "名称", dataIndex: "title" },
       { title: "类型", dataIndex: "type", render: (value: string) => ({ rich_text: "图文课件", single_html: "HTML 交互课件", structured: "结构化互动课件" })[value] ?? value },
-      { title: "版本", render: (_: unknown, row: Courseware) => <Space wrap>{row.versions.map((version) => <Tag key={version.id} color={version.status === "published" ? "green" : "default"}>v{version.version} {version.status === "published" ? "已发布" : "草稿"}{row.type === "structured" && version.status === "draft" && <Button type="link" size="small" onClick={() => editStructured(row, version)}>编辑草稿</Button>}{row.type === "structured" && version.status === "published" && <Button type="link" size="small" loading={createVersion.isPending && createVersion.variables?.version.id === version.id} onClick={() => newStructuredVersion(row, version)}>创建新版本</Button>}{row.type === "structured" && <Dropdown menu={{ items: (["xlsx", "json", "zip"] as const).map((format) => ({ key: format, label: `导出 ${format.toUpperCase()}` })), onClick: async ({ key }) => { try { await exportCoursewareVersion(version.id, key as "xlsx" | "json" | "zip"); } catch (error) { message.error(error instanceof Error ? error.message : "课件导出失败"); } } }}><Button type="link" size="small">导出</Button></Dropdown>}<Button type="link" size="small" disabled={version.status === "published"} loading={publishVersion.isPending && publishVersion.variables === version.id} onClick={() => publishVersion.mutate(version.id)}>发布</Button></Tag>)}</Space> }
+      { title: "当前状态", render: (_: unknown, row: Courseware) => row.versions[0] ? <Tag color={row.versions[0].status === "published" ? "green" : "default"}>{row.versions[0].status === "published" ? "已发布" : "草稿"}</Tag> : "—" },
+      { title: "操作", width: 300, render: (_: unknown, row: Courseware) => { const version = row.versions[0]; return <Space>{row.type === "structured" && version && <Button size="small" onClick={() => editStructured(row, version)}>编辑</Button>}{row.type !== "structured" && <Button size="small" onClick={() => { setEditingCourseware(row); setKind(row.type as "rich_text" | "single_html"); setFileId(version?.fileId ?? undefined); }}>编辑</Button>}{version?.status !== "published" && <Button size="small" loading={publishVersion.isPending && publishVersion.variables === version?.id} onClick={() => version && publishVersion.mutate(version.id)}>发布</Button>}{row.type === "structured" && version && <Dropdown menu={{ items: (["xlsx", "json", "zip"] as const).map((format) => ({ key: format, label: `导出 ${format.toUpperCase()}` })), onClick: async ({ key }) => { try { await exportCoursewareVersion(version.id, key as "xlsx" | "json" | "zip"); } catch (error) { message.error(error instanceof Error ? error.message : "课件导出失败"); } } }}><Button size="small">导出</Button></Dropdown>}<Button danger size="small" onClick={() => Modal.confirm({ title: `删除课件“${row.title}”？`, content: "删除后不再用于新培训；已产生的学习记录仍会保留。", okText: "删除", okButtonProps: { danger: true }, onOk: async () => { try { await api(`/api/coursewares/${row.id}`, { method: "DELETE" }); message.success("课件已删除"); void qc.invalidateQueries({ queryKey: ["coursewares"] }); } catch (error) { message.error(error instanceof Error ? error.message : "删除失败"); throw error; } } })}>删除</Button></Space>; } }
     ]} />;
   const templateList = templates.isError
     ? <Alert type="error" showIcon message="培训模板加载失败" description={templates.error.message} action={<Button onClick={() => void templates.refetch()}>重新加载</Button>} />
-    : <Table rowKey="id" loading={templates.isLoading || templates.isFetching} locale={{ emptyText: "暂无培训模板" }} dataSource={templates.data ?? []} columns={[{ title: "名称", dataIndex: "name" }, { title: "培训类型", dataIndex: "type", render: (value: string) => typeNames[value] ?? value }, { title: "课件顺序", render: (_: unknown, row: Template) => row.items.map((item) => `${item.coursewareVersion.courseware.title} v${item.coursewareVersion.version}`).join(" → ") }]} />;
+    : <Table rowKey="id" loading={templates.isLoading || templates.isFetching} locale={{ emptyText: "暂无培训模板" }} dataSource={templates.data ?? []} columns={[{ title: "名称", dataIndex: "name" }, { title: "培训类型", dataIndex: "type", render: (value: string) => typeNames[value] ?? value }, { title: "课件顺序", render: (_: unknown, row: Template) => row.items.map((item) => item.coursewareVersion.courseware.title).join(" → ") }, { title: "操作", width: 150, render: (_: unknown, row: Template) => <Space><Button size="small" onClick={() => { setEditingTemplate(row); setTemplateOpen(true); }}>编辑</Button><Button danger size="small" onClick={() => Modal.confirm({ title: `删除模板“${row.name}”？`, content: "已下发培训不会受影响。", okText: "删除", okButtonProps: { danger: true }, onOk: async () => { await api(`/api/training-templates/${row.id}`, { method: "DELETE" }); message.success("模板已删除"); void qc.invalidateQueries({ queryKey: ["training-templates"] }); } })}>删除</Button></Space> }]} />;
 
   return <>
     <Space className="page-title"><Typography.Title level={3}>课件与模板</Typography.Title><Button disabled={!scopeOptions.length} onClick={() => { setKind("rich_text"); setFileId(undefined); setCourseOpen(true); }}>新建课件</Button><Button disabled={!scopeOptions.length} onClick={() => setImportOpen(true)}>批量导入课件</Button><Button type="primary" onClick={() => setTemplateOpen(true)}>新建模板</Button>{companyAdmin && <Button onClick={() => setGrantOpen(true)}>发布权限</Button>}</Space>
     {!scopeOptions.length && <Alert type="warning" showIcon message="当前账号没有可创建课件的授权范围" />}
-    <Tabs activeKey={activeTab} onChange={switchTab} items={[{ key: "course", label: "课件版本", children: coursewareList }, { key: "template", label: "培训模板", children: templateList }]} />
+    <Tabs activeKey={activeTab} onChange={switchTab} items={[{ key: "course", label: "课件", children: coursewareList }, { key: "template", label: "培训模板", children: templateList }]} />
 
     <Modal title="新建课件" open={courseOpen} footer={null} onCancel={() => setCourseOpen(false)}><Form layout="vertical" onFinish={(values) => { const selectedScope = parseScopeKey(String(values.scopeKey)); const content = { ...selectedScope, title: values.title, type: kind, ...(kind === "rich_text" ? { richText: values.richText } : { fileId }) }; if (kind !== "structured") { createCourse.mutate(content); return; } const document = createEmptyCoursewareDocument(); document.title = String(values.title); setCourseOpen(false); setEditorDirty(true); setStructuredEditor({ mode: "create", coursewareTitle: String(values.title), scope: selectedScope, document }); }}><Form.Item name="title" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="scopeKey" label="适用范围" rules={[{ required: true, message: "请选择适用范围" }]}><Select showSearch optionFilterProp="label" options={scopeOptions} /></Form.Item><Form.Item label="类型"><Select value={kind} onChange={setKind} options={[{ value: "rich_text", label: "图文课件" }, { value: "single_html", label: "单文件 HTML" }, { value: "structured", label: "结构化互动课件" }]} /></Form.Item>{kind === "rich_text" && <Form.Item name="richText" label="图文内容" rules={[{ required: true }]}><Input.TextArea rows={8} /></Form.Item>}{kind === "single_html" && <Form.Item label="HTML 文件" required><Upload accept=".html,text/html" maxCount={1} customRequest={upload}><Button icon={<UploadOutlined />}>上传</Button></Upload></Form.Item>}<Button type="primary" htmlType="submit" loading={createCourse.isPending}>{kind === "structured" ? "进入内容编辑器" : "创建草稿"}</Button></Form></Modal>
     <Modal title="编辑结构化课件" open={!!structuredEditor} footer={null} width="calc(100vw - 48px)" destroyOnHidden onCancel={() => confirmDiscard()}>{structuredEditor && <CoursewareEditor initialDocument={structuredEditor.document} initiallyDirty={structuredEditor.mode === "create"} coursewareTitle={structuredEditor.coursewareTitle} onSave={saveStructured} onClose={() => confirmDiscard()} onDirtyChange={setEditorDirty} onSavingChange={setEditorSaving} />}</Modal>
+    <Modal title="编辑课件" open={!!editingCourseware} footer={null} destroyOnHidden onCancel={() => setEditingCourseware(undefined)}>{editingCourseware && <Form key={editingCourseware.id} layout="vertical" initialValues={{ title: editingCourseware.title, richText: editingCourseware.versions[0]?.richText }} onFinish={async (values) => { try { await api(`/api/coursewares/${editingCourseware.id}`, json("PATCH", { title: values.title, ...(editingCourseware.type === "rich_text" ? { richText: values.richText } : { fileId }) })); message.success("课件已更新"); setEditingCourseware(undefined); void qc.invalidateQueries({ queryKey: ["coursewares"] }); } catch (error) { message.error(error instanceof Error ? error.message : "保存失败"); } }}><Form.Item name="title" label="名称" rules={[{ required: true }]}><Input /></Form.Item>{editingCourseware.type === "rich_text" ? <Form.Item name="richText" label="图文内容" rules={[{ required: true }]}><Input.TextArea rows={10} /></Form.Item> : <Form.Item label="HTML 文件" required><Upload accept=".html,text/html" maxCount={1} customRequest={upload}><Button icon={<UploadOutlined />}>上传替换文件</Button></Upload><Typography.Text type="secondary">不重新上传则保留当前文件。</Typography.Text></Form.Item>}<Button type="primary" htmlType="submit">保存修改</Button></Form>}</Modal>
     <ImportCoursewareModal open={importOpen} scopeOptions={scopeOptions} onClose={() => setImportOpen(false)} onComplete={() => void qc.invalidateQueries({ queryKey: ["coursewares"] })} />
-    <Modal title="新建培训模板" open={templateOpen} footer={null} onCancel={() => setTemplateOpen(false)}><Form layout="vertical" onFinish={(value) => createTemplate.mutate(value)}><Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="type" label="培训类型" rules={[{ required: true }]}><Select options={trainingTypes} /></Form.Item><Form.Item name="coursewareVersionIds" label="已发布课件（选择顺序即展示顺序）" rules={[{ required: true }]}><Select mode="multiple" options={versionOptions} /></Form.Item><Button type="primary" htmlType="submit">保存模板</Button></Form></Modal>
+    <Modal title={editingTemplate ? "编辑培训模板" : "新建培训模板"} open={templateOpen} footer={null} destroyOnHidden onCancel={() => { setTemplateOpen(false); setEditingTemplate(undefined); }}><Form key={editingTemplate?.id ?? "new"} layout="vertical" {...(editingTemplate ? { initialValues: { name: editingTemplate.name, type: editingTemplate.type, coursewareVersionIds: editingTemplate.items.map((item) => item.coursewareVersion.id) } } : {})} onFinish={(value) => saveTemplate.mutate(value)}><Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="type" label="培训类型" rules={[{ required: true }]}><Select options={trainingTypes} /></Form.Item><Form.Item name="coursewareVersionIds" label="课件（选择顺序即学习顺序）" rules={[{ required: true }]}><Select mode="multiple" options={versionOptions} /></Form.Item><Button type="primary" htmlType="submit" loading={saveTemplate.isPending}>保存模板</Button></Form></Modal>
     <Modal title="课件发布权限" open={grantOpen} footer={null} width={760} onCancel={() => setGrantOpen(false)}><Table size="small" rowKey="id" pagination={false} dataSource={grants.data} columns={[{ title: "人员", render: (_: unknown, row: PublishGrant) => row.person.name }, { title: "范围", render: (_: unknown, row: PublishGrant) => `${row.scopeType === "organization" ? "组织" : "项目"} · ${[...(organizations.data ?? []), ...(projects.data ?? [])].find((item) => item.id === row.scopeId)?.name ?? row.scopeId}` }, { title: "操作", render: (_: unknown, row: PublishGrant) => <Button danger size="small" onClick={() => { let reason = ""; Modal.confirm({ title: "取消发布权限", content: <Input.TextArea placeholder="请输入取消原因" onChange={(event) => { reason = event.target.value; }} />, onOk: async () => { if (reason.trim().length < 2) throw new Error("请输入至少 2 个字的原因"); await api(`/api/courseware-publish-grants/${row.id}`, json("DELETE", { reason: reason.trim() })); message.success("发布权限已取消"); void grants.refetch(); } }); }}>取消</Button> }]} /><Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => { await api("/api/courseware-publish-grants", json("POST", values)); message.success("发布权限已授予"); void grants.refetch(); }} initialValues={{ scopeType: "organization" }}><Form.Item name="personId" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" placeholder="选择管理员" style={{ width: 180 }} options={(people.data ?? []).map((person) => ({ value: person.id, label: person.name }))} /></Form.Item><Form.Item name="scopeType" rules={[{ required: true }]}><Select style={{ width: 120 }} options={[{ value: "organization", label: "组织" }, { value: "project", label: "项目" }]} onChange={setGrantScopeType} /></Form.Item><Form.Item name="scopeId" rules={[{ required: true }]}><Select placeholder="选择范围" style={{ width: 180 }} options={(grantScopeType === "organization" ? organizations.data ?? [] : projects.data ?? []).map((item) => ({ value: item.id, label: item.name }))} /></Form.Item><Form.Item name="reason" rules={[{ required: true, min: 2 }]}><Input placeholder="授权原因" /></Form.Item><Button type="primary" htmlType="submit">授予</Button></Form></Modal>
   </>;
 }

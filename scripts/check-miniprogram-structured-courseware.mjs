@@ -21,6 +21,11 @@ assert.match(componentSource, /api\.download\(`\/api\/files\/\$\{[^}]+\}`\)/, "�
 assert.doesNotMatch(componentSource, /attempts|\/answers|\/submit/, "随堂题不得调用正式考试接口");
 assert.match(componentSource, /triggerEvent\('checkpoint-answered'/, "随堂题必须产生本地学习反馈事件");
 assert.match(componentSource, /triggerEvent\('block-reached'/, "内容块必须显式上报学习位置");
+assert.doesNotMatch(componentSource, /\.flatMap\(/, "小程序运行时代码不得依赖部分微信基础库不支持的 Array.prototype.flatMap");
+assert.doesNotMatch(componentSource, /preparedUnits\.\$\{/, "更新课件数组项必须使用微信 setData 支持的方括号路径，避免把数组破坏为对象");
+assert.match(componentSource, /preparedUnits\[\$\{unitIndex\}\]\.blocks\[\$\{blockIndex\}\]/, "课件互动状态必须使用微信 setData 的数组下标路径");
+assert.match(componentSource, /units:[\s\S]*?observer\(value\) \{ wx\.nextTick\(\(\) => this\.prepareUnits\(value\)\) \}/, "课件内容变化必须避开微信组件属性更新中的递归 setData");
+assert.match(componentSource, /resumeBlockKey:[\s\S]*?observer\(\) \{ wx\.nextTick\(\(\) => this\.activateResumeBlock\(\)\) \}/, "续学位置变化必须避开微信组件属性更新中的递归 setData");
 assert.match(componentTemplate, /bindtap="confirmBlockReached"/, "到达内容块必须由学习者显式确认");
 assert.match(componentTemplate, /\{\{currentUnit\.title\}\}/, "结构化课件必须直接渲染唯一当前单元");
 assert.match(componentTemplate, /\{\{currentBlock\.title\}\}/, "结构化课件必须直接渲染唯一当前内容项");
@@ -60,7 +65,7 @@ const instance = {
   },
   setData(values) {
     for (const [path, value] of Object.entries(values)) {
-      const parts = path.split(".");
+      const parts = path.replace(/\[(\d+)\]/g, ".$1").split(".");
       let target = this.data;
       while (parts.length > 1) target = target[parts.shift()];
       target[parts[0]] = value;
@@ -90,7 +95,7 @@ instance.prepareUnits([{ key: "u3", title: "分段学习", estimatedMinutes: 2, 
 assert.equal(instance.data.currentBlock.key, "k1", "首次应只展示第一项");
 instance.confirmBlockReached({ currentTarget: { dataset: { unitIndex: 0, blockIndex: 0 } } });
 assert.equal(instance.data.currentBlock.key, "k2", "点击继续下一项后必须切换到下一项");
-assert.equal(instance.lastEvent.name, "position-changed", "切换内容项后必须向页面报告新位置");
+assert.deepEqual(instance.events.slice(-2).map((event) => event.name), ["position-changed", "block-reached"], "切换内容项后必须先报告位置，再异步保存进度");
 instance.data.resumeBlockKey = "k1";
 instance.prepareUnits(instance.data.units = [{ key: "u3", title: "分段学习", estimatedMinutes: 2, blocks: [
   { key: "k1", type: "knowledge", title: "第一项", body: "第一项内容" },
@@ -98,8 +103,9 @@ instance.prepareUnits(instance.data.units = [{ key: "u3", title: "分段学习",
 ] }]);
 assert.equal(instance.data.currentBlock.key, "k2", "恢复学习时应进入已确认内容的下一项");
 
-instance.data.resumeBlockKey = "";
+instance.data.resumeBlockKey = "p0";
 instance.prepareUnits(instance.data.units = [{ key: "u4", title: "情境单元", estimatedMinutes: 3, blocks: [
+  { key: "p0", type: "knowledge", title: "前置内容", body: "已经完成" },
   { key: "s1", type: "scenario", prompt: "你会怎么做？", choices: [{ label: "先确认", consequence: "范围明确", basis: "制度要求" }] },
   { key: "q3", type: "checkpoint", prompt: "是否确认？", questionType: "true_false", options: ["否", "是"], correctIndexes: [1], explanation: "需要确认。" }
 ] }]);
@@ -109,9 +115,14 @@ assert.equal(instance.data.currentBlock.key, "s1", "选择情境答案后当前�
 assert.equal(instance.data.currentBlock.scenarioFeedback.consequence, "范围明确", "选择后必须显示情境反馈");
 instance.confirmBlockReached();
 assert.equal(instance.data.currentBlock.key, "q3", "确认情境题后必须进入下一项");
+assert.deepEqual(instance.events.slice(-2).map((event) => event.name), ["position-changed", "block-reached"], "首次确认必须先切换本地内容，再异步上报保存进度");
+instance.prepareUnits(instance.data.units);
+assert.equal(instance.data.currentBlock.key, "q3", "父页面保存进度引起同一课件重绘时，不得把学习者退回刚完成的情境题");
 instance.showPreviousBlock();
 assert.equal(instance.data.currentBlock.key, "s1", "必须可以返回上一项查看");
-assert.equal(instance.data.completedThrough, 0, "返回查看不得回退已确认进度");
+instance.prepareUnits(instance.data.units);
+assert.equal(instance.data.currentBlock.key, "s1", "父页面更新当前位置引起同一课件重绘时，不得覆盖学习者返回上一项的操作");
+assert.equal(instance.data.completedThrough, 1, "返回查看不得回退已确认进度");
 const savedEvents = instance.events.filter((event) => event.name === "block-reached").length;
 instance.confirmBlockReached();
 assert.equal(instance.data.currentBlock.key, "q3", "查看上一项后必须能再次返回下一项");

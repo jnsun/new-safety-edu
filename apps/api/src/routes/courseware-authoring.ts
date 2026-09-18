@@ -422,4 +422,63 @@ export async function registerCoursewareAuthoringRoutes(app: FastifyInstance, de
     audit(principal.accountId, "courseware.draft_update", "courseware_version", id);
     return { data: updated };
   });
+
+  app.patch("/api/coursewares/:id", manager, async (request) => {
+    const principal = principalOf(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const input = contentSchema.extend({ title: z.string().trim().min(2).max(180) }).parse(request.body);
+    const courseware = await prisma.courseware.findUniqueOrThrow({
+      where: { id },
+      include: { versions: { orderBy: { version: "desc" }, take: 1 } }
+    });
+    await assertScope(principal, courseware.scopeType, courseware.scopeId);
+    if (!courseware.active) throw Object.assign(new Error("课件已删除"), { statusCode: 409, code: "COURSEWARE_INACTIVE" });
+    const current = courseware.versions[0];
+    if (!current) throw Object.assign(new Error("课件没有可编辑内容"), { statusCode: 409, code: "COURSEWARE_VERSION_MISSING" });
+    const prepared = await versionFields(courseware.type, input, principal);
+    const updated = await prisma.$transaction(async (tx) => {
+      const scope = { scopeType: courseware.scopeType, scopeId: courseware.scopeId };
+      const assetIds = await validatedStructuredAssetIds(tx, prepared.document, principal, scope);
+      const used = await tx.learningProgress.count({ where: { coursewareVersionId: current.id } });
+      let versionId = current.id;
+      let replaced = false;
+      if (!used) {
+        await tx.coursewareVersion.update({ where: { id: current.id }, data: prepared.fields });
+        await syncStructuredAssets(tx, current.id, assetIds);
+      } else {
+        const created = await tx.coursewareVersion.create({ data: {
+          coursewareId: id,
+          version: current.version + 1,
+          status: current.status === "draft" ? "draft" : "published",
+          publishedAt: current.status === "draft" ? null : new Date(),
+          ...prepared.fields
+        } });
+        await syncStructuredAssets(tx, created.id, assetIds);
+        await tx.trainingTemplateItem.updateMany({ where: { coursewareVersionId: current.id, template: { active: true } }, data: { coursewareVersionId: created.id } });
+        if (current.status === "published") await tx.coursewareVersion.update({ where: { id: current.id }, data: { status: "retired" } });
+        versionId = created.id;
+        replaced = true;
+      }
+      await tx.courseware.update({ where: { id }, data: { title: input.title } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "courseware.update", objectType: "courseware", objectId: id, result: "success", metadata: { versionId, replacedUsedVersion: replaced } } });
+      return tx.courseware.findUniqueOrThrow({ where: { id }, include: { versions: { orderBy: { version: "desc" } } } });
+    });
+    return { data: updated };
+  });
+
+  app.delete("/api/coursewares/:id", manager, async (request) => {
+    const principal = principalOf(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const courseware = await prisma.courseware.findUniqueOrThrow({ where: { id }, include: { versions: { select: { id: true } } } });
+    await assertScope(principal, courseware.scopeType, courseware.scopeId);
+    const versionIds = courseware.versions.map(({ id: versionId }) => versionId);
+    const activeTemplateCount = await prisma.trainingTemplateItem.count({ where: { coursewareVersionId: { in: versionIds }, template: { active: true } } });
+    if (activeTemplateCount) throw Object.assign(new Error("课件仍被培训模板使用，请先编辑或删除相关模板"), { statusCode: 409, code: "COURSEWARE_IN_ACTIVE_TEMPLATE" });
+    await prisma.$transaction(async (tx) => {
+      await tx.coursewareVersion.updateMany({ where: { coursewareId: id, status: { not: "retired" } }, data: { status: "retired" } });
+      await tx.courseware.update({ where: { id }, data: { active: false } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "courseware.delete", objectType: "courseware", objectId: id, result: "success" } });
+    });
+    return { data: { id, deleted: true } };
+  });
 }

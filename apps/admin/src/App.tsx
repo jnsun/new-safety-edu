@@ -51,7 +51,9 @@ import {
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
 import { accountUsernamePattern, accountUsernameRuleMessage } from "./account-form";
-import { CoursewarePage, QuestionsPage, TrainingPage } from "./Day2Pages";
+import { CoursewarePage } from "./Day2Pages";
+import { QuestionsPage } from "./questions/QuestionsPage";
+import { TrainingPage } from "./training/TrainingPage";
 import { DashboardPage, RecordsPage, ReportsPage } from "./Day4Pages";
 import { PersonImport } from "./PersonImport";
 import { SensitiveExports } from "./SensitiveExports";

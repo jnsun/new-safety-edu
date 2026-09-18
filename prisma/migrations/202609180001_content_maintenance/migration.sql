@@ -1,0 +1,3 @@
+ALTER TABLE "coursewares" ADD COLUMN "active" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "question_banks" ADD COLUMN "active" BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE "exam_papers" ADD COLUMN "active" BOOLEAN NOT NULL DEFAULT true;

@@ -14,12 +14,12 @@ Component({
     units: {
       type: Array,
       value: [],
-      observer(value) { this.prepareUnits(value) }
+      observer(value) { wx.nextTick(() => this.prepareUnits(value)) }
     },
     resumeBlockKey: {
       type: String,
       value: '',
-      observer() { this.activateResumeBlock() }
+      observer() { wx.nextTick(() => this.activateResumeBlock()) }
     }
   },
   data: {
@@ -33,6 +33,9 @@ Component({
   methods: {
     prepareUnits(units) {
       const source = Array.isArray(units) ? units : []
+      const signature = JSON.stringify(source.map((unit) => [unit.key, (Array.isArray(unit.blocks) ? unit.blocks : []).map((block) => block.key)]))
+      if (signature === this._unitsSignature && this.data.preparedUnits.length) return
+      this._unitsSignature = signature
       const totalBlocks = source.reduce((total, unit) => total + (Array.isArray(unit.blocks) ? unit.blocks.length : 0), 0)
       let globalIndex = 0
       const preparedUnits = source.map((unit) => ({
@@ -95,7 +98,7 @@ Component({
       const block = this.data.preparedUnits[unitIndex]?.blocks[blockIndex]
       if (!block) return null
       const updated = { ...block, ...patch }
-      const values = { [`preparedUnits.${unitIndex}.blocks.${blockIndex}`]: updated }
+      const values = { [`preparedUnits[${unitIndex}].blocks[${blockIndex}]`]: updated }
       if (unitIndex === this.data.currentUnitIndex && blockIndex === this.data.currentBlockIndex) {
         values.currentBlock = updated
         values.canContinue = canContinue(updated, this.data.completedThrough)
@@ -115,7 +118,8 @@ Component({
       })
     },
     activateResumeBlock() {
-      const blocks = this.data.preparedUnits.flatMap((unit) => unit.blocks)
+      const units = Array.isArray(this.data.preparedUnits) ? this.data.preparedUnits : []
+      const blocks = units.reduce((all, unit) => all.concat(Array.isArray(unit.blocks) ? unit.blocks : []), [])
       if (!blocks.length) return
       const savedIndex = this.data.resumeBlockKey ? blocks.findIndex((block) => block.key === this.data.resumeBlockKey) : -1
       this.setData({ completedThrough: savedIndex })
@@ -173,11 +177,14 @@ Component({
     confirmBlockReached() {
       const block = this.data.currentBlock
       if (!block || !this.data.canContinue) return
-      if (block.globalIndex > this.data.completedThrough) {
+      const shouldSave = block.globalIndex > this.data.completedThrough
+      if (shouldSave) {
         this.setData({ completedThrough: block.globalIndex, canContinue: true })
-        this.triggerEvent('block-reached', { blockKey: block.key, progressPercent: block.progressPercent, isLast: block.isLast, confirmed: true })
       }
       if (!block.isLast) this.activateBlock(block.globalIndex + 1)
+      if (shouldSave) wx.nextTick(() => {
+        if (!this._detached) this.triggerEvent('block-reached', { blockKey: block.key, progressPercent: block.progressPercent, isLast: block.isLast, confirmed: true })
+      })
     },
     showPreviousBlock() {
       if (this.data.activeGlobalIndex > 0) this.activateBlock(this.data.activeGlobalIndex - 1)
