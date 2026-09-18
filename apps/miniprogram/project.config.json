@@ -4,5 +4,15 @@
   "compileType": "miniprogram",
   "appid": "wxfbd3173876a5555c",
   "projectname": "wuhuayuan-safety-education",
-  "setting": { "es6": true, "enhance": true, "postcss": true, "minified": true, "urlCheck": true }
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "urlCheck": true,
+    "packNpmManually": true,
+    "packNpmRelationList": [
+      { "packageJsonPath": "./package.json", "miniprogramNpmDistDir": "./" }
+    ]
+  }
 }

@@ -2,7 +2,9 @@ import { readFile, readdir } from "node:fs/promises";
 
 const root = new URL("../apps/miniprogram/", import.meta.url);
 const project = JSON.parse(await readFile(new URL("project.config.json", root), "utf8"));
-const files = (await readdir(root, { recursive: true })).filter((name) => /\.(js|json|wxml|wxss)$/.test(name));
+const files = (await readdir(root, { recursive: true }))
+  .map((name) => name.replaceAll("\\", "/"))
+  .filter((name) => !name.startsWith("node_modules/") && !name.startsWith("miniprogram_npm/") && /\.(js|json|wxml|wxss)$/.test(name));
 const source = (await Promise.all(files.map((name) => readFile(new URL(name.replaceAll("\\", "/"), root), "utf8")))).join("\n");
 const profileWxml = await readFile(new URL("pages/profile/index.wxml", root), "utf8");
 const requiredBase = "https://www.safety.sx.cn/api";

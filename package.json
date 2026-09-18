@@ -17,6 +17,7 @@
     "check:miniprogram-all-pages": "node scripts/check-miniprogram-all-pages.mjs",
     "check:miniprogram-training-flow": "node scripts/check-miniprogram-training-flow.mjs",
     "check:miniprogram-structured-courseware": "node scripts/check-miniprogram-structured-courseware.mjs",
+    "check:miniprogram-ui-system": "node scripts/check-miniprogram-ui-system.mjs",
     "check:admin-api": "tsx scripts/check-admin-api.mts",
     "check:people-bulk-management": "tsx scripts/check-people-bulk-management.mts",
     "check:workspace-state": "pnpm --filter @safety/admin exec tsx scripts/check-workspace-state.mts",

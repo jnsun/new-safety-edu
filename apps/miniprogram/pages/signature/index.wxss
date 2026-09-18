@@ -1,19 +1,20 @@
 .signature-page { max-width: 1000rpx; margin: 0 auto; }
-.state-panel, .summary-panel, .submitted-panel, .instruction-panel { padding: 34rpx; margin-bottom: 24rpx; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.state-panel, .summary-panel, .submitted-panel, .instruction-panel { padding: 34rpx; margin-bottom: 24rpx; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
 .state-panel { padding-top: 54rpx; padding-bottom: 54rpx; text-align: center; }
 .state-title, .section-title { display: block; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
 .state-copy, .section-copy { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
 .state-error .state-title { color: var(--danger); }
 .retry-button, .record-button { width: 100%; margin-top: 30rpx; }
-.eyebrow, .record-type { display: block; color: var(--muted); font-size: 28rpx; line-height: 1.45; }
+.summary-title { display: block; margin-bottom: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.45; font-weight: 600; }
+.record-type { display: block; color: var(--muted); font-size: 28rpx; line-height: 1.45; }
 .record-title { display: block; margin-top: 10rpx; font-size: 40rpx; line-height: 1.3; font-weight: 700; }
 .record-type { margin-top: 8rpx; }
 .facts { padding-top: 16rpx; margin-top: 24rpx; border-top: 1rpx solid var(--line); }
 .fact-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 28rpx; padding: 14rpx 0; font-size: 28rpx; line-height: 1.5; }
 .fact-label { flex: 0 0 auto; color: var(--muted); }
 .fact-value { min-width: 0; text-align: right; }
-.submitted-panel { border-left: 8rpx solid var(--success); }
-.submitted-kicker { display: block; color: var(--success); font-size: 34rpx; line-height: 1.35; font-weight: 700; }
+.submitted-panel { background: var(--success-soft); border-color: var(--success); }
+.submitted-title { display: flex; align-items: center; gap: 12rpx; color: var(--success); font-size: 34rpx; line-height: 1.35; font-weight: 700; }
 .submitted-time { display: block; margin-top: 14rpx; font-size: 32rpx; line-height: 1.4; font-weight: 600; }
 .submitted-copy { display: block; margin-top: 12rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
 .sign-box { position: relative; height: 420rpx; overflow: hidden; border: 2rpx solid var(--line); border-radius: var(--radius-card); background: var(--surface); }
@@ -21,8 +22,8 @@ canvas { width: 100%; height: 100%; }
 .hint { position: absolute; left: 0; right: 0; top: 185rpx; color: var(--muted); font-size: 28rpx; text-align: center; pointer-events: none; }
 .action-row { display: flex; gap: 18rpx; margin-top: 20rpx; }
 .action-button { min-width: 0; flex: 1; margin-top: 0; }
-.preview-state { padding: 20rpx 22rpx; margin-top: 20rpx; color: var(--muted); background: var(--surface); border-left: 6rpx solid var(--line); font-size: 28rpx; line-height: 1.5; }
-.preview-ready { color: var(--success); border-left-color: var(--success); }
+.preview-state { padding: 20rpx 22rpx; margin-top: 20rpx; color: var(--muted); background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-control); font-size: 28rpx; line-height: 1.5; }
+.preview-ready { color: var(--success); background: var(--success-soft); border-color: var(--success); }
 .submit-button { width: 100%; }
 
 @media (min-width: 700px) {

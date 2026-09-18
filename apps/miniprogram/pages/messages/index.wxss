@@ -1,1 +1,10 @@
-
+.messages-page { max-width: 1000rpx; margin: 0 auto; }
+.message-list { background: transparent; }
+.message-row { display: flex; align-items: flex-start; gap: 18rpx; min-height: 132rpx; padding: 28rpx; margin-bottom: 20rpx; box-sizing: border-box; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.message-unread { background: var(--surface); border-color: var(--action); }
+.unread-dot { flex: 0 0 auto; width: 14rpx; height: 14rpx; background: var(--action); border-radius: 50%; }
+.message-copy { min-width: 0; flex: 1; }
+.message-title, .message-body, .message-time { display: block; }
+.message-title { font-size: 30rpx; line-height: 1.45; font-weight: 650; }
+.message-body { margin-top: 6rpx; color: var(--ink-soft); font-size: 27rpx; line-height: 1.5; }
+.message-time { margin-top: 8rpx; color: var(--muted); font-size: 24rpx; line-height: 1.35; }

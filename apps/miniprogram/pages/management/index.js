@@ -13,10 +13,11 @@ const identityActions = [
 
 Page({
   data: {
-    assignments: [], requests: [], unlockReason: '', reviewNote: '', error: '',
-    identityActions, activeReview: null, actionIndex: -1, candidateIndex: -1, needsPerson: false
+    loading: true, assignments: [], requests: [], unlockReason: '', reviewNote: '', error: '',
+    identityActions, activeReview: null, actionIndex: -1, candidateIndex: -1, needsPerson: false, managementTab: 'assignments'
   },
   async onShow() {
+    this.setData({ loading: true, error: '' })
     try {
       const [assignments, requests, identityRequests] = await Promise.all([
         api.request('/api/management/assignments'),
@@ -28,15 +29,16 @@ Page({
       const normalizedOther = requests.filter((row) => row.status === 'pending' && !identityIds.has(row.id)).map((row) => ({ ...row, payload: row.payload || {}, summary: row.summary || {}, typeText: requestTypeNames[row.type] || row.type }))
       this.setData({
         assignments: assignments.filter((row) => row.status !== 'completed').map((row) => ({ ...row, statusText: statusNames[row.status] || row.status })),
-        requests: [...normalizedIdentity, ...normalizedOther], error: ''
+        requests: [...normalizedIdentity, ...normalizedOther], error: '', loading: false
       })
     } catch (error) {
       if (error.statusCode === 403) wx.navigateBack()
-      else this.setData({ error: error.message })
+      else this.setData({ error: error.message, loading: false })
     }
   },
   reason(e) { this.setData({ unlockReason: e.detail.value }) },
   note(e) { this.setData({ reviewNote: e.detail.value }) },
+  switchManagementTab(e) { this.setData({ managementTab: e.currentTarget.dataset.tab }) },
   chooseIdentityAction(e) {
     const actionIndex = Number(e.detail.value)
     this.setData({ actionIndex, candidateIndex: -1, needsPerson: identityActions[actionIndex].needsPerson })

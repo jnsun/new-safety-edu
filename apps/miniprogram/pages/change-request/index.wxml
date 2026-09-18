@@ -1,31 +1,30 @@
 <view class="page">
+  <view class="page-head"><text class="page-title">资料变更</text><text class="page-description">提交身份、单位或责任实体变更，并查看处理进度。</text></view>
   <form bindsubmit="submit">
-    <view class="card">
-      <text class="title">资料与关系变更申请</text>
-      <radio-group bindchange="chooseType">
-        <label><radio value="profile_change" checked="{{type === 'profile_change'}}"/>姓名修改</label>
-        <label><radio value="identity_correction" checked="{{type === 'identity_correction'}}"/>身份更正</label>
-        <label><radio value="contractor_unit_change" checked="{{type === 'contractor_unit_change'}}"/>外协单位变更</label>
-        <label><radio value="responsible_entity_change" checked="{{type === 'responsible_entity_change'}}"/>责任实体变更</label>
+    <view class="card request-card">
+      <text class="subtitle">选择变更事项</text>
+      <radio-group class="request-types" bindchange="chooseType">
+        <label class="request-type {{type === 'profile_change' ? 'request-type-active' : ''}}"><radio value="profile_change" checked="{{type === 'profile_change'}}"/>姓名修改</label>
+        <label class="request-type {{type === 'identity_correction' ? 'request-type-active' : ''}}"><radio value="identity_correction" checked="{{type === 'identity_correction'}}"/>身份更正</label>
+        <label class="request-type {{type === 'contractor_unit_change' ? 'request-type-active' : ''}}"><radio value="contractor_unit_change" checked="{{type === 'contractor_unit_change'}}"/>外协单位变更</label>
+        <label class="request-type {{type === 'responsible_entity_change' ? 'request-type-active' : ''}}"><radio value="responsible_entity_change" checked="{{type === 'responsible_entity_change'}}"/>责任实体变更</label>
       </radio-group>
       <input wx:if="{{type === 'profile_change'}}" class="field" name="name" placeholder="新姓名"/>
-      <block wx:if="{{type === 'identity_correction'}}">
-        <picker range="{{personTypes}}" range-key="label" value="{{personTypeIndex}}" bindchange="choosePersonType"><view class="field">更正为：{{personTypes[personTypeIndex].label}}</view></picker>
-      </block>
+      <block wx:if="{{type === 'identity_correction'}}"><picker range="{{personTypes}}" range-key="label" value="{{personTypeIndex}}" bindchange="choosePersonType"><view class="field">更正为：{{personTypes[personTypeIndex].label}}</view></picker></block>
       <picker wx:if="{{type === 'responsible_entity_change' || (type === 'identity_correction' && personTypes[personTypeIndex].value !== 'employee')}}" range="{{businessEntities}}" range-key="name" value="{{organizationIndex}}" bindchange="chooseOrganization"><view class="field">责任经营实体：{{businessEntities[organizationIndex].name || '请选择'}}</view></picker>
       <picker wx:if="{{type === 'contractor_unit_change' || (type === 'identity_correction' && personTypes[personTypeIndex].value === 'contractor')}}" range="{{contractors}}" range-key="name" value="{{contractorIndex}}" bindchange="chooseContractor"><view class="field">外协单位：{{contractors[contractorIndex].name || '请选择'}}</view></picker>
-      <button wx:if="{{type === 'identity_correction' || type === 'contractor_unit_change' || type === 'responsible_entity_change'}}" size="mini" bindtap="chooseAttachment">添加核验附件（已选 {{attachmentIds.length}}）</button>
+      <button wx:if="{{type === 'identity_correction' || type === 'contractor_unit_change' || type === 'responsible_entity_change'}}" class="secondary attachment-button" bindtap="chooseAttachment"><t-icon name="attach" size="30rpx" />添加核验附件（已选 {{attachmentIds.length}}）</button>
       <textarea class="field" name="reason" placeholder="说明变更原因"/>
       <button class="primary" form-type="submit" loading="{{busy}}">提交审核</button>
-      <text class="muted">手机号修改需要短信验证；微信换绑请使用新微信重新进入小程序并按提示验证手机号。</text>
+      <view class="info-strip"><t-icon name="info-circle" size="30rpx" /><text>手机号修改需要短信验证；微信换绑请使用新微信重新进入小程序并按提示验证手机号。</text></view>
     </view>
   </form>
-  <view class="card">
-    <text class="subtitle">我的申请</text>
-    <view wx:for="{{requests}}" wx:key="id" class="row">
-      <text>{{item.typeText}} · {{item.statusText}}</text>
-      <text class="muted">{{item.reviewNote || ''}}</text>
-      <button wx:if="{{item.canWithdraw}}" size="mini" data-id="{{item.id}}" bindtap="withdraw">撤回申请</button>
+  <view class="section-head"><text class="section-title">我的申请</text><text class="section-note">共 {{requests.length}} 项</text></view>
+  <view wx:if="{{!requests.length}}" class="state-panel"><view class="state-icon"><t-icon name="file-paste" size="48rpx" /></view><text class="state-title">暂无变更申请</text><text class="state-copy">提交后可在此查看处理进度。</text></view>
+  <view wx:else class="request-list">
+    <view wx:for="{{requests}}" wx:key="id" class="request-row">
+      <view class="request-copy"><text class="request-title">{{item.typeText}}</text><text class="muted">{{item.reviewNote || '等待管理员处理'}}</text></view>
+      <view class="request-status"><text class="status">{{item.statusText}}</text><button wx:if="{{item.canWithdraw}}" size="mini" data-id="{{item.id}}" bindtap="withdraw">撤回</button></view>
     </view>
   </view>
 </view>

@@ -1,1 +1,9 @@
-radio-group { display: flex; gap: 28rpx; margin: 18rpx 0 28rpx; }
+.register-page { max-width: 920rpx; margin: 0 auto; }
+.form-card { padding: 34rpx; }
+.type-segment { display: flex; gap: 14rpx; margin: 0 0 30rpx; }
+.type-option { display: flex; min-height: 88rpx; flex: 1; align-items: center; justify-content: center; gap: 8rpx; color: var(--muted); background: var(--canvas); border: 2rpx solid var(--line); border-radius: var(--radius-control); }
+.type-option-active { color: var(--action); background: var(--action-soft); border-color: var(--action); font-weight: 650; }
+.picker-field { display: flex; align-items: center; color: var(--ink-soft); }
+.photo-row { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; padding: 24rpx 0 30rpx; }
+.photo-button { display: flex; flex: 0 0 auto; align-items: center; gap: 8rpx; min-height: 76rpx; padding: 0 22rpx; color: var(--action); background: var(--action-soft); border-radius: 18rpx; font-size: 27rpx; }
+.submit-button { width: 100%; }

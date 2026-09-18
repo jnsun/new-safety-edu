@@ -1,16 +1,19 @@
 <view class="page exam-page">
   <view wx:if="{{loading}}" class="state-panel">
+    <view class="state-icon"><t-loading size="48rpx" /></view>
     <text class="state-title">正在进入考试</text>
     <text class="state-copy">正在恢复本次考试和已保存答案，请稍候。</text>
   </view>
 
   <view wx:elif="{{!attempt && error}}" class="state-panel state-error">
+    <view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view>
     <text class="state-title">考试加载失败</text>
     <text class="state-copy">{{error}}</text>
     <button class="secondary retry-button" bindtap="loadAttempt">重新加载</button>
   </view>
 
   <view wx:elif="{{attempt && !questions.length}}" class="state-panel">
+    <view class="state-icon"><t-icon name="file-unknown" size="48rpx" /></view>
     <text class="state-title">试卷暂无题目</text>
     <text class="state-copy">请联系培训管理员检查试卷配置。</text>
   </view>

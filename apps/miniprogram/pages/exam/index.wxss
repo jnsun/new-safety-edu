@@ -16,11 +16,11 @@
 .progress-copy { margin-top: 22rpx; color: var(--muted); font-size: 28rpx; line-height: 1.4; }
 .exam-head .progress { margin: 12rpx 0 0; }
 
-.inline-error { display: flex; align-items: center; justify-content: space-between; gap: 22rpx; padding: 22rpx 24rpx; margin-bottom: 22rpx; color: var(--danger); background: var(--surface); border-left: 6rpx solid var(--danger); font-size: 28rpx; line-height: 1.5; }
+.inline-error { display: flex; align-items: center; justify-content: space-between; gap: 22rpx; padding: 22rpx 24rpx; margin-bottom: 22rpx; color: var(--danger); background: var(--danger-soft); border: 1rpx solid var(--danger); border-radius: var(--radius-control); font-size: 28rpx; line-height: 1.5; }
 .inline-error text { min-width: 0; flex: 1; }
 .retry-save { flex: 0 0 auto; min-height: 88rpx; padding: 0 24rpx; margin: 0; color: var(--danger); background: var(--surface); border: 2rpx solid var(--danger); border-radius: var(--radius-control); font-size: 28rpx; }
 
-.question-surface, .review-surface { min-height: 700rpx; padding: 38rpx 34rpx; box-sizing: border-box; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.question-surface, .review-surface { min-height: 700rpx; padding: 38rpx 34rpx; box-sizing: border-box; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
 .question-type { display: block; color: var(--action); font-size: 28rpx; line-height: 1.4; font-weight: 650; }
 .question-title { display: block; margin-top: 14rpx; font-size: 38rpx; line-height: 1.55; font-weight: 700; }
 .question-tip { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.45; }

@@ -1,10 +1,12 @@
 <view class="page signature-page">
   <view wx:if="{{loading}}" class="state-panel">
+    <view class="state-icon"><t-loading size="48rpx" /></view>
     <text class="state-title">正在读取培训记录</text>
     <text class="state-copy">请稍候，签字前会展示服务端保存的学习和考试结果。</text>
   </view>
 
   <view wx:elif="{{error && !record}}" class="state-panel state-error">
+    <view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view>
     <text class="state-title">培训记录加载失败</text>
     <text class="state-copy">{{error}}</text>
     <button class="secondary retry-button" bindtap="load">重新加载</button>
@@ -12,7 +14,7 @@
 
   <block wx:elif="{{record}}">
     <view class="summary-panel">
-      <text class="eyebrow">签字确认信息</text>
+      <text class="summary-title">培训记录确认</text>
       <text class="record-title">{{record.batch.name}}</text>
       <text class="record-type">{{record.typeText}}</text>
       <view class="facts">
@@ -23,13 +25,14 @@
     </view>
 
     <view wx:if="{{signedAtText}}" class="submitted-panel">
-      <text class="submitted-kicker">正式签字已提交</text>
+      <view class="submitted-title"><t-icon name="check-circle" size="40rpx" /><text>正式签字已提交</text></view>
       <text class="submitted-time">{{signedAtText}}</text>
       <text class="submitted-copy">该签字已绑定本次培训记录，本人不能覆盖或重新提交。</text>
       <button class="secondary record-button" bindtap="back">返回培训记录</button>
     </view>
 
     <view wx:elif="{{!canSign}}" class="state-panel">
+      <view class="state-icon"><t-icon name="lock-on" size="48rpx" /></view>
       <text class="state-title">当前不能提交签字</text>
       <text class="state-copy">请返回任务详情，根据服务端显示的下一步继续完成培训。</text>
       <button class="secondary retry-button" bindtap="load">刷新状态</button>

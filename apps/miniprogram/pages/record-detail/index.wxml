@@ -1,9 +1,11 @@
 <view class="page detail-page">
   <view wx:if="{{loading}}" class="state-panel">
+    <view class="state-icon"><t-loading size="48rpx" /></view>
     <text class="state-title">正在加载完整记录</text>
     <text class="state-copy">请稍候。</text>
   </view>
   <view wx:elif="{{error}}" class="state-panel state-error">
+    <view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view>
     <text class="state-title">培训记录加载失败</text>
     <text class="state-copy">{{error}}</text>
     <button class="secondary retry-button" bindtap="load">重新加载</button>
@@ -19,7 +21,7 @@
 
     <view class="fact-section">
       <view class="section-heading">
-        <text class="section-number">01</text>
+        <view class="section-icon"><t-icon name="book-open" size="36rpx" /></view>
         <view><text class="section-title">学习记录</text><text class="section-copy">实际课件版本与完成时间</text></view>
       </view>
       <view wx:if="{{!record.coursewares.length}}" class="inline-empty">本次培训没有在线课件记录。</view>
@@ -31,7 +33,7 @@
 
     <view class="fact-section">
       <view class="section-heading">
-        <text class="section-number">02</text>
+        <view class="section-icon"><t-icon name="task-checked" size="36rpx" /></view>
         <view><text class="section-title">考试记录</text><text class="section-copy">最终一次考试事实</text></view>
       </view>
       <view class="fact-row"><text class="fact-label">考试次数</text><text class="fact-value">{{record.examAttemptText}}</text></view>
@@ -41,7 +43,7 @@
 
     <view class="fact-section">
       <view class="section-heading">
-        <text class="section-number">03</text>
+        <view class="section-icon"><t-icon name="edit-2" size="36rpx" /></view>
         <view><text class="section-title">本人签字</text><text class="section-copy">与本次培训记录绑定的正式签字</text></view>
       </view>
       <view class="fact-row"><text class="fact-label">签字状态</text><text class="fact-value">{{record.signatureText}}</text></view>
@@ -50,7 +52,7 @@
 
     <view class="fact-section">
       <view class="section-heading">
-        <text class="section-number">04</text>
+        <view class="section-icon"><t-icon name="location" size="36rpx" /></view>
         <view><text class="section-title">项目现场确认</text><text class="section-copy">仅记录到场和现场交底事实</text></view>
       </view>
       <view class="fact-row"><text class="fact-label">确认状态</text><text class="fact-value">{{record.projectConfirmationText}}</text></view>

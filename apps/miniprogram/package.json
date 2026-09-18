@@ -1,0 +1,8 @@
+{
+  "name": "@safety/miniprogram",
+  "private": true,
+  "version": "0.1.0",
+  "dependencies": {
+    "tdesign-miniprogram": "1.16.1"
+  }
+}

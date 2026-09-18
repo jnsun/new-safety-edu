@@ -1,5 +1,6 @@
 <view class="page">
-  <view class="card">
+  <view class="card pending-card">
+    <view class="pending-icon"><t-icon name="time" size="48rpx" /></view>
     <text class="title">人员身份确认与微信绑定</text>
     <text class="status">{{statusText}}</text>
     <text wx:if="{{status === 'pending'}}" class="muted">手机号已经验证。审核前不会获得人员身份或任何管理权限。</text>

@@ -1,53 +1,236 @@
-<view class="page">
-  <view class="card">
-    <text class="title">个人信息</text>
-    <block wx:if="{{person}}">
-      <view class="photo-wrap"><image wx:if="{{photoPath}}" class="photo" src="{{photoPath}}" mode="aspectFill"/><view wx:else class="photo placeholder">暂无照片</view><button class="mini-button" bindtap="choosePhoto">修改照片</button></view>
-      <view class="row"><text>姓名</text><text>{{person.name}}</text></view>
-      <view class="row"><text>人员类型</text><text>{{person.typeText}}</text></view>
-      <view class="row"><text>手机号</text><text>{{person.phone}}</text></view>
-      <view class="row"><text>身份证</text><view><text>{{person.nationalId || person.nationalIdMasked || '待补录'}}</text><button wx:if="{{person.nationalIdMasked && !person.nationalId}}" class="mini-button" bindtap="revealNationalId">查看完整号码</button></view></view>
-      <view class="row"><text>所属组织</text><text>{{person.organizationText}}</text></view>
-      <button class="secondary" loading="{{exporting}}" bindtap="exportMyArchive">下载本人资料文件</button>
-    </block>
-    <text wx:else class="muted">人员档案尚未绑定或正在审核。</text>
+<view class="profile-page">
+  <view wx:if="{{loading}}" class="state-panel profile-state">
+    <view class="state-icon"><t-loading size="48rpx" /></view>
+    <text class="state-title">正在加载个人信息</text>
+    <text class="state-copy">正在读取档案、权限和证书，请稍候。</text>
   </view>
-  <view wx:if="{{challengePoints}}" class="card points-summary">
-    <view><text class="title">安全积分</text><text class="muted">积分仅来自日常安全挑战</text></view>
-    <view class="points-numbers"><view><text class="points-number">{{challengePoints.total}}</text><text class="muted">累计</text></view><view><text class="points-number">{{challengePoints.monthPoints}}</text><text class="muted">本月</text></view></view>
-    <view class="row"><button class="secondary" bindtap="openChallenge">今日挑战</button><button class="secondary" bindtap="openLeaderboard">查看排行榜</button></view>
+
+  <view wx:elif="{{loadError}}" class="state-panel state-error profile-state">
+    <view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view>
+    <text class="state-title">个人信息加载失败</text>
+    <text class="state-copy">{{loadError}}</text>
+    <button class="secondary retry-button" bindtap="load">重新加载</button>
   </view>
-  <view wx:if="{{security}}" class="card">
-    <text class="title">账号安全</text>
-    <view class="row"><text>登录方式</text><text>{{security.methodText}}</text></view>
-    <view class="row"><text>当前有效设备</text><text>{{security.sessions.length}}</text></view>
-    <block wx:if="{{security.roles.length}}">
-      <view class="course" wx:for="{{security.roles}}" wx:key="id"><text>{{item.text}}</text></view>
-    </block>
-    <text wx:else class="muted">普通人员权限</text>
-    <input class="field" type="number" maxlength="11" value="{{newPhone}}" bindinput="setNewPhone" placeholder="输入新手机号"/>
-    <view class="row"><input class="field" type="number" maxlength="6" value="{{phoneCode}}" bindinput="setPhoneCode" placeholder="短信验证码"/><button class="mini-button" bindtap="sendPhoneCode">发送验证码</button></view>
-    <button class="secondary" loading="{{phoneChanging}}" bindtap="confirmPhone">验证并修改手机号</button>
-    <text class="muted">更换微信：请退出当前账号，使用新微信重新进入小程序，并按提示完成手机号验证。</text>
-    <button class="secondary logout" bindtap="logoutAll">退出全部设备</button>
-  </view>
-  <view wx:if="{{person}}" class="card">
-    <text class="title">我的证书</text>
-    <view wx:if="{{!certificates.length}}" class="muted">暂无人员证书记录</view>
-    <view wx:for="{{certificates}}" wx:key="id" class="course"><view><text>{{item.name}}</text><text class="muted small">{{item.issuingAuthority || '未填写发证机构'}} · {{item.certificateNo || '未填写编号'}}</text></view><text class="{{item.expired ? 'error' : 'success'}}">{{item.expiresText}}</text></view>
-  </view>
-  <view wx:if="{{person}}" class="card">
-    <text class="title">申请调换部门</text>
-    <picker mode="selector" range="{{organizations}}" range-key="name" value="{{targetIndex}}" bindchange="chooseDepartment"><view class="field">{{targetIndex >= 0 ? organizations[targetIndex].name : '选择目标部门'}}</view></picker>
-    <textarea class="field" value="{{transferReason}}" bindinput="setTransferReason" placeholder="填写调换原因"/>
-    <button class="primary" bindtap="requestTransfer" loading="{{transferring}}">提交部门负责人审批</button>
-  </view>
-  <view class="card">
-    <text class="title">我的</text><text class="muted">账号绑定、提醒和培训管理入口</text>
-    <button wx:if="{{canManage}}" class="primary" bindtap="manage">培训管理</button>
-    <button class="secondary" bindtap="subscribe">开启培训提醒</button>
-    <button class="secondary" bindtap="changeRequest">其他资料/关系变更申请</button>
-    <button class="secondary logout" bindtap="logout">退出当前设备</button>
-  </view>
+
+  <block wx:else>
+    <view wx:if="{{person}}" class="profile-card profile-summary">
+      <view class="profile-identity">
+        <view class="avatar-wrap">
+          <image wx:if="{{photoPath}}" class="profile-avatar" src="{{photoPath}}" mode="aspectFill" />
+          <view wx:else class="profile-avatar avatar-placeholder"><t-icon name="user" size="60rpx" /></view>
+          <button class="photo-action" bindtap="choosePhoto" aria-label="修改个人照片">
+            <t-icon name="camera" size="27rpx" />
+            <text>修改照片</text>
+          </button>
+        </view>
+        <view class="identity-main">
+          <view class="identity-title-line">
+            <text class="identity-name">{{person.name}}</text>
+            <text class="type-pill">{{person.typeText}}</text>
+          </view>
+          <text class="identity-organization">{{person.organizationText}}</text>
+        </view>
+      </view>
+
+      <view class="profile-divider"></view>
+      <view class="detail-row">
+        <text class="detail-label">手机号</text>
+        <text class="detail-value">{{security.verifiedPhoneMasked || person.phoneMasked}}</text>
+      </view>
+      <view class="profile-divider"></view>
+      <view class="detail-row">
+        <text class="detail-label">身份证</text>
+        <text class="detail-value detail-value-grow">{{person.nationalId || person.nationalIdMasked || '待补录'}}</text>
+        <button wx:if="{{person.nationalIdMasked && !person.nationalId}}" class="row-tail inline-link" bindtap="revealNationalId">
+          <text>验证后查看</text><t-icon class="row-chevron" name="chevron-right" size="34rpx" />
+        </button>
+      </view>
+    </view>
+
+    <view wx:if="{{challengePoints}}" class="points-card">
+      <view class="card-heading-button" role="button" tabindex="0" hover-class="tap-active" bindtap="openLeaderboard">
+        <view class="round-icon round-icon-strong"><t-icon name="star" size="44rpx" /></view>
+        <view class="heading-copy">
+          <text class="card-heading">安全积分</text>
+          <text class="card-subtitle">积分来自每日安全挑战</text>
+        </view>
+        <t-icon class="row-chevron" name="chevron-right" size="36rpx" />
+      </view>
+      <view class="points-panel">
+        <view class="points-column">
+          <text class="points-label">累计积分</text>
+          <text class="points-value">{{challengePoints.total}}</text>
+        </view>
+        <view class="points-separator"></view>
+        <view class="points-column">
+          <text class="points-label">本月积分</text>
+          <text class="points-value">{{challengePoints.monthPoints}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{challengePoints}}" class="profile-card action-list-card">
+      <view class="profile-list-row" role="button" tabindex="0" hover-class="tap-active" bindtap="openChallenge">
+        <view class="round-icon"><t-icon name="task" size="39rpx" /></view>
+        <view class="row-copy">
+          <text class="row-title">每日安全挑战</text>
+          <text class="row-subtitle">今日已获 {{challengePoints.todayPoints}} 分</text>
+        </view>
+        <t-icon class="row-chevron" name="chevron-right" size="36rpx" />
+      </view>
+      <view class="list-divider"></view>
+      <view class="profile-list-row" role="button" tabindex="0" hover-class="tap-active" bindtap="openLeaderboard">
+        <view class="round-icon"><t-icon name="star" size="39rpx" /></view>
+        <view class="row-copy">
+          <text class="row-title">安全积分排行</text>
+          <text class="row-subtitle">查看我的排名</text>
+        </view>
+        <t-icon class="row-chevron" name="chevron-right" size="36rpx" />
+      </view>
+    </view>
+
+    <view class="profile-section-title">证书与授权</view>
+
+    <view wx:if="{{certificates.length}}">
+      <view wx:for="{{certificates}}" wx:key="id" class="profile-card certificate-card">
+        <view class="certificate-head">
+          <view class="round-icon"><t-icon name="certificate" size="40rpx" /></view>
+          <text class="card-heading certificate-title">{{item.displayName}}</text>
+          <text class="status-pill {{item.expired ? 'status-pill-danger' : ''}}">{{item.expired ? '已到期' : '有效'}}</text>
+        </view>
+        <view class="certificate-detail">
+          <view class="certificate-row"><text class="certificate-label">证书名称</text><text class="certificate-value">{{item.displayName}}</text></view>
+          <view class="certificate-row"><text class="certificate-label">证书编号</text><text class="certificate-value">{{item.displayNumber}}</text></view>
+          <view class="certificate-row"><text class="certificate-label">发证机构</text><text class="certificate-value">{{item.displayIssuer}}</text></view>
+          <view class="certificate-row"><text class="certificate-label">到期时间</text><text class="certificate-value">{{item.expiresText}}</text></view>
+        </view>
+      </view>
+    </view>
+    <view wx:else class="profile-card compact-empty">
+      <view class="round-icon"><t-icon name="certificate" size="40rpx" /></view>
+      <view class="row-copy"><text class="row-title">人员证书</text><text class="row-subtitle">暂无证书记录</text></view>
+    </view>
+
+    <view wx:if="{{security}}" class="profile-card role-card">
+      <view class="certificate-head">
+        <view class="round-icon"><t-icon name="user-circle" size="40rpx" /></view>
+        <text class="card-heading certificate-title">当前管理角色</text>
+        <text class="status-pill">{{security.roles.length ? '有效' : '普通人员'}}</text>
+      </view>
+      <view wx:if="{{security.roles.length}}" class="role-detail">
+        <view wx:for="{{security.roles}}" wx:key="id" class="role-entry">
+          <view class="certificate-row"><text class="certificate-label">角色名称</text><text class="certificate-value">{{item.nameText}}</text></view>
+          <view class="certificate-row"><text class="certificate-label">授权范围</text><text class="certificate-value">{{item.scopeText}}</text></view>
+        </view>
+      </view>
+      <view wx:else class="role-detail">
+        <view class="certificate-row"><text class="certificate-label">角色名称</text><text class="certificate-value">普通人员</text></view>
+        <view class="certificate-row"><text class="certificate-label">授权范围</text><text class="certificate-value">本人资料与培训</text></view>
+      </view>
+    </view>
+
+    <view class="profile-section-title">资料与服务</view>
+    <view class="profile-card action-list-card">
+      <view class="profile-list-row" role="button" tabindex="0" hover-class="tap-active" bindtap="toggleTransferForm">
+        <view class="round-icon"><t-icon name="swap" size="39rpx" /></view>
+        <view class="row-copy"><text class="row-title">申请调换部门</text><text class="row-subtitle">提交申请，等待审核</text></view>
+        <t-icon class="row-chevron {{showTransferForm ? 'chevron-open' : ''}}" name="chevron-right" size="36rpx" />
+      </view>
+      <view wx:if="{{showTransferForm}}" class="inline-form">
+        <picker mode="selector" range="{{organizations}}" range-key="name" value="{{targetIndex}}" bindchange="chooseDepartment">
+          <view class="field">{{targetIndex >= 0 ? organizations[targetIndex].name : '选择目标部门'}}</view>
+        </picker>
+        <textarea class="field transfer-reason" value="{{transferReason}}" bindinput="setTransferReason" placeholder="填写调换原因" />
+        <button class="primary inline-submit" bindtap="requestTransfer" loading="{{transferring}}">提交部门负责人审批</button>
+      </view>
+      <view class="list-divider"></view>
+      <view class="profile-list-row" role="button" tabindex="0" hover-class="tap-active" bindtap="changeRequest">
+        <view class="round-icon"><t-icon name="file-paste" size="39rpx" /></view>
+        <view class="row-copy"><text class="row-title">资料与关系变更申请</text><text class="row-subtitle">姓名、身份及人员关系等变更</text></view>
+        <t-icon class="row-chevron" name="chevron-right" size="36rpx" />
+      </view>
+      <view wx:if="{{canManage}}" class="list-divider"></view>
+      <view wx:if="{{canManage}}" class="profile-list-row" role="button" tabindex="0" hover-class="tap-active" bindtap="manage">
+        <view class="round-icon"><t-icon name="task" size="39rpx" /></view>
+        <view class="row-copy"><text class="row-title">培训管理</text><text class="row-subtitle">查看培训记录与学习情况</text></view>
+        <t-icon class="row-chevron" name="chevron-right" size="36rpx" />
+      </view>
+      <view class="list-divider"></view>
+      <view class="profile-list-row" role="button" tabindex="0" hover-class="tap-active" bindtap="subscribe">
+        <view class="round-icon"><t-icon name="notification" size="39rpx" /></view>
+        <view class="row-copy"><text class="row-title">微信订阅提醒</text><text class="row-subtitle">接收培训、考试等重要通知</text></view>
+        <view class="row-tail"><text class="row-action">开启提醒</text><t-icon class="row-chevron" name="chevron-right" size="36rpx" /></view>
+      </view>
+    </view>
+
+    <view class="profile-section-title">账号安全</view>
+    <view wx:if="{{security}}" class="profile-card security-card">
+      <view class="security-row">
+        <view class="round-icon"><t-icon name="logo-wechat-stroke" size="40rpx" /></view>
+        <view class="row-copy"><text class="row-title">当前登录方式</text><text class="row-subtitle">{{security.methodText}}</text></view>
+      </view>
+      <view class="list-divider"></view>
+      <view class="profile-list-row security-action" role="button" tabindex="0" hover-class="tap-active" bindtap="toggleSessions">
+        <view class="round-icon"><t-icon name="secured" size="39rpx" /></view>
+        <view class="row-copy"><text class="row-title">有效设备</text><text class="row-subtitle">{{security.sessions.length}} 台</text></view>
+        <t-icon class="row-chevron {{showSessions ? 'chevron-open' : ''}}" name="chevron-right" size="36rpx" />
+      </view>
+      <view wx:if="{{showSessions}}" class="session-list">
+        <view wx:if="{{!security.sessions.length}}" class="session-empty">暂无有效设备</view>
+        <view wx:for="{{security.sessions}}" wx:key="id" class="session-row">
+          <view class="session-copy"><text class="session-title">{{item.label}}</text><text class="session-meta">最近使用：{{item.lastUsedText}}</text></view>
+          <text wx:if="{{item.current}}" class="current-device">当前设备</text>
+          <button wx:else class="session-revoke" data-id="{{item.id}}" loading="{{revokingSessionId === item.id}}" bindtap="revokeSession">退出</button>
+        </view>
+      </view>
+      <view class="list-divider"></view>
+      <view class="profile-list-row security-action" role="button" tabindex="0" hover-class="tap-active" bindtap="togglePhoneForm">
+        <view class="round-icon"><t-icon name="mobile" size="39rpx" /></view>
+        <view class="row-copy">
+          <text class="row-title">手机号</text>
+          <text class="row-subtitle">{{security.verifiedPhoneMasked || person.phoneMasked}}</text>
+          <text class="row-helper">通过短信验证码验证后修改</text>
+        </view>
+        <view class="row-tail"><text class="row-action">修改手机号</text><t-icon class="row-chevron {{showPhoneForm ? 'chevron-open' : ''}}" name="chevron-right" size="36rpx" /></view>
+      </view>
+      <view wx:if="{{showPhoneForm}}" class="inline-form phone-form">
+        <input class="field" type="number" maxlength="11" value="{{newPhone}}" bindinput="setNewPhone" placeholder="输入新手机号" />
+        <view class="code-row">
+          <input class="field code-field" type="number" maxlength="6" value="{{phoneCode}}" bindinput="setPhoneCode" placeholder="短信验证码" />
+          <button class="code-button" bindtap="sendPhoneCode">发送验证码</button>
+        </view>
+        <button class="primary inline-submit" loading="{{phoneChanging}}" bindtap="confirmPhone">验证并修改手机号</button>
+      </view>
+    </view>
+
+    <view class="profile-section-title">本人资料</view>
+    <view class="profile-card archive-card">
+      <view class="profile-list-row archive-action" role="button" tabindex="0" hover-class="tap-active" bindtap="exportMyArchive">
+        <view class="round-icon"><t-loading wx:if="{{exporting}}" size="38rpx" /><t-icon wx:else name="file-paste" size="39rpx" /></view>
+        <view class="row-copy"><text class="row-title">下载本人资料文件</text></view>
+        <t-icon class="row-chevron" name="chevron-right" size="36rpx" />
+      </view>
+      <text class="archive-description">可包含本人照片、签字、证书和培训附件。文件限时、仅可读取一次。</text>
+    </view>
+
+    <view class="profile-card action-list-card logout-card">
+      <view class="profile-list-row" role="button" tabindex="0" hover-class="tap-active" bindtap="logout">
+        <view class="round-icon"><t-icon name="secured" size="39rpx" /></view>
+        <view class="row-copy"><text class="row-title">退出当前设备</text></view>
+        <t-icon class="row-chevron" name="chevron-right" size="36rpx" />
+      </view>
+      <view class="list-divider"></view>
+      <view class="profile-list-row danger-row" role="button" tabindex="0" hover-class="tap-active" bindtap="logoutAll">
+        <view class="round-icon round-icon-danger"><t-icon name="secured" size="39rpx" /></view>
+        <view class="row-copy"><text class="row-title">退出全部设备</text></view>
+        <t-icon class="row-chevron" name="chevron-right" size="36rpx" />
+      </view>
+    </view>
+
+    <view class="profile-info-strip">
+      <t-icon class="profile-info-icon" name="info-circle" size="42rpx" />
+      <text>完整身份证需微信重新认证后短时查看</text>
+    </view>
+  </block>
 </view>
 <environment-badge />

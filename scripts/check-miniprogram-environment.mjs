@@ -21,7 +21,9 @@ assert.match(apiSource, /getMiniProgramRequestHeaders/);
 assert.match(apiSource, /resolveApiUrl/);
 
 const root = new URL("../apps/miniprogram/", import.meta.url);
-const files = (await readdir(root, { recursive: true })).filter((name) => /\.(js|wxml|json)$/.test(name));
+const files = (await readdir(root, { recursive: true }))
+  .map((name) => name.replaceAll("\\", "/"))
+  .filter((name) => !name.startsWith("node_modules/") && !name.startsWith("miniprogram_npm/") && /\.(js|wxml|json)$/.test(name));
 const domainFiles = [];
 for (const name of files) {
   const normalized = name.replaceAll("\\", "/");

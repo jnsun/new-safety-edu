@@ -5,20 +5,23 @@
   </view>
 
   <view wx:if="{{loading}}" class="state-panel">
+    <view class="state-icon"><t-loading size="48rpx" /></view>
     <text class="state-title">正在加载培训记录</text>
     <text class="state-copy">请稍候。</text>
   </view>
   <view wx:elif="{{error}}" class="state-panel state-error">
+    <view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view>
     <text class="state-title">培训记录加载失败</text>
     <text class="state-copy">{{error}}</text>
     <button class="secondary retry-button" bindtap="load">重新加载</button>
   </view>
   <view wx:elif="{{!records.length}}" class="state-panel">
+    <view class="state-icon"><t-icon name="file-paste" size="48rpx" /></view>
     <text class="state-title">暂无培训记录</text>
     <text class="state-copy">完成培训或提交签字后，记录会显示在这里。</text>
   </view>
 
-  <button wx:for="{{records}}" wx:key="id" class="record-item" data-id="{{item.id}}" bindtap="open">
+  <view wx:for="{{records}}" wx:key="id" class="record-item" aria-role="button" hover-class="tap-active" data-id="{{item.id}}" bindtap="open">
     <view class="record-head">
       <view class="record-heading-copy">
         <text class="record-title">{{item.batch.name}}</text>
@@ -32,7 +35,7 @@
       <view class="fact-row"><text class="fact-label">考试结果</text><text class="fact-value {{item.passClass}}">{{item.passText}}</text></view>
       <view class="fact-row"><text class="fact-label">本人签字</text><text class="fact-value">{{item.signatureText}}</text></view>
     </view>
-    <text class="detail-link">查看完整记录</text>
-  </button>
+    <view class="detail-link"><text>查看完整记录</text><t-icon name="chevron-right" size="32rpx" /></view>
+  </view>
 </view>
 <environment-badge />

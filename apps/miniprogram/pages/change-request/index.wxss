@@ -1,1 +1,12 @@
-radio-group label { display: block; margin: 18rpx 0; }
+.request-card { padding: 34rpx; }
+.request-types { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14rpx; margin-bottom: 28rpx; }
+.request-type { display: flex; min-height: 90rpx; align-items: center; gap: 8rpx; padding: 14rpx 18rpx; box-sizing: border-box; color: var(--muted); background: var(--canvas); border: 2rpx solid var(--line); border-radius: 18rpx; font-size: 27rpx; }
+.request-type-active { color: var(--action); background: var(--action-soft); border-color: var(--action); font-weight: 650; }
+.attachment-button { width: 100%; gap: 10rpx; }
+.request-list { overflow: hidden; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.request-row { display: flex; align-items: flex-start; gap: 18rpx; padding: 28rpx; border-bottom: 1rpx solid var(--line); }
+.request-row:last-child { border-bottom: 0; }
+.request-copy { min-width: 0; flex: 1; }
+.request-title { display: block; margin-bottom: 8rpx; font-size: 30rpx; line-height: 1.4; font-weight: 650; }
+.request-status { flex: 0 0 auto; text-align: right; }
+.request-status button { display: block; margin-right: 0; margin-left: auto; }

@@ -30,8 +30,9 @@ assert.match(componentTemplate, /bindtap="confirmBlockReached"/, "到达内容�
 assert.match(componentTemplate, /\{\{currentUnit\.title\}\}/, "结构化课件必须直接渲染唯一当前单元");
 assert.match(componentTemplate, /\{\{currentBlock\.title\}\}/, "结构化课件必须直接渲染唯一当前内容项");
 assert.match(componentTemplate, /bindtap="showPreviousBlock"/, "结构化课件必须可以返回上一项");
-assert.match(componentTemplate, /disabled="\{\{!canContinue\}\}"/, "未完成互动或无法识别内容时不得继续");
-assert.match(componentStyle, /\.continue-button\[disabled\]/, "禁用的继续按钮必须有清晰状态");
+assert.match(componentTemplate, /aria-disabled="\{\{!canContinue\}\}"/, "未完成互动或无法识别内容时不得继续");
+assert.match(componentTemplate, /!canContinue \? 'control-disabled'/, "继续操作必须根据学习状态显示禁用样式");
+assert.match(componentStyle, /\.continue-button\.control-disabled/, "禁用的继续按钮必须有清晰状态");
 assert.match(pageSource, /persistResume\(progressPercent, detail\.blockKey\)/, "续学位置必须保存 blockKey");
 assert.match(pageSource, /Math\.max\([^)]*progressPercent/, "结构化续学进度必须单调递增");
 assert.match(pageSource, /detail\.isLast[\s\S]*recordReachedEnd\(\)/, "只有显式到达最后内容块才能记录末尾证据");

@@ -132,6 +132,12 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  apps/miniprogram:
+    dependencies:
+      tdesign-miniprogram:
+        specifier: 1.16.1
+        version: 1.16.1
+
   packages/contracts:
     dependencies:
       zod:
@@ -1844,6 +1850,9 @@ packages:
   tar-stream@2.2.0:
     resolution: {integrity: sha512-ujeqbceABgwMZxEJnk2HDY2DlnUZ+9oEcb1KzTVfYHio0UE6dG71n60d8D2I4qNvleWrrXpmjpt7vZeF1LnMZQ==}
     engines: {node: '>=6'}
+
+  tdesign-miniprogram@1.16.1:
+    resolution: {integrity: sha512-exdLrz9qAYXuGSFWugtiiXMbE+sdMzDwZC1yrDnsUepJLoMFp2SFMPr7l1eFihraAneDRV4qntiarnD5owNhNg==}
 
   thread-stream@4.2.0:
     resolution: {integrity: sha512-e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ==}
@@ -3799,6 +3808,8 @@ snapshots:
       fs-constants: 1.0.0
       inherits: 2.0.4
       readable-stream: 3.6.2
+
+  tdesign-miniprogram@1.16.1: {}
 
   thread-stream@4.2.0:
     dependencies:

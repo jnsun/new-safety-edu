@@ -23,7 +23,9 @@ for (const page of pages) {
 
 for (const item of app.tabBar?.list || []) assert.equal(pages.has(item.pagePath), true, `Tab 页面未在 app.json 声明：${item.pagePath}`);
 
-const files = (await readdir(root, { recursive: true })).map((name) => name.replaceAll("\\", "/"));
+const files = (await readdir(root, { recursive: true }))
+  .map((name) => name.replaceAll("\\", "/"))
+  .filter((name) => !name.startsWith("node_modules/") && !name.startsWith("miniprogram_npm/"));
 for (const filename of files.filter((name) => name.endsWith(".json"))) JSON.parse(await read(filename));
 for (const filename of files.filter((name) => name.endsWith(".js"))) new vm.Script(await read(filename), { filename });
 

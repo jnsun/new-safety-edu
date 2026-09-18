@@ -1,11 +1,17 @@
 <view class="page">
-  <text class="title">培训管理</text>
-  <text class="muted">只显示你有权管理的项目和人员</text>
-  <text wx:if="{{error}}" class="error">{{error}}</text>
+  <view class="page-head"><text class="page-title">培训管理</text><text class="page-description">只显示你有权管理的项目、人员和审核申请</text></view>
+  <view wx:if="{{loading}}" class="state-panel"><view class="state-icon"><t-loading size="48rpx" /></view><text class="state-title">正在加载管理事项</text><text class="state-copy">正在读取未完成人员和待审核申请。</text></view>
+  <view wx:elif="{{error}}" class="state-panel state-error"><view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view><text class="state-title">管理事项加载失败</text><text class="state-copy">{{error}}</text><button class="secondary retry-button" bindtap="onShow">重新加载</button></view>
 
-  <view class="card">
-    <text class="subtitle">未完成人员</text>
+  <block wx:else>
+  <view class="screen-tabs">
+    <view class="screen-tab {{managementTab === 'assignments' ? 'screen-tab-active' : ''}}" data-tab="assignments" bindtap="switchManagementTab">培训跟进（{{assignments.length}}）</view>
+    <view class="screen-tab {{managementTab === 'requests' ? 'screen-tab-active' : ''}}" data-tab="requests" bindtap="switchManagementTab">申请审核（{{requests.length}}）</view>
+  </view>
+  <view wx:if="{{managementTab === 'assignments'}}" class="card management-section">
+    <view class="management-title"><view class="management-icon"><t-icon name="user-time" size="34rpx" /></view><text class="subtitle">未完成人员</text></view>
     <input class="field" placeholder="解锁前填写原因" bindinput="reason"/>
+    <view wx:if="{{!assignments.length}}" class="empty">当前没有未完成培训人员</view>
     <view wx:for="{{assignments}}" wx:key="id" class="list-item">
       <view class="row"><text>{{item.person.name}} · {{item.batch.name}}</text><text class="status">{{item.statusText}}</text></view>
       <text class="muted">进度 {{item.progress.completed}}/{{item.progress.total}} · 考试 {{item.attemptCount}} 次</text>
@@ -17,8 +23,8 @@
     </view>
   </view>
 
-  <view class="card">
-    <text class="subtitle">待审核申请</text>
+  <view wx:if="{{managementTab === 'requests'}}" class="card management-section">
+    <view class="management-title"><view class="management-icon"><t-icon name="task" size="34rpx" /></view><text class="subtitle">待审核申请</text></view>
     <textarea class="field" placeholder="审核意见" value="{{reviewNote}}" bindinput="note"/>
     <view wx:if="{{!requests.length}}" class="empty">当前没有待审核申请</view>
     <view wx:for="{{requests}}" wx:key="id" wx:for-index="index" class="list-item">
@@ -33,7 +39,7 @@
     </view>
   </view>
 
-  <view wx:if="{{activeReview}}" class="card review-panel">
+  <view wx:if="{{managementTab === 'requests' && activeReview}}" class="card review-panel">
     <text class="subtitle">处理身份绑定申请</text>
     <text class="muted">{{activeReview.payload.name}} · {{activeReview.payload.phone}} · {{activeReview.payload.organizationName}}</text>
     <picker range="{{identityActions}}" range-key="label" value="{{actionIndex}}" bindchange="chooseIdentityAction">
@@ -45,5 +51,6 @@
     <textarea class="field" placeholder="请输入审核意见或处理原因" value="{{reviewNote}}" bindinput="note"/>
     <view class="row"><button size="mini" bindtap="closeIdentityReview">取消</button><button size="mini" type="primary" bindtap="submitIdentityReview">确认处理</button></view>
   </view>
+  </block>
 </view>
 <environment-badge />

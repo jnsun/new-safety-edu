@@ -1,14 +1,13 @@
 <view class="page challenge-page">
   <view class="challenge-head">
-    <text class="eyebrow">日常安全挑战</text>
-    <text class="headline">每天几分钟，巩固安全判断</text>
+    <text class="headline">日常安全挑战</text>
     <text class="subhead">答错不扣分，首次答对每题 2 分。挑战不影响正式培训成绩。</text>
   </view>
-  <view wx:if="{{loading}}" class="card state"><text>正在准备今天的题目…</text></view>
-  <view wx:elif="{{error}}" class="card state error"><text>{{error}}</text><button class="secondary" bindtap="retry">重新加载</button></view>
+  <view wx:if="{{loading}}" class="card state"><view class="state-icon"><t-loading size="48rpx" /></view><text>正在准备今天的题目…</text></view>
+  <view wx:elif="{{error}}" class="card state error"><view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view><text>{{error}}</text><button class="secondary" bindtap="retry">重新加载</button></view>
   <view wx:elif="{{attempt && !attempt.totalCount}}" class="card state"><text class="title">今天暂无挑战题</text><text class="muted">管理员启用题目后，这里会自动生成每日挑战。</text></view>
   <view wx:elif="{{attempt && !current}}" class="card complete-card">
-    <text class="complete-mark">✓</text><text class="title">今天的挑战已完成</text>
+    <view class="complete-mark"><t-icon name="check" size="52rpx" color="#ffffff" /></view><text class="title">今天的挑战已完成</text>
     <text class="score">+{{attempt.todayPoints}} 分</text><text class="muted">重复练习不会重复得分，明天再来巩固。</text>
     <button class="primary" bindtap="openLeaderboard">查看积分排行榜</button>
   </view>

@@ -1,6 +1,21 @@
-.error { display: block; color: #d92d20; margin-top: 20rpx; }
-.privacy-note { display: block; margin-top: 12rpx; color: #667085; font-size: 24rpx; text-align: center; }
-.text-button { margin-top: 20rpx; background: transparent; color: #475467; font-size: 26rpx; }
+.bind-intro { padding: 30rpx 6rpx 26rpx; text-align: center; }
+.bind-icon { display: flex; align-items: center; justify-content: center; width: 96rpx; height: 96rpx; margin: 0 auto 22rpx; color: #fff; background: var(--action); border-radius: 30rpx; }
+.bind-intro .page-description { margin-left: auto; margin-right: auto; }
+.bind-steps { display: flex; margin-bottom: 24rpx; }
+.bind-step { position: relative; display: flex; flex: 1; flex-direction: column; align-items: center; gap: 8rpx; color: var(--muted); font-size: 24rpx; }
+.bind-step > text:first-child { display: flex; align-items: center; justify-content: center; width: 48rpx; height: 48rpx; color: var(--muted); background: var(--surface); border: 2rpx solid var(--line); border-radius: 50%; }
+.bind-step::after { content: ''; position: absolute; top: 24rpx; left: calc(50% + 30rpx); right: calc(-50% + 30rpx); height: 2rpx; background: var(--line); }
+.bind-step:last-child::after { display: none; }
+.bind-step-active { color: var(--action); font-weight: 650; }
+.bind-step-active > text:first-child { color: #fff; background: var(--action); border-color: var(--action); }
+.bind-card { padding: 34rpx; }
+.privacy-note { display: block; margin-top: 14rpx; color: var(--muted); font-size: 24rpx; text-align: center; }
+.text-button { margin-top: 20rpx; background: transparent; color: var(--action); font-size: 26rpx; }
 .text-button::after { border: 0; }
-.sms-panel { margin-top: 20rpx; padding-top: 20rpx; border-top: 1rpx solid #eaecf0; }
-.match-note { display: flex; flex-direction: column; gap: 10rpx; margin: 24rpx 0; padding: 20rpx; border-radius: 20rpx; background: #f2f7ff; color: #175cd3; }
+.sms-panel { margin-top: 20rpx; padding-top: 24rpx; border-top: 1rpx solid var(--line); }
+.code-row { display: flex; align-items: stretch; gap: 14rpx; }
+.code-input { min-width: 0; flex: 1; }
+.code-button { flex: 0 0 220rpx; margin-top: 12rpx; }
+.match-note { display: flex; align-items: flex-start; gap: 14rpx; margin: 24rpx 0; padding: 22rpx; border-radius: var(--radius-control); background: var(--action-soft); color: var(--action); }
+.match-note view { min-width: 0; flex: 1; }
+.match-note .muted { margin-top: 6rpx; }

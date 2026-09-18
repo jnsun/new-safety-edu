@@ -15,5 +15,6 @@ var/audit-fallback.ndjson
 var/release-*.tar.gz
 apps/miniprogram/private.config.json
 apps/miniprogram/project.private.config.json
+apps/miniprogram/miniprogram_npm/
 .artifact-work/
 .worktrees/

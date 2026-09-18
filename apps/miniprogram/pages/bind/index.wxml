@@ -1,7 +1,17 @@
 <view class="page">
-  <view class="card">
-    <text class="title">人员身份确认与微信绑定</text>
-    <text class="muted">先验证微信手机号。若后台有唯一匹配的有效人员档案，将自动绑定并进入学习。</text>
+  <view class="bind-intro">
+    <view class="bind-icon"><t-icon name="user-checked" size="48rpx" /></view>
+    <text class="page-title">{{profileRequired ? '补充身份信息' : '确认本人身份'}}</text>
+    <text class="page-description">微信身份只用于登录；管理权限仍由管理员单独授权。</text>
+  </view>
+  <view class="bind-steps">
+    <view class="bind-step bind-step-active"><text>1</text><text>验证手机号</text></view>
+    <view class="bind-step {{profileRequired ? 'bind-step-active' : ''}}"><text>2</text><text>匹配档案</text></view>
+    <view class="bind-step"><text>3</text><text>进入学习</text></view>
+  </view>
+  <view class="card bind-card">
+    <text class="title">{{profileRequired ? '提交人工确认' : '使用微信手机号快速匹配'}}</text>
+    <text class="muted">{{profileRequired ? '后台暂未能安全匹配，请填写姓名和所在部门。' : '若后台存在唯一匹配的有效人员档案，将直接完成绑定。'}}</text>
 
     <block wx:if="{{!profileRequired && !showSmsFallback}}">
       <button class="primary" open-type="getPhoneNumber" bindgetphonenumber="verifyWechatPhone" loading="{{wechatPhoneBusy}}" disabled="{{wechatPhoneBusy}}">使用微信手机号验证并继续</button>
@@ -10,8 +20,10 @@
 
     <block wx:if="{{profileRequired || showSmsFallback}}">
       <view wx:if="{{profileRequired}}" class="match-note">
-        <text>已验证手机号：{{maskedPhone}}</text>
+        <t-icon name="check-circle" size="30rpx" />
+        <view><text>手机号已验证：{{maskedPhone}}</text>
         <text class="muted">后台未能安全匹配人员档案，请补充本人信息并提交审核。</text>
+        </view>
       </view>
       <text class="label">姓名</text>
       <input class="field" maxlength="80" placeholder="请输入真实姓名" value="{{name}}" bindinput="setName"/>
@@ -29,7 +41,7 @@
       <view class="code-row"><input class="field code-input" type="number" maxlength="6" placeholder="6 位验证码" value="{{code}}" bindinput="setCode"/><button class="secondary code-button" loading="{{sending}}" disabled="{{countdown > 0}}" bindtap="sendCode">{{countdown > 0 ? countdown + ' 秒' : '获取验证码'}}</button></view>
       <button class="secondary" loading="{{busy}}" bindtap="submit">短信验证并继续</button>
     </view>
-    <text wx:if="{{error}}" class="error">{{error}}</text>
+    <text wx:if="{{error}}" class="error" aria-live="polite">{{error}}</text>
   </view>
 </view>
 <environment-badge />

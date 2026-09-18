@@ -1,25 +1,24 @@
 .challenge-head { padding: 12rpx 6rpx 30rpx; }
-.eyebrow { display: block; color: var(--action); font-size: 25rpx; font-weight: 700; }
-.headline { display: block; margin-top: 12rpx; font-size: 46rpx; line-height: 1.2; font-weight: 750; }
+.headline { display: block; font-size: 46rpx; line-height: 1.2; font-weight: 750; }
 .subhead { display: block; margin-top: 14rpx; color: var(--muted); font-size: 27rpx; line-height: 1.55; }
 .state, .complete-card { padding: 48rpx 34rpx; text-align: center; }
 .state button { margin-top: 24rpx; }
 .error { color: var(--danger); }
-.complete-mark { display: flex; width: 96rpx; height: 96rpx; margin: 0 auto 24rpx; align-items: center; justify-content: center; color: #fff; background: #30a46c; border-radius: 50%; font-size: 52rpx; font-weight: 700; }
+.complete-mark { display: flex; width: 96rpx; height: 96rpx; margin: 0 auto 24rpx; align-items: center; justify-content: center; background: var(--success); border-radius: 50%; }
 .complete-card .title, .score { display: block; }
 .score { margin: 20rpx 0 8rpx; color: var(--action); font-size: 54rpx; font-weight: 750; }
 .complete-card button { margin-top: 32rpx; }
 .progress-row { display: flex; justify-content: space-between; color: var(--muted); font-size: 26rpx; }
-.challenge-progress { height: 10rpx; margin: 14rpx 0 26rpx; overflow: hidden; background: #e5e5ea; border-radius: 999rpx; }
+.challenge-progress { height: 10rpx; margin: 14rpx 0 26rpx; overflow: hidden; background: var(--line); border-radius: 999rpx; }
 .challenge-progress-bar { height: 100%; background: var(--action); border-radius: 999rpx; }
 .question-card { padding: 34rpx; }
 .question-meta { display: flex; align-items: center; justify-content: space-between; }
-.pill { padding: 8rpx 16rpx; color: #075985; background: #e0f2fe; border-radius: 999rpx; font-size: 24rpx; }
+.pill { padding: 8rpx 16rpx; color: var(--action); background: var(--action-soft); border-radius: 999rpx; font-size: 24rpx; }
 .question-title { display: block; margin: 26rpx 0; font-size: 36rpx; line-height: 1.45; font-weight: 700; }
-.answer-option { display: flex; min-height: 92rpx; margin-top: 16rpx; padding: 20rpx 24rpx; box-sizing: border-box; align-items: center; gap: 16rpx; background: #f5f5f7; border: 2rpx solid transparent; border-radius: 18rpx; font-size: 29rpx; line-height: 1.45; }
+.answer-option { display: flex; width: 100%; min-height: 96rpx; margin-top: 16rpx; padding: 20rpx 24rpx; box-sizing: border-box; align-items: center; gap: 16rpx; background: var(--surface-soft); border: 2rpx solid var(--line); border-radius: 18rpx; font-size: 29rpx; line-height: 1.45; }
 .feedback { margin: 26rpx 0; padding: 26rpx; border-radius: 18rpx; }
-.feedback-correct { color: #11653c; background: #e7f8ee; }
-.feedback-wrong { color: #8a3b12; background: #fff2e8; }
+.feedback-correct { color: var(--success); background: var(--success-soft); }
+.feedback-wrong { color: var(--warning); background: var(--warning-soft); }
 .feedback-title, .feedback-score, .feedback-copy { display: block; }
 .feedback-title { font-size: 31rpx; font-weight: 700; }
 .feedback-score { margin-top: 6rpx; font-weight: 650; }

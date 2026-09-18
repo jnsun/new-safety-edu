@@ -1,1 +1,3 @@
-
+.pending-card { max-width: 760rpx; padding: 46rpx 34rpx; margin: 10vh auto 0; text-align: center; }
+.pending-icon { display: flex; width: 92rpx; height: 92rpx; margin: 0 auto 24rpx; align-items: center; justify-content: center; color: var(--action); background: var(--action-soft); border-radius: 50%; }
+.pending-card .status { margin: 10rpx auto 18rpx; }

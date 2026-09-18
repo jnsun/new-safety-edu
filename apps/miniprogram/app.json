@@ -5,10 +5,14 @@
     "pages/task/index", "pages/courseware/index", "pages/html/index", "pages/exam/index", "pages/signature/index", "pages/record-detail/index",
     "pages/management/index", "pages/change-request/index", "pages/challenge/index", "pages/leaderboard/index"
   ],
-  "window": { "navigationBarTitleText": "安全培训", "navigationBarBackgroundColor": "#f5f5f7", "navigationBarTextStyle": "black", "backgroundColor": "#f5f5f7", "backgroundTextStyle": "dark" },
-  "usingComponents": { "environment-badge": "/components/environment-badge/index" },
+  "window": { "navigationBarTitleText": "安全培训", "navigationBarBackgroundColor": "#F6F8F7", "navigationBarTextStyle": "black", "backgroundColor": "#F6F8F7", "backgroundTextStyle": "dark" },
+  "usingComponents": {
+    "environment-badge": "/components/environment-badge/index",
+    "t-icon": "tdesign-miniprogram/icon/icon",
+    "t-loading": "tdesign-miniprogram/loading/loading"
+  },
   "tabBar": {
-    "color": "#86868b", "selectedColor": "#0071e3", "backgroundColor": "#fbfbfd", "borderStyle": "white",
+    "color": "#546B63", "selectedColor": "#245D47", "backgroundColor": "#ffffff", "borderStyle": "black",
     "list": [
       { "pagePath": "pages/todo/index", "text": "待办" }, { "pagePath": "pages/records/index", "text": "我的记录" },
       { "pagePath": "pages/messages/index", "text": "消息" }, { "pagePath": "pages/profile/index", "text": "我的" }
