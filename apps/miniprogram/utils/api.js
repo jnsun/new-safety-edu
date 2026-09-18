@@ -1,11 +1,9 @@
-const { getApiBaseUrl } = require('../config/env')
-
-const apiUrl = (path) => `${getApiBaseUrl()}${path.replace(/^\/api(?=\/|$)/, '')}`
+const { getMiniProgramRequestHeaders, resolveApiUrl } = require('../config/env')
 
 function rawRequest(path, method, data, token, extraHeaders = {}) {
   return new Promise((resolve, reject) => wx.request({
-    url: apiUrl(path), method, data: data ?? (method === 'GET' ? undefined : {}),
-    header: { 'content-type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extraHeaders },
+    url: resolveApiUrl(path), method, data: data ?? (method === 'GET' ? undefined : {}),
+    header: { 'content-type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extraHeaders, ...getMiniProgramRequestHeaders() },
     success(response) {
       if (response.statusCode >= 200 && response.statusCode < 300) resolve(response.data.data)
       else { const error = new Error(response.data?.error?.message || '请求失败'); error.statusCode = response.statusCode; error.code = response.data?.error?.code; reject(error) }
@@ -47,8 +45,8 @@ const publicRequest = (path, method = 'GET', data) => rawRequest(path, method, d
 
 function upload(filePath, kind) {
   return new Promise((resolve, reject) => wx.uploadFile({
-    url: apiUrl(`/files?kind=${kind}`), filePath, name: 'file',
-    header: { Authorization: `Bearer ${wx.getStorageSync('accessToken')}` },
+    url: resolveApiUrl(`/files?kind=${kind}`), filePath, name: 'file',
+    header: { Authorization: `Bearer ${wx.getStorageSync('accessToken')}`, ...getMiniProgramRequestHeaders() },
     success(response) {
       const body = JSON.parse(response.data)
       if (response.statusCode >= 200 && response.statusCode < 300) resolve(body.data)
@@ -59,15 +57,15 @@ function upload(filePath, kind) {
 
 function download(path) {
   return new Promise((resolve, reject) => wx.downloadFile({
-    url: apiUrl(path), header: { Authorization: `Bearer ${wx.getStorageSync('accessToken')}` },
+    url: resolveApiUrl(path), header: { Authorization: `Bearer ${wx.getStorageSync('accessToken')}`, ...getMiniProgramRequestHeaders() },
     success(response) { if (response.statusCode >= 200 && response.statusCode < 300) resolve(response.tempFilePath); else reject(new Error('文件读取失败')); }, fail: reject
   }))
 }
 
 function downloadPost(path, data) {
   return new Promise((resolve, reject) => wx.request({
-    url: apiUrl(path), method: 'POST', data, responseType: 'arraybuffer',
-    header: { 'content-type': 'application/json', Authorization: `Bearer ${wx.getStorageSync('accessToken')}` },
+    url: resolveApiUrl(path), method: 'POST', data, responseType: 'arraybuffer',
+    header: { 'content-type': 'application/json', Authorization: `Bearer ${wx.getStorageSync('accessToken')}`, ...getMiniProgramRequestHeaders() },
     success(response) {
       if (response.statusCode < 200 || response.statusCode >= 300) return reject(new Error('资料文件下载失败'))
       const target = `${wx.env.USER_DATA_PATH}/我的安全生产资料-${Date.now()}.zip`

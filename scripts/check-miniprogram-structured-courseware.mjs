@@ -154,4 +154,9 @@ assert.deepEqual(requestedPaths, [
   { path: "/api/assignments/assignment-1/coursewares/version-1", method: "GET" }
 ], "重试只能重复安全读取，不得创建进度或完成证据");
 
+pageInstance.persistResume = async () => {};
+pageInstance.data.progressPercent = 12;
+await pageInstance.onStructuredBlockReached({ detail: { confirmed: true, blockKey: "scenario-5", progressPercent: 15, isLast: false } });
+assert.equal(pageInstance.data.structuredResumeBlockKey, "scenario-5", "确认当前项后必须同步续学键，避免组件重绘回到旧位置");
+
 console.log("MINIPROGRAM_STRUCTURED_COURSEWARE_CHECK=PASS");

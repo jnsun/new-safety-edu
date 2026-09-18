@@ -1,2 +1,3 @@
 <web-view wx:if="{{url}}" src="{{url}}"></web-view>
 <view wx:else class="page"><view class="card error">{{error || '正在打开课件…'}}</view></view>
+<environment-badge />

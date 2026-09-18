@@ -10,3 +10,4 @@
     <button class="secondary" bindtap="back">退出并切换微信</button>
   </view>
 </view>
+<environment-badge />

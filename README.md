@@ -24,7 +24,7 @@ pnpm dev
 
 生产环境绝不启用微信 Mock。`var/uploads` 必须持久化且不应由 Web 服务器公开映射。
 
-短信验证码不作为独立登录方式，只用于微信首次绑定、微信换绑、修改手机号和手机号真实性验证。启用短信验证需要服务器配置 `SMS_SEND_ENDPOINT` 和 `SMS_SEND_TOKEN`；网关接收 HTTPS JSON `{ phone, code, purpose }`。网页后台以微信扫码登录为主、用户名密码为备用；启用扫码登录需要在微信开放平台创建网站应用，并在服务器配置 `WECHAT_WEB_APP_ID`、`WECHAT_WEB_APP_SECRET` 和回调地址 `WECHAT_WEB_REDIRECT_URI`。这些密钥不得进入 Admin 或小程序构建产物。
+微信首次绑定优先使用小程序原生 `getPhoneNumber`，一次性 code 只发送给后端换取微信已验证手机号；无法使用时可改用短信验证。短信验证码不作为独立登录方式，只用于微信首次绑定、微信换绑、修改手机号和手机号真实性验证。启用短信验证需要服务器配置 `SMS_SEND_ENDPOINT` 和 `SMS_SEND_TOKEN`；网关接收 HTTPS JSON `{ phone, code, purpose }`。网页后台以微信扫码登录为主、用户名密码为备用；启用扫码登录需要在微信开放平台创建网站应用，并在服务器配置 `WECHAT_WEB_APP_ID`、`WECHAT_WEB_APP_SECRET` 和回调地址 `WECHAT_WEB_REDIRECT_URI`。这些密钥不得进入 Admin 或小程序构建产物。
 
 ## 常用命令
 

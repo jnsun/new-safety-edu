@@ -1,1 +1,2 @@
 <view class="page"><view class="hero"><text class="hero-title">安全生产管理平台</text><text>使用微信身份进入本人培训、证书和安全生产事项</text></view><view class="card"><block wx:if="{{wechatLoginEnabled}}"><text class="title">微信认证登录</text><text class="muted">首次登录后需短信验证本人手机号并确认所属部门；手机号不会作为独立登录方式。</text><button class="primary" loading="{{busy}}" bindtap="login">微信认证登录</button></block><text wx:if="{{!wechatLoginEnabled}}" class="muted">微信登录服务尚未配置，请联系管理员。</text><text wx:if="{{error}}" class="error">{{error}}</text></view></view>
+<environment-badge />

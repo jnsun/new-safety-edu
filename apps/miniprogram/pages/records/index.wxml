@@ -35,3 +35,4 @@
     <text class="detail-link">查看完整记录</text>
   </button>
 </view>
+<environment-badge />

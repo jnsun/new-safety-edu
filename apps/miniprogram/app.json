@@ -6,6 +6,7 @@
     "pages/management/index", "pages/change-request/index", "pages/challenge/index", "pages/leaderboard/index"
   ],
   "window": { "navigationBarTitleText": "安全培训", "navigationBarBackgroundColor": "#f5f5f7", "navigationBarTextStyle": "black", "backgroundColor": "#f5f5f7", "backgroundTextStyle": "dark" },
+  "usingComponents": { "environment-badge": "/components/environment-badge/index" },
   "tabBar": {
     "color": "#86868b", "selectedColor": "#0071e3", "backgroundColor": "#fbfbfd", "borderStyle": "white",
     "list": [

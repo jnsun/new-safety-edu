@@ -46,3 +46,4 @@
     <view class="row"><button size="mini" bindtap="closeIdentityReview">取消</button><button size="mini" type="primary" bindtap="submitIdentityReview">确认处理</button></view>
   </view>
 </view>
+<environment-badge />

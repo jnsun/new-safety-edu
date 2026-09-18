@@ -29,6 +29,7 @@ import { cleanupExpiredReceivablesExports, processPendingReceivablesExports } fr
 import { assertCsrfRequest } from "./csrf.js";
 import { registerCoursewareAuthoringRoutes } from "./routes/courseware-authoring.js";
 import { finalizePreviousChallengeMonth, registerDailyChallengeRoutes } from "./routes/daily-challenge.js";
+import { assertMiniProgramEnvironment } from "./miniprogram-environment.js";
 
 const env = loadEnv();
 const app = Fastify({ logger: { level: env.NODE_ENV === "production" ? "info" : "debug", redact: ["req.headers.authorization", "req.headers.cookie", "body.password", "body.newPassword", "body.code", "body.refreshToken", "body.token", "body.nationalId"] }, bodyLimit: 16 * 1024 * 1024 });
@@ -37,7 +38,10 @@ app.decorateRequest("principal", null);
 await app.register(cookie, { secret: env.COOKIE_SECRET });
 await app.register(cors, { origin: env.NODE_ENV === "production" ? env.PUBLIC_BASE_URL : true, credentials: true });
 await app.register(multipart);
-app.addHook("onRequest", async (request) => assertCsrfRequest({ method: request.method, url: request.url, headers: request.headers, cookies: request.cookies, publicBaseUrl: env.PUBLIC_BASE_URL }));
+app.addHook("onRequest", async (request) => {
+  assertCsrfRequest({ method: request.method, url: request.url, headers: request.headers, cookies: request.cookies, publicBaseUrl: env.PUBLIC_BASE_URL });
+  assertMiniProgramEnvironment({ publicBaseUrl: env.PUBLIC_BASE_URL, header: request.headers["x-miniprogram-env"] });
+});
 
 app.setErrorHandler((error, _request, reply) => {
   const tagged = error as Error & { statusCode?: number; code?: string };

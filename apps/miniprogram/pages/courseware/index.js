@@ -111,7 +111,7 @@ Page({
     if (!detail?.confirmed || !detail.blockKey || !Number.isInteger(detail.progressPercent)) return
     const progressPercent = Math.max(this.data.progressPercent, Math.min(detail.progressPercent, 100))
     this._currentBlockKey = detail.blockKey
-    this.setData({ progressPercent, remainingText: remainingText(progressPercent) })
+    this.setData({ progressPercent, remainingText: remainingText(progressPercent), structuredResumeBlockKey: detail.blockKey })
     await this.persistResume(progressPercent, detail.blockKey)
     if (detail.isLast && detail.confirmed) await this.recordReachedEnd()
   },

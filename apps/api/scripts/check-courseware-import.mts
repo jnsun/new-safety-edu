@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import archiver from "archiver";
 import ExcelJS from "exceljs";
+import * as unzipper from "unzipper";
 import {
   coursewareImportConfirmationKey,
   COURSEWARE_IMPORT_PARSER_VERSION,
@@ -117,6 +118,25 @@ async function zip(entries: ZipEntry[], storeOnly = false) {
   return done;
 }
 
+async function namespacePrefixedWorkbookBuffer() {
+  const source = await workbookBuffer();
+  const directory = await unzipper.Open.buffer(source);
+  const entries: ZipEntry[] = [];
+  for (const file of directory.files) {
+    if (file.type === "Directory") continue;
+    let data = await file.buffer();
+    if (/^xl\/(?:workbook|styles|sharedStrings|worksheets\/sheet\d+)[.]xml$/.test(file.path)) {
+      let xml = data.toString("utf8");
+      xml = xml
+        .replace('xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"', 'xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"')
+        .replace(/<(\/?)((?!\?xml)[A-Za-z][A-Za-z0-9]*)/g, "<$1x:$2");
+      data = Buffer.from(xml);
+    }
+    entries.push({ name: file.path, data });
+  }
+  return zip(entries);
+}
+
 function replaceStoredName(buffer: Buffer, replacement: string) {
   const source = Buffer.from("assets/diagram.png");
   const target = Buffer.from(replacement);
@@ -139,6 +159,10 @@ assert.ok(invalidWorkbook.issues.some((entry) => entry.sheet === "课程" && ent
 assert.ok(invalidWorkbook.issues.some((entry) => entry.sheet === "随堂题" && entry.row === 2 && entry.code === "UNKNOWN_UNIT_CODE"));
 assert.ok(invalidWorkbook.issues.some((entry) => entry.sheet === "内容块" && entry.row === 2 && entry.code === "MISSING_ASSET"));
 assert.ok(invalidWorkbook.issues.every((entry) => entry.file === "anonymous.xlsx"));
+
+const namespacePrefixedWorkbook = await preview("namespace-prefixed.xlsx", await namespacePrefixedWorkbookBuffer());
+assert.deepEqual(namespacePrefixedWorkbook.items.map(({ classification }) => classification), ["create"]);
+assert.equal(namespacePrefixedWorkbook.issues.length, 0);
 
 const formulaWorkbook = await preview("formula.xlsx", await workbookBuffer({ formula: true }));
 assert.ok(formulaWorkbook.issues.some((entry) => entry.sheet === "课程" && entry.row === 2 && entry.field === "标题" && entry.code === "FORMULA_NOT_ALLOWED"));

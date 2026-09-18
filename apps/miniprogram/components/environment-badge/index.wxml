@@ -1,0 +1,1 @@
+<cover-view wx:if="{{visible}}" class="environment-badge">测试环境</cover-view>

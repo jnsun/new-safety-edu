@@ -78,3 +78,4 @@
     <text class="challenge-note">日常挑战为自愿巩固，不属于必须完成的培训任务。</text>
   </view>
 </view>
+<environment-badge />

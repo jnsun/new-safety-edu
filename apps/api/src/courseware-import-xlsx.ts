@@ -1,4 +1,6 @@
 import ExcelJS from "exceljs";
+import archiver from "archiver";
+import { PassThrough } from "node:stream";
 import * as unzipper from "unzipper";
 import {
   COURSEWARE_SCHEMA_VERSION,
@@ -22,6 +24,7 @@ const MAX_XLSX_TOTAL_BYTES = 80 * 1024 * 1024;
 const MAX_XLSX_COMPRESSION_RATIO = 200;
 const MAX_XLSX_ROWS = 20_000;
 const MAX_XLSX_CELLS = 200_000;
+const SPREADSHEETML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
 export class CoursewareXlsxError extends Error {
   constructor(public code: string, message: string) { super(message); }
@@ -99,6 +102,50 @@ async function preflightCoursewareXlsx(buffer: Buffer) {
     }
     await readXlsxEntry(file, path, state);
   }
+}
+
+async function excelJsCompatibleXlsx(buffer: Buffer) {
+  const directory = await unzipper.Open.buffer(buffer);
+  const workbookEntry = directory.files.find(({ path }) => path === "xl/workbook.xml");
+  if (!workbookEntry) return buffer;
+  const workbookXml = (await workbookEntry.buffer()).toString("utf8");
+  if (!workbookXml.includes(`<x:workbook`) || !workbookXml.includes(`xmlns:x="${SPREADSHEETML_NAMESPACE}"`)) return buffer;
+
+  const output = new PassThrough();
+  const chunks: Buffer[] = [];
+  output.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+  const completed = new Promise<Buffer>((resolve, reject) => {
+    output.on("end", () => resolve(Buffer.concat(chunks)));
+    output.on("error", reject);
+  });
+  const archive = archiver("zip", { zlib: { level: 6 } });
+  archive.on("error", (error) => output.destroy(error));
+  archive.pipe(output);
+
+  for (const file of directory.files) {
+    if (file.type === "Directory") continue;
+    let data = await file.buffer();
+    if (file.path.endsWith(".xml")) {
+      let xml = data.toString("utf8");
+      if (xml.includes(`xmlns:x="${SPREADSHEETML_NAMESPACE}"`)) {
+        xml = xml
+          .replace(/<\/x:/g, "</")
+          .replace(/<x:/g, "<")
+          .replace(`xmlns:x="${SPREADSHEETML_NAMESPACE}"`, `xmlns="${SPREADSHEETML_NAMESPACE}"`)
+          .replace(/<legacyDrawing\b[^>]*\/>/g, "");
+        data = Buffer.from(xml);
+      }
+    } else if (/^xl\/worksheets\/_rels\/sheet\d+[.]xml[.]rels$/.test(file.path)) {
+      const relationships = data.toString("utf8").replace(
+        /<Relationship\b(?=[^>]*\bType="[^"]*\/(?:comments|vmlDrawing)")[^>]*\/>/gi,
+        ""
+      );
+      data = Buffer.from(relationships);
+    }
+    archive.append(data, { name: file.path });
+  }
+  await archive.finalize();
+  return completed;
 }
 
 function issue(sheet: string, row: number, field: string, code: string, message: string, context: Partial<CoursewareImportIssue> = {}): CoursewareImportIssue {
@@ -191,7 +238,8 @@ export async function parseCoursewareXlsx(buffer: Buffer): Promise<ParsedCoursew
   await preflightCoursewareXlsx(buffer);
   const workbook = new ExcelJS.Workbook();
   try {
-    await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+    const compatible = await excelJsCompatibleXlsx(buffer);
+    await workbook.xlsx.load(compatible as unknown as ExcelJS.Buffer);
   } catch {
     return { templateVersion: COURSEWARE_SCHEMA_VERSION, courses: [], issues: [issue("工作簿", 0, "文件", "INVALID_XLSX", "无法读取 XLSX 工作簿")] };
   }

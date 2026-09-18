@@ -50,3 +50,4 @@
     <button class="secondary logout" bindtap="logout">退出当前设备</button>
   </view>
 </view>
+<environment-badge />

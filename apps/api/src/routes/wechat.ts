@@ -16,6 +16,7 @@ import { attachProvisionalWechatAccount, resolveWechatAccount } from "../wechat-
 import { sendPhoneVerificationCode, verifiedPhoneCode } from "./phone-auth.js";
 import { autoDispatchInTransaction } from "./day2.js";
 import { setCsrfCookie } from "../csrf.js";
+import { getWechatPhoneNumber } from "../wechat-api.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -90,16 +91,19 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
 
   app.post("/api/wechat/identity/confirm", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!;
-    const input = z.object({
-      phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/)), code: z.string().regex(/^\d{6}$/),
-      purpose: z.string(), name: z.string().trim().min(2).max(80), organizationId: z.string().uuid(), reason: z.string().trim().max(500).default("")
-    }).parse(request.body);
-    const purpose = assertWechatVerificationPurpose(input.purpose);
-    const verification = await verifiedPhoneCode(input.phone, input.code, purpose, deps.env);
+    const details = { name: z.string().trim().min(2).max(80), organizationId: z.string().uuid(), reason: z.string().trim().max(500).default("") };
+    const input = z.union([
+      z.object({ ...details, phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/)), code: z.string().regex(/^\d{6}$/), purpose: z.string() }),
+      z.object({ ...details, wechatPhoneCode: z.string().min(1).max(300) })
+    ]).parse(request.body);
+    const smsPurpose = "purpose" in input ? assertWechatVerificationPurpose(input.purpose) : null;
+    const verification = "code" in input ? await verifiedPhoneCode(input.phone, input.code, smsPurpose!, deps.env) : null;
+    const phone = "wechatPhoneCode" in input ? await getWechatPhoneNumber(input.wechatPhoneCode, deps.env) : input.phone;
+    const verificationMethod = verification ? "sms" : "wechat";
     const [organization, matches, phoneOwner, activeBinding] = await Promise.all([
       prisma.organization.findFirst({ where: { id: input.organizationId, type: { in: ["business_entity", "department"] } }, select: { id: true, type: true } }),
-      prisma.person.findMany({ where: { phone: input.phone, status: "active" }, take: 3, include: { organizations: { where: { active: true, primary: true }, include: { organization: { select: { type: true } } } }, account: { include: { wechatBindings: { where: { active: true } } } } } }),
-      prisma.account.findUnique({ where: { verifiedPhone: input.phone }, select: { id: true, personId: true } }),
+      prisma.person.findMany({ where: { phone, status: "active" }, take: 3, include: { organizations: { where: { active: true, primary: true }, include: { organization: { select: { type: true } } } }, account: { include: { wechatBindings: { where: { active: true } } } } } }),
+      prisma.account.findUnique({ where: { verifiedPhone: phone }, select: { id: true, personId: true } }),
       prisma.wechatBinding.findFirst({ where: { accountId: principal.accountId, active: true }, select: { unionid: true } })
     ]);
     if (!organization || !activeBinding) throw Object.assign(new Error("绑定上下文无效"), { statusCode: 409, code: "WECHAT_BIND_CONTEXT_INVALID" });
@@ -109,18 +113,21 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     const accountConflict = Boolean((phoneOwner && phoneOwner.id !== principal.accountId && phoneOwner.personId !== matched?.id) || (matched?.account && !["active", "pending"].includes(matched.account.status)));
     const crossEntityConflict = Boolean(primary && primary.organizationId !== input.organizationId && primary.organization.type === "business_entity" && organization.type === "business_entity");
     const identityConflict = matches.length > 1 || accountConflict;
+    const purpose = smsPurpose ?? (matched?.account && matched.account.id !== principal.accountId && matched.account.wechatBindings.length ? "wechat_rebind" : "wechat_bind");
     let decision = decideWechatBinding({ activePersonMatches: matches.length, selectedOrganizationMatches, hasIdentityConflict: identityConflict, crossEntityConflict });
     const reviewers = await prisma.roleAssignment.findMany({ where: { role: "org_admin", scopeType: "organization", scopeId: input.organizationId, active: true, personId: { not: null }, person: { status: "active", account: { status: "active" } } }, select: { personId: true } });
     if (!reviewers.length && decision !== "direct") decision = "company_review";
 
     if (decision === "direct" && matched) {
       const accountId = await prisma.$transaction(async (tx) => {
-        const consumed = await tx.phoneVerificationCode.updateMany({ where: { id: verification.id, consumedAt: null }, data: { consumedAt: new Date() } });
-        if (consumed.count !== 1) throw Object.assign(new Error("验证码已使用"), { statusCode: 409, code: "SMS_CODE_CONSUMED" });
-        const targetAccountId = await attachProvisionalWechatAccount(tx, { provisionalAccountId: principal.accountId, personId: matched.id, verifiedPhone: input.phone, actorId: principal.accountId, reason: purpose === "wechat_rebind" ? "本人短信验证后更换微信" : "本人短信验证后首次绑定微信" });
+        if (verification) {
+          const consumed = await tx.phoneVerificationCode.updateMany({ where: { id: verification.id, consumedAt: null }, data: { consumedAt: new Date() } });
+          if (consumed.count !== 1) throw Object.assign(new Error("验证码已使用"), { statusCode: 409, code: "SMS_CODE_CONSUMED" });
+        }
+        const targetAccountId = await attachProvisionalWechatAccount(tx, { provisionalAccountId: principal.accountId, personId: matched.id, verifiedPhone: phone, actorId: principal.accountId, reason: `${verificationMethod === "wechat" ? "本人微信手机号验证" : "本人短信验证"}后${purpose === "wechat_rebind" ? "更换微信" : "首次绑定微信"}` });
         await activatePendingRoles(tx, { personId: matched.id, accountId: targetAccountId, actorId: principal.accountId });
         await tx.changeRequest.updateMany({ where: { personId: matched.id, type: "account_opening", status: "pending" }, data: { status: "approved", reviewedBy: principal.accountId, reviewedAt: new Date(), reviewNote: "本人完成微信及手机号验证" } });
-        await writeCriticalAudit(tx, { actorId: targetAccountId, action: purpose === "wechat_rebind" ? "auth.wechat_rebind" : "auth.wechat_bind", objectType: "person", objectId: matched.id, metadata: { organizationId: input.organizationId, phoneVerified: true } });
+        await writeCriticalAudit(tx, { actorId: targetAccountId, action: purpose === "wechat_rebind" ? "auth.wechat_rebind" : "auth.wechat_bind", objectType: "person", objectId: matched.id, metadata: { organizationId: input.organizationId, phoneVerified: true, phoneVerificationMethod: verificationMethod } });
         return targetAccountId;
       }, { isolationLevel: "Serializable" });
       if (matched.type === "employee") await prisma.$transaction((tx) => autoDispatchInTransaction(tx, "three_level", matched.id, deps.env));
@@ -137,17 +144,19 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       return { data: { status: "bound", ...session } };
     }
 
-    const requestKey = changeRequestKey("binding", principal.accountId, input.phone);
+    const requestKey = changeRequestKey("binding", principal.accountId, phone);
     const row = await prisma.$transaction(async (tx) => {
-      const consumed = await tx.phoneVerificationCode.updateMany({ where: { id: verification.id, consumedAt: null }, data: { consumedAt: new Date() } });
-      if (consumed.count !== 1) throw Object.assign(new Error("验证码已使用"), { statusCode: 409, code: "SMS_CODE_CONSUMED" });
+      if (verification) {
+        const consumed = await tx.phoneVerificationCode.updateMany({ where: { id: verification.id, consumedAt: null }, data: { consumedAt: new Date() } });
+        if (consumed.count !== 1) throw Object.assign(new Error("验证码已使用"), { statusCode: 409, code: "SMS_CODE_CONSUMED" });
+      }
       let change = await tx.changeRequest.findFirst({ where: { type: "binding", status: "pending", requestKey } });
-      if (!change) change = await tx.changeRequest.create({ data: { accountId: principal.accountId, type: "binding", requestKey, payload: { name: input.name, phone: input.phone, phoneVerified: true, phoneVerifiedAt: new Date().toISOString(), phoneVerificationId: verification.id, organizationId: input.organizationId, reason: input.reason, matchCount: matches.length, matchStatus: matches.length === 0 ? "none" : matches.length === 1 ? selectedOrganizationMatches ? "unique" : "department_mismatch" : "multiple", escalatedToCompany: decision === "company_review", conflictCodes: [...(accountConflict ? ["phone_account_conflict"] : []), ...(crossEntityConflict ? ["cross_entity_conflict"] : []), ...(matches.length > 1 ? ["multiple_person_matches"] : []), ...(!reviewers.length ? ["no_org_admin"] : [])] } } });
+      if (!change) change = await tx.changeRequest.create({ data: { accountId: principal.accountId, type: "binding", requestKey, payload: { name: input.name, phone, phoneVerified: true, phoneVerifiedAt: new Date().toISOString(), phoneVerificationMethod: verificationMethod, ...(verification ? { phoneVerificationId: verification.id } : {}), organizationId: input.organizationId, reason: input.reason, matchCount: matches.length, matchStatus: matches.length === 0 ? "none" : matches.length === 1 ? selectedOrganizationMatches ? "unique" : "department_mismatch" : "multiple", escalatedToCompany: decision === "company_review", conflictCodes: [...(accountConflict ? ["phone_account_conflict"] : []), ...(crossEntityConflict ? ["cross_entity_conflict"] : []), ...(matches.length > 1 ? ["multiple_person_matches"] : []), ...(!reviewers.length ? ["no_org_admin"] : [])] } } });
       const recipientIds = decision === "company_review"
         ? (await tx.roleAssignment.findMany({ where: { role: "company_admin", scopeType: "company", active: true, personId: { not: null }, person: { status: "active", account: { status: "active" } } }, select: { personId: true } })).map(({ personId }) => personId!)
         : reviewers.map(({ personId }) => personId!);
       for (const personId of new Set(recipientIds)) await tx.notification.upsert({ where: { dedupeKey: `identity-binding-review:${change.id}:${personId}` }, update: {}, create: { personId, title: "身份绑定申请待审核", body: "有一条已完成手机号验证的微信身份绑定申请待处理。", dedupeKey: `identity-binding-review:${change.id}:${personId}` } });
-      await writeCriticalAudit(tx, { actorId: principal.accountId, allowPendingActor: true, action: "binding.request_create", objectType: "change_request", objectId: change.id, requestId: change.id, metadata: { organizationId: input.organizationId, phoneVerified: true, escalatedToCompany: decision === "company_review" } });
+      await writeCriticalAudit(tx, { actorId: principal.accountId, allowPendingActor: true, action: "binding.request_create", objectType: "change_request", objectId: change.id, requestId: change.id, metadata: { organizationId: input.organizationId, phoneVerified: true, phoneVerificationMethod: verificationMethod, escalatedToCompany: decision === "company_review" } });
       return change;
     }, { isolationLevel: "Serializable" });
     return { data: { status: "pending_review", requestId: row.id, escalatedToCompany: decision === "company_review" } };
