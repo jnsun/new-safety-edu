@@ -3,15 +3,16 @@
 .state-title { display: block; margin-bottom: 12rpx; font-size: 34rpx; line-height: 1.3; font-weight: 650; }
 .state-copy, .section-copy { display: block; color: var(--muted); font-size: 28rpx; line-height: 1.65; }
 .state-error .state-title { color: var(--danger); }
-.reader-heading, .reader-content, .html-panel, .finish-panel { padding: 32rpx; margin-bottom: 24rpx; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
-.progress-dock { position: sticky; top: 0; z-index: 5; padding: 20rpx 24rpx; margin: 0 0 24rpx; background: rgba(255, 255, 255, .97); border: 1rpx solid var(--line-strong); border-radius: 22rpx; box-shadow: 0 8rpx 26rpx rgba(31, 51, 46, .09); }
+.reader-heading, .reader-content, .html-panel, .finish-panel { padding: 32rpx; margin-bottom: 24rpx; background: var(--surface); border: 1rpx solid var(--line); border-radius: 32rpx; box-shadow: var(--elevation); }
+.reader-heading { padding:10rpx 2rpx 24rpx; background:transparent; border:0; border-radius:0; box-shadow:none; }
+.progress-dock { position: sticky; top: 0; z-index: 5; padding: 20rpx 24rpx; margin: 0 0 24rpx; background: rgba(255, 255, 255, .97); border: 1rpx solid #B9DCFF; border-radius: 22rpx; box-shadow: 0 8rpx 26rpx rgba(8, 103, 198, .10); }
 .progress-copy-row { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
 .progress-label { color: var(--ink); font-size: 28rpx; font-weight: 650; }
 .progress-position { flex: 0 0 auto; color: var(--action); font-size: 27rpx; font-weight: 650; }
 .progress-unit { display: block; margin-top: 6rpx; overflow: hidden; color: var(--muted); font-size: 25rpx; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .progress-dock .progress { margin-top: 14rpx; }
 .progress-warning { display: block; margin-top: 10rpx; color: var(--warning); font-size: 25rpx; line-height: 1.45; }
-.course-title { display: block; font-size: 42rpx; line-height: 1.25; font-weight: 700; letter-spacing: -1rpx; }
+.course-title { display: block; font-size: 38rpx; line-height: 1.3; font-weight: 750; letter-spacing: -.5rpx; }
 .resume-copy { display: block; margin-top: 18rpx; color: var(--muted); font-size: 28rpx; line-height: 1.5; }
 .reader-content { padding: 38rpx 34rpx; }
 .reader-content rich-text { color: var(--ink-soft); font-size: 31rpx; line-height: 1.9; word-break: break-word; }

@@ -1,0 +1,23 @@
+.security-page { max-width:900rpx; margin:0 auto; }
+.security-card { padding:28rpx; margin-bottom:24rpx; background:#fff; border:1rpx solid var(--line); border-radius:32rpx; box-shadow:var(--elevation); }
+.card-head,.device-row,.action-row { display:flex; align-items:center; gap:20rpx; }
+.icon { display:flex; width:72rpx; height:72rpx; flex:0 0 72rpx; align-items:center; justify-content:center; color:var(--action); background:var(--action-soft); border-radius:22rpx; }
+.card-head .title { margin:0; }
+.section-title { margin:34rpx 4rpx 16rpx; }
+.device-row { justify-content:space-between; padding:24rpx 0; border-bottom:1rpx solid var(--line); }
+.device-row:last-child { border-bottom:0; }
+.device-title { display:block; font-size:30rpx; font-weight:650; }
+.current,.link-copy { margin-left:auto; color:var(--action); font-size:26rpx; font-weight:650; }
+.actions { padding-top:0; padding-bottom:0; }
+.action-row { justify-content:space-between; min-height:108rpx; border-bottom:1rpx solid var(--line); }
+.action-row:last-child { border-bottom:0; }
+.action-copy { min-width:0; flex:1; }
+.danger { color:var(--danger); }
+.empty-row { color:var(--muted); text-align:center; }
+.phone-card { padding-top:16rpx; padding-bottom:16rpx; }
+.phone-form { padding:6rpx 0 20rpx 92rpx; }
+.phone-form .field { margin-bottom:14rpx; }
+.code-row { display:flex; align-items:center; gap:14rpx; }
+.code-field { min-width:0; flex:1; }
+.code-button { flex:0 0 210rpx; min-height:96rpx; margin:12rpx 0 14rpx; padding:0 14rpx; }
+.confirm-phone { margin-top:0; }

@@ -1,0 +1,1 @@
+{ "navigationBarTitleText": "账号安全与设备", "usingComponents": { "environment-badge": "/components/environment-badge/index", "t-icon": "tdesign-miniprogram/icon/icon", "t-loading": "tdesign-miniprogram/loading/loading" } }

@@ -1,5 +1,9 @@
 .detail-page { max-width: 1100rpx; margin: 0 auto; }
 .state-panel, .record-summary, .fact-section { padding: 34rpx; margin-bottom: 24rpx; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.record-summary { color:#fff; background:var(--blue-gradient); border:0; box-shadow:var(--elevation-raised); }
+.record-summary .record-title,.record-summary .record-type,.record-summary .summary-row,.record-summary .status { color:#fff; }
+.record-summary .record-type { color:rgba(255,255,255,.78); }
+.record-summary .summary-row:first-of-type { border-color:rgba(255,255,255,.22); }
 .state-panel { padding-top: 58rpx; padding-bottom: 58rpx; text-align: center; }
 .state-title { display: block; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
 .state-copy { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
@@ -21,9 +25,9 @@
 .content-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24rpx; padding: 22rpx 0; border-bottom: 1rpx solid var(--line); }
 .content-row:last-child { border-bottom: 0; }
 .content-copy { min-width: 0; flex: 1; }
-.content-title { display: block; font-size: 30rpx; line-height: 1.45; font-weight: 600; }
+.content-title { display: block; overflow-wrap: anywhere; word-break: break-word; font-size: 30rpx; line-height: 1.45; font-weight: 600; }
 .content-meta { display: block; margin-top: 7rpx; color: var(--muted); font-size: 28rpx; line-height: 1.4; }
-.content-result { flex: 0 0 auto; color: var(--muted); font-size: 28rpx; line-height: 1.45; text-align: right; }
+.content-result { width: 210rpx; flex: 0 0 210rpx; color: var(--muted); font-size: 26rpx; line-height: 1.45; text-align: right; }
 .content-result text { display: block; }
 .content-result text:first-child { color: var(--success); font-weight: 600; }
 

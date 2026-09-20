@@ -6,10 +6,10 @@
 .unit-kicker, .block-label { display: block; color: var(--action); font-size: 26rpx; line-height: 1.4; font-weight: 650; }
 .unit-title { display: block; margin-top: 8rpx; color: var(--ink); font-size: 38rpx; line-height: 1.25; font-weight: 700; }
 .unit-meta { display: block; margin-top: 8rpx; color: var(--muted); font-size: 28rpx; line-height: 1.5; }
-.content-block { padding: 34rpx; margin-bottom: 24rpx; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
+.content-block { padding: 32rpx; margin-bottom: 24rpx; background: var(--surface); border: 1rpx solid var(--line); border-radius: 32rpx; box-shadow: var(--elevation); }
 .block-title, .checkpoint-prompt { display: block; margin-top: 12rpx; color: var(--ink); font-size: 34rpx; line-height: 1.4; font-weight: 650; }
 .block-body { display: block; margin-top: 18rpx; color: var(--ink-soft); font-size: 30rpx; line-height: 1.85; white-space: pre-wrap; word-break: break-word; }
-.block-image-shell { min-height: 160rpx; margin-top: 26rpx; overflow: hidden; border-radius: 20rpx; background: var(--surface-soft); }
+.block-image-shell { min-height: 160rpx; margin:24rpx -32rpx 0; overflow: hidden; border-radius: 0 0 30rpx 30rpx; background: var(--surface-soft); }
 .block-image { display: block; width: 100%; }
 .image-status { display: block; padding: 44rpx 28rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; text-align: center; }
 .image-error { padding-bottom: 24rpx; text-align: center; }
@@ -22,16 +22,16 @@
 .list-copy { flex: 1; min-width: 0; padding-top: 4rpx; color: var(--ink-soft); font-size: 29rpx; line-height: 1.65; }
 .step-row { padding: 22rpx 0; margin: 0; border-bottom: 1rpx solid var(--line); }
 .step-row:last-child { border-bottom: 0; }
-.choice-button { display: flex; width: 100%; min-width: 0; min-height: 96rpx; align-items: center; gap: 18rpx; padding: 20rpx 22rpx; margin-top: 18rpx; box-sizing: border-box; color: var(--ink); background: var(--surface-soft); border: 2rpx solid var(--line); border-radius: 20rpx; text-align: left; font-size: 29rpx; line-height: 1.5; }
+.choice-button { display: flex; width: 100%; min-width: 0; min-height: 104rpx; align-items: center; gap: 18rpx; padding: 22rpx 24rpx; margin-top: 18rpx; box-sizing: border-box; color: var(--ink); background: var(--surface); border: 2rpx solid #D8DEE6; border-radius: 24rpx; text-align: left; font-size: 29rpx; line-height: 1.5; }
 .compact-action::after { border: 0; }
 .choice-pressed, .control-pressed { opacity: .82; transform: scale(.995); }
-.choice-selected { background: var(--action-soft); border-color: var(--action); }
+.choice-selected { color:var(--action-strong); background: var(--action-soft); border-color: var(--action); }
 .choice-marker { flex: 0 0 auto; color: var(--action); font-size: 26rpx; font-weight: 650; }
 .choice-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .answer-button, .continue-button { display: flex; width: 100%; min-width: 0; min-height: 92rpx; align-items: center; justify-content: center; padding: 20rpx 24rpx; margin-top: 24rpx; box-sizing: border-box; border-radius: 22rpx; font-size: 29rpx; line-height: 1.4; font-weight: 600; text-align: center; }
 .answer-button { color: var(--action); background: var(--surface); border: 2rpx solid var(--line-strong); }
 .continue-button { color: #fff; background: var(--action); }
-.navigation-actions { display: flex; gap: 18rpx; margin-top: 24rpx; }
+.navigation-actions { position:sticky; bottom:0; z-index:4; display: flex; gap: 18rpx; margin:24rpx -32rpx -32rpx; padding:20rpx 32rpx calc(18rpx + env(safe-area-inset-bottom)); background:rgba(255,255,255,.97); border-radius:0 0 32rpx 32rpx; }
 .navigation-actions .continue-button, .navigation-actions .previous-button { flex: 1; width: auto; margin-top: 0; }
 .previous-button { display: flex; min-width: 0; min-height: 92rpx; align-items: center; justify-content: center; padding: 20rpx 18rpx; box-sizing: border-box; color: var(--action); background: var(--surface); border: 2rpx solid var(--line-strong); border-radius: 22rpx; font-size: 29rpx; line-height: 1.4; font-weight: 600; text-align: center; }
 .previous-button.control-disabled { color: var(--muted); background: var(--surface-soft); opacity: .72; }

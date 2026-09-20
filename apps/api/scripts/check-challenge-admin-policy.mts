@@ -2,8 +2,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const routes = await readFile(new URL("../src/routes/daily-challenge.ts", import.meta.url), "utf8");
+const admin = await readFile(new URL("../../admin/src/challenge/ChallengeQuestionSettings.tsx", import.meta.url), "utf8");
 assert.match(routes, /get\("\/api\/challenge\/admin\/questions"/);
 assert.match(routes, /patch\("\/api\/challenge\/admin\/questions\/:id"/);
+assert.match(routes, /post\("\/api\/challenge\/admin\/questions\/enable-all"/);
+assert.match(routes, /action: "challenge\.questions_enable_all"/);
+assert.match(routes, /emptyAttempt[\s\S]*buildDailySnapshot[\s\S]*challengeAttempt\.update/, "启用题目后必须修复当天已经生成的空挑战");
+assert.match(admin, /一键启用全部有效题目/);
+assert.match(admin, /启用日常挑战？/);
 assert.match(routes, /get\("\/api\/challenge\/admin\/points"/);
 assert.match(routes, /post\("\/api\/challenge\/admin\/points\/:id\/void"/);
 assert.match(routes, /if \(!isCompanyAdmin\(principal\)\) forbidden\("只有公司管理员可以配置日常挑战题"\)/);

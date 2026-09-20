@@ -1,26 +1,42 @@
-.todo-page { max-width: 1080rpx; margin: 0 auto; }
-.workspace-head { margin: 6rpx 4rpx 34rpx; }
-.workspace-title { display: block; margin-bottom: 10rpx; font-size: 46rpx; line-height: 1.18; font-weight: 700; letter-spacing: -1rpx; }
+.todo-page { max-width: 1080rpx; margin: 0 auto; padding-bottom: calc(156rpx + env(safe-area-inset-bottom)); }
+.welcome-row { display:flex; align-items:center; justify-content:space-between; gap:24rpx; margin:0 2rpx 30rpx; }
+.welcome-copy { min-width:0; flex:1; }
+.welcome-title { display:block; font-size:36rpx; line-height:1.3; font-weight:700; }
+.welcome-subtitle { display:block; margin-top:4rpx; color:var(--muted); font-size:25rpx; }
+.welcome-avatar { width:80rpx; height:80rpx; flex:0 0 80rpx; border-radius:50%; background:var(--action-soft); }
+.welcome-avatar-empty { display:flex; align-items:center; justify-content:center; color:var(--action); }
+.workspace-head { display:flex; align-items:flex-end; justify-content:space-between; margin: 6rpx 2rpx 24rpx; }
+.workspace-title { display: block; font-size: 42rpx; line-height: 1.18; font-weight: 700; letter-spacing: -1rpx; }
+.workspace-count { color:var(--action); font-size:27rpx; font-weight:650; }
 .workspace-copy, .state-copy, .task-meta { display: block; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
 .state-panel { padding: 64rpx 34rpx; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); text-align: center; }
 .state-title { display: block; margin-bottom: 12rpx; font-size: 34rpx; line-height: 1.3; font-weight: 650; }
 .state-error .state-title { color: var(--danger); }
 .retry-button { width: 100%; margin-top: 30rpx; }
+.empty-actions { display:flex; gap:16rpx; margin-top:28rpx; }
+.empty-actions button { flex:1; min-width:0; margin-top:0; }
 .priority-banner { display: flex; align-items: flex-start; gap: 20rpx; padding: 26rpx 28rpx; margin-bottom: 30rpx; color: var(--ink); background: var(--action-soft); border: 1rpx solid var(--line); border-radius: var(--radius-control); }
 .priority-icon { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 64rpx; height: 64rpx; color: var(--action); background: #fff; border-radius: 18rpx; }
 .priority-body { min-width: 0; flex: 1; }
 .priority-copy { display: block; margin-bottom: 8rpx; font-size: 32rpx; line-height: 1.35; font-weight: 700; }
 .priority-detail { display: block; font-size: 28rpx; line-height: 1.5; }
-.section-title { display: block; margin: 0 4rpx 16rpx; font-size: 32rpx; line-height: 1.35; font-weight: 650; }
+.section-title { display: block; margin: 0 4rpx 16rpx; font-size: 31rpx; line-height: 1.35; font-weight: 700; }
 .todo-layout, .primary-section, .remaining-section, .challenge-section { width: 100%; box-sizing: border-box; }
 .primary-section { min-width: 0; margin-bottom: 34rpx; }
-.primary-task { display: block; width: 100%; min-height: 320rpx; padding: 34rpx; margin: 0; box-sizing: border-box; color: var(--ink); background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation-raised); text-align: left; line-height: 1.4; }
+.primary-task { display: block; width: 100%; min-height: 320rpx; padding: 30rpx; margin: 0; box-sizing: border-box; color: #fff; background: var(--blue-gradient); border-radius: var(--radius-card); box-shadow: var(--elevation-raised); text-align: left; line-height: 1.4; }
+.primary-badge { display:inline-flex; min-height:44rpx; padding:0 16rpx; align-items:center; color:#DFF1FF; background:rgba(0,52,112,.28); border-radius:10rpx; font-size:23rpx; font-weight:650; }
 .task-heading, .task-summary, .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; }
-.task-title { min-width: 0; flex: 1; font-size: 38rpx; line-height: 1.3; font-weight: 700; }
-.task-meta { margin-top: 10rpx; }
+.primary-task .task-heading { margin-top:16rpx; }
+.task-title { min-width: 0; flex: 1; color:#fff; font-size: 38rpx; line-height: 1.3; font-weight: 700; }
+.primary-status { flex:0 0 auto; padding:7rpx 16rpx; color:#fff; background:rgba(255,255,255,.18); border-radius:999rpx; font-size:24rpx; font-weight:650; }
+.task-meta { margin-top: 9rpx; }
+.primary-task .task-meta { color:rgba(255,255,255,.82); }
 .task-summary { align-items: center; font-size: 28rpx; line-height: 1.45; }
+.primary-task .progress { margin:22rpx 0 14rpx; background:rgba(255,255,255,.28); }
+.primary-task .progress-bar { background:#fff; }
+.next-step { display:flex; align-items:center; gap:12rpx; min-height:76rpx; padding:0 20rpx; margin-top:20rpx; color:#07549D; background:rgba(255,255,255,.92); border-radius:18rpx; font-size:27rpx; font-weight:650; }
 .task-action, .row-action { color: var(--action); font-weight: 650; }
-.enter-copy { display: flex; align-items: center; justify-content: center; gap: 8rpx; min-height: 88rpx; margin-top: 28rpx; color: #fff; background: var(--action); border-radius: var(--radius-control); font-size: 30rpx; font-weight: 650; }
+.enter-copy { display: flex; align-items: center; justify-content: center; gap: 8rpx; min-height: 88rpx; margin-top: 20rpx; color: var(--action); background: #fff; border-radius: var(--radius-control); font-size: 30rpx; font-weight: 700; }
 .remaining-section { min-width: 0; }
 .section-heading { align-items: center; }
 .section-count { color: var(--muted); font-size: 28rpx; }
@@ -29,6 +45,8 @@
 .task-row:last-child { border-bottom: 0; }
 .task-row-title { min-width: 0; flex: 1; font-size: 31rpx; line-height: 1.4; font-weight: 650; }
 .task-row-main { min-width: 0; }
+.compact-progress { height:8rpx; overflow:hidden; margin-top:16rpx; background:#E6EAF0; border-radius:999rpx; }
+.compact-progress view { height:100%; background:var(--action); border-radius:999rpx; }
 .row-action { display: flex; align-items: center; gap: 6rpx; margin-top: 14rpx; font-size: 28rpx; }
 .challenge-section { margin-top: 36rpx; }
 .challenge-card { display: flex; width: 100%; min-height: 132rpx; margin: 0; padding: 28rpx 30rpx; box-sizing: border-box; align-items: center; gap: 20rpx; color: var(--ink); background: var(--action-soft); border: 1rpx solid var(--line); border-radius: var(--radius-card); text-align: left; }

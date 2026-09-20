@@ -1,0 +1,26 @@
+<view class="page security-page">
+  <view wx:if="{{loading}}" class="state-panel"><view class="state-icon"><t-loading size="48rpx"/></view><text class="state-title">正在加载账号安全信息</text></view>
+  <view wx:elif="{{error}}" class="state-panel state-error"><text class="state-title">加载失败</text><text class="state-copy">{{error}}</text><button class="secondary" bindtap="load">重新加载</button></view>
+  <block wx:elif="{{security}}">
+    <view class="security-card">
+      <view class="card-head"><view class="icon"><t-icon name="logo-wechat-stroke" size="42rpx"/></view><view><text class="title">当前登录方式</text><text class="muted">{{security.methodText}}</text></view></view>
+    </view>
+
+    <view class="security-card phone-card">
+      <view class="action-row" bindtap="togglePhoneForm"><view class="icon"><t-icon name="mobile" size="40rpx"/></view><view class="action-copy"><text class="device-title">手机号</text><text class="muted">{{phoneMasked}}</text></view><text class="link-copy">修改</text><t-icon name="chevron-right" size="32rpx"/></view>
+      <view wx:if="{{showPhoneForm}}" class="phone-form">
+        <input class="field" type="number" maxlength="11" value="{{newPhone}}" bindinput="setNewPhone" placeholder="输入新手机号" />
+        <view class="code-row"><input class="field code-field" type="number" maxlength="6" value="{{phoneCode}}" bindinput="setPhoneCode" placeholder="短信验证码" /><button class="secondary code-button" loading="{{sendingCode}}" bindtap="sendPhoneCode">发送验证码</button></view>
+        <button class="primary confirm-phone" loading="{{phoneChanging}}" bindtap="confirmPhone">验证并修改手机号</button>
+      </view>
+    </view>
+
+    <text class="section-title">有效设备</text>
+    <view class="security-card">
+      <view wx:if="{{!security.sessions.length}}" class="empty-row">暂无有效设备</view>
+      <view wx:for="{{security.sessions}}" wx:key="id" class="device-row"><view><text class="device-title">{{item.clientKind === 'miniprogram' ? '微信小程序' : '网页后台'}}</text><text class="muted">{{item.current ? '当前设备' : '已登录设备'}}</text></view><text wx:if="{{item.current}}" class="current">当前</text><button wx:else size="mini" data-id="{{item.id}}" loading="{{busyId === item.id}}" bindtap="revoke">退出</button></view>
+    </view>
+    <view class="security-card actions"><view class="action-row" bindtap="logout"><text>退出当前设备</text><t-icon name="chevron-right" size="34rpx"/></view><view class="action-row danger" bindtap="logoutAll"><text>退出全部设备</text><t-icon name="chevron-right" size="34rpx"/></view></view>
+  </block>
+</view>
+<environment-badge />

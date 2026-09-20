@@ -43,9 +43,11 @@
     </view>
 
     <view wx:if="{{!reviewing && currentQuestion}}" class="question-surface">
-      <text class="question-type">{{currentQuestion.typeText}}</text>
-      <text class="question-title">{{currentIndex + 1}}. {{currentQuestion.prompt}}</text>
-      <text wx:if="{{currentQuestion.type === 'multiple_choice'}}" class="question-tip">可选择多个答案</text>
+      <view class="question-prompt-card">
+        <text class="question-type">{{currentQuestion.typeText}}</text>
+        <text class="question-title">{{currentIndex + 1}}. {{currentQuestion.prompt}}</text>
+        <text wx:if="{{currentQuestion.type === 'multiple_choice'}}" class="question-tip">可选择多个答案</text>
+      </view>
 
       <checkbox-group wx:if="{{currentQuestion.type === 'multiple_choice'}}" data-id="{{currentQuestion.id}}" bindchange="chooseMany" class="option-list">
         <label wx:for="{{currentQuestion.options}}" wx:key="label" class="option-row {{item.checked ? 'option-selected' : ''}}">

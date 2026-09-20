@@ -1,21 +1,24 @@
 {
   "pages": [
-    "pages/todo/index", "pages/records/index", "pages/messages/index", "pages/profile/index",
+    "pages/todo/index", "pages/records/index", "pages/games/index", "pages/messages/index", "pages/profile/index",
     "pages/login/index", "pages/bind/index", "pages/pending/index", "pages/register/index",
     "pages/task/index", "pages/courseware/index", "pages/html/index", "pages/exam/index", "pages/signature/index", "pages/record-detail/index",
-    "pages/management/index", "pages/change-request/index", "pages/challenge/index", "pages/leaderboard/index"
+    "pages/management/index", "pages/change-request/index", "pages/challenge/index", "pages/leaderboard/index",
+    "pages/profile-detail/index", "pages/credentials/index", "pages/account-security/index", "pages/points/index"
   ],
-  "window": { "navigationBarTitleText": "安全培训", "navigationBarBackgroundColor": "#F6F8F7", "navigationBarTextStyle": "black", "backgroundColor": "#F6F8F7", "backgroundTextStyle": "dark" },
+  "window": { "navigationBarTitleText": "安全培训", "navigationBarBackgroundColor": "#F4F5F7", "navigationBarTextStyle": "black", "backgroundColor": "#F4F5F7", "backgroundTextStyle": "dark" },
   "usingComponents": {
     "environment-badge": "/components/environment-badge/index",
     "t-icon": "tdesign-miniprogram/icon/icon",
     "t-loading": "tdesign-miniprogram/loading/loading"
   },
   "tabBar": {
-    "color": "#546B63", "selectedColor": "#245D47", "backgroundColor": "#ffffff", "borderStyle": "black",
+    "custom": true,
+    "color": "#5B6572", "selectedColor": "#087BE8", "backgroundColor": "#ffffff", "borderStyle": "black",
     "list": [
-      { "pagePath": "pages/todo/index", "text": "待办" }, { "pagePath": "pages/records/index", "text": "我的记录" },
-      { "pagePath": "pages/messages/index", "text": "消息" }, { "pagePath": "pages/profile/index", "text": "我的" }
+      { "pagePath": "pages/todo/index", "text": "待办" }, { "pagePath": "pages/records/index", "text": "记录" },
+      { "pagePath": "pages/games/index", "text": "闯关" }, { "pagePath": "pages/messages/index", "text": "消息" },
+      { "pagePath": "pages/profile/index", "text": "我的" }
     ]
   },
   "style": "v2", "sitemapLocation": "sitemap.json"

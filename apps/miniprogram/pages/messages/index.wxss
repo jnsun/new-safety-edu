@@ -1,8 +1,17 @@
-.messages-page { max-width: 1000rpx; margin: 0 auto; }
+.messages-page { max-width: 1000rpx; margin: 0 auto; padding-bottom: calc(156rpx + env(safe-area-inset-bottom)); }
+.unread-count { flex:0 0 auto; padding-top:10rpx; color:var(--muted); font-size:26rpx; }
+.category-scroll { width:100%; margin:-8rpx 0 28rpx; white-space:nowrap; }
+.category-row { display:inline-flex; gap:14rpx; padding-right:20rpx; }
+.category-chip { display:flex; min-height:58rpx; padding:0 22rpx; align-items:center; color:var(--muted); background:var(--surface); border:1rpx solid var(--line); border-radius:999rpx; font-size:25rpx; }
+.category-chip-active { color:var(--action); background:var(--action-soft); border-color:transparent; font-weight:650; }
 .message-list { background: transparent; }
-.message-row { display: flex; align-items: flex-start; gap: 18rpx; min-height: 132rpx; padding: 28rpx; margin-bottom: 20rpx; box-sizing: border-box; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
-.message-unread { background: var(--surface); border-color: var(--action); }
-.unread-dot { flex: 0 0 auto; width: 14rpx; height: 14rpx; background: var(--action); border-radius: 50%; }
+.timeline-item { display:flex; align-items:stretch; gap:16rpx; }
+.timeline-rail { position:relative; flex:0 0 24rpx; display:flex; justify-content:center; }
+.timeline-dot { z-index:1; width:14rpx; height:14rpx; margin-top:40rpx; background:#CBD2DA; border:6rpx solid var(--canvas); border-radius:50%; }
+.timeline-dot-unread { background:var(--action); }
+.timeline-line { position:absolute; top:54rpx; bottom:-22rpx; width:2rpx; background:var(--line); }
+.message-row { display: flex; flex:1; align-items: center; gap: 18rpx; min-height: 132rpx; padding: 26rpx 28rpx; margin-bottom: 20rpx; box-sizing: border-box; background: var(--surface); border: 1rpx solid var(--line); border-radius: 30rpx; box-shadow: var(--elevation); }
+.message-unread { background: #E9F3FF; border-color: transparent; }
 .message-copy { min-width: 0; flex: 1; }
 .message-title, .message-body, .message-time { display: block; }
 .message-title { font-size: 30rpx; line-height: 1.45; font-weight: 650; }

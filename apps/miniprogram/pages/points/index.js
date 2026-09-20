@@ -1,0 +1,2 @@
+const api=require('../../utils/api')
+Page({data:{loading:true,error:'',points:null,tab:'summary'},onShow(){return this.load()},async load(){this.setData({loading:true,error:''});try{this.setData({points:await api.request('/api/me/challenge-points')})}catch(error){this.setData({error:error.message||'积分信息加载失败'})}finally{this.setData({loading:false})}},switchTab(event){this.setData({tab:event.currentTarget.dataset.tab})},openLeaderboard(){wx.navigateTo({url:'/pages/leaderboard/index'})}})

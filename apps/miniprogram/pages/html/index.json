@@ -1,1 +1,1 @@
-{ "navigationBarTitleText": "HTML 课件" }
+{ "navigationBarTitleText": "HTML 课件", "usingComponents": { "environment-badge": "/components/environment-badge/index", "t-icon": "tdesign-miniprogram/icon/icon" } }

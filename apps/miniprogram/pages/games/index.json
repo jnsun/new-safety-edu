@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "安全闯关中心",
+  "usingComponents": {
+    "environment-badge": "/components/environment-badge/index",
+    "t-icon": "tdesign-miniprogram/icon/icon",
+    "t-loading": "tdesign-miniprogram/loading/loading"
+  }
+}

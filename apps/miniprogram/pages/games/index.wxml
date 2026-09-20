@@ -1,0 +1,30 @@
+<view class="page games-page">
+  <view class="games-hero">
+    <view><text class="hero-heading">安全闯关</text><text class="hero-copy">自愿练习，巩固安全知识</text></view>
+    <view class="hero-avatar"><t-icon name="user" size="38rpx" /></view>
+  </view>
+
+  <view wx:if="{{points}}" class="points-summary"><view><text class="metric-value">{{points.total || 0}}</text><text class="metric-label">累计积分</text></view><view><text class="metric-value">{{points.monthPoints || 0}}</text><text class="metric-label">本月积分</text></view><view><text class="metric-value">{{points.rank || '—'}}</text><text class="metric-label">本月排名</text></view></view>
+
+  <view wx:if="{{loading}}" class="state-panel"><view class="state-icon"><t-loading size="48rpx" /></view><text class="state-title">正在加载闯关内容</text></view>
+  <view wx:elif="{{error}}" class="state-panel state-error"><view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view><text class="state-title">闯关中心加载失败</text><text class="state-copy">{{error}}</text><button class="secondary" bindtap="load">重新加载</button></view>
+  <block wx:else>
+    <view class="section-heading"><text class="section-title">今日挑战</text><text class="section-note">自愿参与，不影响培训完成</text></view>
+    <view class="daily-card" bindtap="openChallenge" hover-class="tap-active" aria-role="button">
+      <view class="daily-icon"><t-icon name="lightbulb" size="54rpx" /></view>
+      <view class="daily-copy"><text class="daily-title">{{!challenge.totalCount ? '每日挑战待启用' : challenge.completedAt ? '今日挑战已完成' : '每日安全挑战'}}</text><text class="daily-subtitle">{{!challenge.totalCount ? '管理员启用挑战题后即可参与' : '已答 ' + (challenge.answeredCount || 0) + '/' + challenge.totalCount + ' 题 · 今日 ' + (challenge.todayPoints || 0) + ' 分'}}</text></view>
+      <text class="daily-status">{{!challenge.totalCount ? '未开启' : challenge.completedAt ? '已完成' : '进行中'}}</text>
+    </view>
+    <view class="challenge-progress"><view style="width: {{challenge.totalCount ? challenge.answeredCount * 100 / challenge.totalCount : 0}}%"></view></view>
+    <view class="daily-button {{!challenge.totalCount ? 'daily-button-disabled' : ''}}" bindtap="openChallenge">{{!challenge.totalCount ? '等待管理员开启' : challenge.completedAt ? '查看今日结果' : '继续挑战'}}</view>
+
+    <view class="section-heading"><text class="section-title">专题游戏</text><text class="section-note">首批玩法逐步开放</text></view>
+    <view class="game-list">
+      <view class="game-card" bindtap="notReady"><view class="game-icon"><t-icon name="search" size="42rpx" /></view><view class="game-copy"><text class="game-title">找隐患</text><text class="game-note">从工作场景中发现风险</text></view><text class="game-action">开始闯关 ›</text></view>
+      <view class="game-card" bindtap="notReady"><view class="game-icon"><t-icon name="order-adjustment-column" size="42rpx" /></view><view class="game-copy"><text class="game-title">步骤排序</text><text class="game-note">把安全操作按顺序排好</text></view><text class="game-action">继续闯关 ›</text></view>
+    </view>
+
+    <view class="ranking-card" bindtap="openLeaderboard" hover-class="tap-active"><view><text class="ranking-title">积分排行榜</text><text class="ranking-note">查看个人和部门本月排名</text></view><t-icon name="chevron-right" size="38rpx" /></view>
+  </block>
+</view>
+<environment-badge />

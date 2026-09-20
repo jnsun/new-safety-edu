@@ -1,1 +1,3 @@
 
+.html-fallback { display:flex; align-items:center; justify-content:center; }
+.html-fallback .state-panel { width:100%; box-sizing:border-box; }

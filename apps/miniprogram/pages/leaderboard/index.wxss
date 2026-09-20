@@ -1,7 +1,7 @@
 .leader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24rpx; margin-bottom: 24rpx; }
 .title { display: block; font-size: 42rpx; font-weight: 750; }
 .month-picker { padding: 14rpx 20rpx; color: var(--action); background: var(--action-soft); border-radius: 14rpx; }
-.points-card { display: flex; justify-content: space-around; margin-bottom: 24rpx; padding: 28rpx; background: var(--ink); border: 1rpx solid var(--ink); border-radius: var(--radius-card); color: #fff; text-align: center; }
+.points-card { display: flex; justify-content: space-around; margin-bottom: 24rpx; padding: 28rpx; background: var(--blue-gradient); border-radius: 32rpx; color: #fff; text-align: center; box-shadow:var(--elevation-raised); }
 .points-value { display: block; font-size: 48rpx; font-weight: 750; }
 .small-value { font-size: 38rpx; }
 .points-card .muted { color: rgba(255,255,255,.82); }
@@ -11,7 +11,7 @@
 .state { padding: 42rpx; text-align: center; }
 .state button { margin-top: 24rpx; }
 .error { color: var(--danger); }
-.self-card { display: flex; align-items: center; gap: 22rpx; margin-bottom: 18rpx; padding: 24rpx 28rpx; color: #fff; background: var(--action); border-radius: 20rpx; }
+.self-card { display: flex; align-items: center; gap: 22rpx; margin-bottom: 18rpx; padding: 24rpx 28rpx; color: #fff; background: var(--blue-gradient); border-radius: 24rpx; }
 .self-rank { flex: 1; font-size: 31rpx; font-weight: 700; }
 .rank-list, .nearby { overflow: hidden; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); }
 .nearby { margin-top: 24rpx; }

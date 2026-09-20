@@ -48,7 +48,7 @@
       </view>
       <view class="stage-list">
         <view wx:for="{{stageItems}}" wx:key="key" class="stage-item stage-{{item.state}}">
-          <view class="stage-mark"><t-icon wx:if="{{item.state === 'done'}}" name="check" size="24rpx" /></view>
+          <view class="stage-mark"><t-icon wx:if="{{item.state === 'done'}}" name="check" size="24rpx" /><text wx:else>{{index + 1}}</text></view>
           <text class="stage-label">{{item.label}}</text>
           <text class="stage-state">{{item.stateText}}</text>
         </view>
@@ -64,8 +64,10 @@
         <view wx:if="{{!task.coursewares.length}}" class="inline-empty">本任务没有需要在线学习的课件。</view>
         <view wx:for="{{task.coursewares}}" wx:key="progressId" class="course-row" data-version-id="{{item.versionId}}" bindtap="study" hover-class="tap-active" aria-role="button" aria-label="{{item.title}}，{{item.completedAt ? '已完成' : '未完成'}}">
           <view class="course-copy">
-            <text class="course-title">{{index + 1}}. {{item.title}}</text>
+            <view class="course-number">{{index + 1 < 10 ? '0' + (index + 1) : index + 1}}</view>
+            <view class="course-text"><text class="course-title">{{item.title}}</text>
             <text class="course-meta">v{{item.version}} · {{item.type === 'rich_text' ? '图文' : 'HTML'}}</text>
+            </view>
           </view>
           <view class="course-state">
             <text class="{{item.completedAt ? 'success' : 'warning'}}">{{item.completedAt ? '已完成' : '未完成'}}</text>

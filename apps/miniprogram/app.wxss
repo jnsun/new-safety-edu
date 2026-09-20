@@ -1,32 +1,36 @@
 page {
-  --canvas: #F6F8F7;
+  --canvas: #F4F5F7;
   --surface: #ffffff;
-  --surface-soft: #EEF5F1;
-  --ink: #1F332E;
-  --ink-soft: #334B44;
-  --muted: #546B63;
-  --action: #245D47;
-  --action-strong: #194C39;
-  --action-soft: #EEF5F1;
-  --success: #247A57;
+  --surface-soft: #F8FAFC;
+  --ink: #15181C;
+  --ink-soft: #35404D;
+  --muted: #5B6572;
+  --action: #087BE8;
+  --action-strong: #0867C6;
+  --action-soft: #E9F3FF;
+  --success: #217348;
   --success-soft: #EAF5EF;
   --warning: #9A5B10;
   --warning-soft: #FAF1DF;
-  --danger: #B83C35;
+  --danger: #B52E46;
   --danger-soft: #FBECEA;
-  --line: #DDE7E1;
-  --line-strong: #C8D8D0;
-  --radius-card: 28rpx;
-  --radius-control: 22rpx;
-  --elevation: 0 12rpx 34rpx rgba(31, 51, 46, .07);
-  --elevation-raised: 0 20rpx 48rpx rgba(31, 51, 46, .11);
+  --line: #E4E7EB;
+  --line-strong: #CDD3DA;
+  --blue-gradient: linear-gradient(135deg, #088DF9 0%, #0762C1 100%);
+  --orange: #C45800;
+  --orange-strong: #A94800;
+  --orange-soft: #FFF2E7;
+  --radius-card: 36rpx;
+  --radius-control: 24rpx;
+  --elevation: 0 8rpx 24rpx rgba(17, 24, 39, .045);
+  --elevation-raised: 0 18rpx 42rpx rgba(8, 103, 198, .16);
   min-height: 100%;
   background: var(--canvas);
   color: var(--ink);
   font-size: 30rpx;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
 }
-.page { width: 100%; min-height: 100vh; padding: 32rpx 32rpx calc(72rpx + env(safe-area-inset-bottom)); box-sizing: border-box; }
+.page { width: 100%; min-height: 100vh; padding: 28rpx 32rpx calc(156rpx + env(safe-area-inset-bottom)); box-sizing: border-box; }
 .page-head { margin: 4rpx 4rpx 32rpx; }
 .page-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 24rpx; }
 .page-title { display: block; color: var(--ink); font-size: 44rpx; line-height: 1.22; font-weight: 700; letter-spacing: -.5rpx; }
@@ -70,7 +74,7 @@ textarea.field { width: 100%; min-height: 180rpx; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 22rpx; margin: 16rpx 0; }
 .row > text:first-child { min-width: 0; }
 .status { display: inline-block; flex: 0 0 auto; padding: 8rpx 18rpx; border-radius: 999rpx; color: var(--action); background: var(--action-soft); font-size: 26rpx; font-weight: 650; }
-.progress { height: 12rpx; overflow: hidden; border-radius: 999rpx; background: #E3EAE6; margin: 24rpx 0; }
+.progress { height: 12rpx; overflow: hidden; border-radius: 999rpx; background: #E6EAF0; margin: 24rpx 0; }
 .progress-bar { height: 100%; border-radius: 12rpx; background: var(--action); }
 .error { display: block; color: var(--danger); margin-top: 18rpx; }
 .success { color: var(--success); font-weight: 550; }
@@ -95,6 +99,13 @@ radio-group label, checkbox-group label { color: var(--ink-soft); }
 .screen-tab { position: relative; flex: 1; min-height: 88rpx; display: flex; align-items: center; justify-content: center; color: var(--muted); font-weight: 600; }
 .screen-tab-active { color: var(--action); font-weight: 700; }
 .screen-tab-active::after { content: ''; position: absolute; left: 26rpx; right: 26rpx; bottom: -1rpx; height: 5rpx; background: var(--action); border-radius: 999rpx; }
+.pill-row { display: flex; gap: 14rpx; overflow-x: auto; white-space: nowrap; }
+.pill { display: inline-flex; flex: 0 0 auto; min-height: 56rpx; padding: 0 22rpx; align-items: center; justify-content: center; box-sizing: border-box; color: var(--muted); background: var(--surface); border: 1rpx solid var(--line); border-radius: 999rpx; font-size: 25rpx; }
+.pill-active { color: var(--action); background: var(--action-soft); border-color: transparent; font-weight: 650; }
+.primary-gradient { color: #fff !important; background: var(--blue-gradient) !important; }
+.orange-action { color: #fff !important; background: var(--orange) !important; }
+.orange-action:active { background: var(--orange-strong) !important; }
+.safe-bottom { padding-bottom: calc(28rpx + env(safe-area-inset-bottom)); }
 
 @media (min-width: 700px) {
   .page { padding-left: 48rpx; padding-right: 48rpx; }

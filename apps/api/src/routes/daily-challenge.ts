@@ -56,6 +56,31 @@ async function serializeAttempt(attemptId: string) {
   };
 }
 
+async function buildDailySnapshot(personId: string, day: string, secret: string): Promise<Snapshot> {
+  const [memberships, projects] = await Promise.all([
+    prisma.organizationMembership.findMany({ where: { personId, active: true }, select: { organizationId: true } }),
+    prisma.projectMember.findMany({ where: { personId, status: "active" }, select: { projectId: true } })
+  ]);
+  const organizationIds = memberships.map(({ organizationId }) => organizationId);
+  const projectIds = projects.map(({ projectId }) => projectId);
+  const questions = await prisma.question.findMany({
+    where: { active: true, challengeEnabled: true, OR: [
+      { bank: { scopeType: "company", scopeId: null } },
+      ...(organizationIds.length ? [{ bank: { scopeType: "organization" as const, scopeId: { in: organizationIds } } }] : []),
+      ...(projectIds.length ? [{ bank: { scopeType: "project" as const, scopeId: { in: projectIds } } }] : [])
+    ] },
+    include: { versions: { orderBy: { version: "desc" }, take: 1 } }
+  });
+  const selected = selectDailyQuestions(questions.flatMap((question) => question.versions[0] ? [{
+    id: question.versions[0].id,
+    active: question.active,
+    challengeEnabled: question.challengeEnabled,
+    question,
+    version: question.versions[0]
+  }] : []), `${secret}:${personId}:${day}`);
+  return { version: 1, date: day, questions: selected.map(({ question, version }) => ({ questionId: question.id, questionVersionId: version.id, type: version.type, prompt: version.prompt, options: version.options, category: question.challengeCategory, difficulty: question.challengeDifficulty })) };
+}
+
 type MonthRange = { month: string; start: Date; end: Date };
 
 async function personalScores(range: MonthRange): Promise<PersonalScore[]> {
@@ -134,38 +159,23 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
     const now = new Date();
     const day = challengeDayRange(now, TIME_ZONE);
     const challengeDate = new Date(`${day.date}T00:00:00.000Z`);
-    let attempt = await prisma.challengeAttempt.findUnique({ where: { personId_challengeDate: { personId: principal.personId, challengeDate } }, select: { id: true } });
-    if (!attempt) {
-      const [memberships, projects] = await Promise.all([
-        prisma.organizationMembership.findMany({ where: { personId: principal.personId, active: true }, select: { organizationId: true } }),
-        prisma.projectMember.findMany({ where: { personId: principal.personId, status: "active" }, select: { projectId: true } })
-      ]);
-      const organizationIds = memberships.map(({ organizationId }) => organizationId);
-      const projectIds = projects.map(({ projectId }) => projectId);
-      const questions = await prisma.question.findMany({
-        where: { active: true, challengeEnabled: true, OR: [
-          { bank: { scopeType: "company", scopeId: null } },
-          ...(organizationIds.length ? [{ bank: { scopeType: "organization" as const, scopeId: { in: organizationIds } } }] : []),
-          ...(projectIds.length ? [{ bank: { scopeType: "project" as const, scopeId: { in: projectIds } } }] : [])
-        ] },
-        include: { versions: { orderBy: { version: "desc" }, take: 1 } }
-      });
-      const selected = selectDailyQuestions(questions.flatMap((question) => question.versions[0] ? [{
-        id: question.versions[0].id,
-        active: question.active,
-        challengeEnabled: question.challengeEnabled,
-        question,
-        version: question.versions[0]
-      }] : []), `${deps.env.JWT_SECRET}:${principal.personId}:${day.date}`);
-      const snapshot: Snapshot = { version: 1, date: day.date, questions: selected.map(({ question, version }) => ({ questionId: question.id, questionVersionId: version.id, type: version.type, prompt: version.prompt, options: version.options, category: question.challengeCategory, difficulty: question.challengeDifficulty })) };
+    const existingAttempt = await prisma.challengeAttempt.findUnique({ where: { personId_challengeDate: { personId: principal.personId, challengeDate } }, select: { id: true, questionSnapshot: true, _count: { select: { answers: true } } } });
+    let attemptId = existingAttempt?.id ?? null;
+    const emptyAttempt = existingAttempt && !snapshotOf(existingAttempt.questionSnapshot).questions.length && existingAttempt._count.answers === 0;
+    if (!attemptId || emptyAttempt) {
+      const snapshot = await buildDailySnapshot(principal.personId, day.date, deps.env.JWT_SECRET);
+      if (attemptId) {
+        if (snapshot.questions.length) await prisma.challengeAttempt.update({ where: { id: attemptId }, data: { questionSnapshot: snapshot as unknown as Prisma.InputJsonValue } });
+        return { data: await serializeAttempt(attemptId) };
+      }
       try {
-        attempt = await prisma.challengeAttempt.create({ data: { personId: principal.personId, challengeDate, questionSnapshot: snapshot as unknown as Prisma.InputJsonValue }, select: { id: true } });
+        attemptId = (await prisma.challengeAttempt.create({ data: { personId: principal.personId, challengeDate, questionSnapshot: snapshot as unknown as Prisma.InputJsonValue }, select: { id: true } })).id;
       } catch (error) {
         if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) throw error;
-        attempt = await prisma.challengeAttempt.findUniqueOrThrow({ where: { personId_challengeDate: { personId: principal.personId, challengeDate } }, select: { id: true } });
+        attemptId = (await prisma.challengeAttempt.findUniqueOrThrow({ where: { personId_challengeDate: { personId: principal.personId, challengeDate } }, select: { id: true } })).id;
       }
     }
-    return { data: await serializeAttempt(attempt.id) };
+    return { data: await serializeAttempt(attemptId) };
   });
 
   app.post("/api/me/daily-challenge/answers", authenticated, async (request) => {
@@ -233,12 +243,13 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
     const query = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(10).max(100).default(20), keyword: z.string().trim().max(100).optional(), enabled: z.enum(["all", "enabled", "disabled"]).default("all") }).parse(request.query);
     const where: Prisma.QuestionWhereInput = { active: true, bank: { active: true }, ...(query.keyword ? { prompt: { contains: query.keyword, mode: "insensitive" } } : {}), ...(query.enabled === "enabled" ? { challengeEnabled: true } : query.enabled === "disabled" ? { challengeEnabled: false } : {}) };
-    const [items, total, enabledCount] = await Promise.all([
+    const [items, total, enabledCount, availableCount] = await Promise.all([
       prisma.question.findMany({ where, include: { bank: { select: { id: true, name: true, scopeType: true, scopeId: true } } }, orderBy: [{ bankId: "asc" }, { createdAt: "asc" }], skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
       prisma.question.count({ where }),
-      prisma.question.count({ where: { active: true, challengeEnabled: true, bank: { active: true } } })
+      prisma.question.count({ where: { active: true, challengeEnabled: true, bank: { active: true } } }),
+      prisma.question.count({ where: { active: true, bank: { active: true } } })
     ]);
-    return { data: { items, total, enabledCount, page: query.page, pageSize: query.pageSize } };
+    return { data: { items, total, enabledCount, availableCount, page: query.page, pageSize: query.pageSize } };
   });
 
   app.patch("/api/challenge/admin/questions/:id", manager, async (request) => {
@@ -264,6 +275,17 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
       return changed.count;
     });
     return { data: { updated: result } };
+  });
+
+  app.post("/api/challenge/admin/questions/enable-all", manager, async (request) => {
+    const principal = principalOf(request);
+    if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
+    const updated = await prisma.$transaction(async (tx) => {
+      const changed = await tx.question.updateMany({ where: { active: true, challengeEnabled: false, bank: { active: true } }, data: { challengeEnabled: true } });
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "challenge.questions_enable_all", objectType: "question", result: "success", metadata: { count: changed.count } } });
+      return changed.count;
+    });
+    return { data: { updated } };
   });
 
   app.get("/api/challenge/admin/points", manager, async (request) => {

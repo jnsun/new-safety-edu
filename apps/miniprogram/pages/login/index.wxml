@@ -1,7 +1,8 @@
 <view class="page login-page">
-  <view class="login-brand"><view class="brand-mark"><t-icon name="secured" size="52rpx" color="#ffffff" /></view><text class="hero-title">安全培训课堂</text><text class="login-copy">学习有进度，安全有行动</text><text class="login-detail">登录后查看本人的培训任务、考试与学习记录。</text></view>
-  <view class="card login-card">
-    <block wx:if="{{wechatLoginEnabled}}"><text class="title">微信认证登录</text><text class="muted">首次使用时先授权微信手机号。后台有唯一匹配档案即可自动绑定；无法匹配时再补充姓名和部门申请审核。</text><button class="primary" loading="{{busy}}" bindtap="login"><t-icon name="logo-wechat-stroke" size="34rpx" color="#ffffff" />微信登录</button><text class="login-privacy">仅使用微信身份完成本人账号认证</text></block>
+  <view class="login-brand"><text class="brand-org">山西物化院</text><text class="hero-title">安全学习</text><text class="login-detail">把安全要求，落实到每一天</text></view>
+  <image class="login-hero-image" src="/assets/figma-v3/login-field-team.jpeg" mode="aspectFill" />
+  <view class="login-actions">
+    <block wx:if="{{wechatLoginEnabled}}"><button class="primary login-button" loading="{{busy}}" bindtap="login"><t-icon name="logo-wechat-stroke" size="36rpx" color="#ffffff" />微信一键登录</button><text class="login-privacy">登录即表示你已阅读并同意《隐私政策》和《用户协议》</text></block>
     <view wx:if="{{!wechatLoginEnabled}}" class="service-offline"><t-icon name="error-circle" size="38rpx" /><text>微信登录服务尚未配置，请联系管理员。</text></view>
     <text wx:if="{{error}}" class="error">{{error}}</text>
   </view>

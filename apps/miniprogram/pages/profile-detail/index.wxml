@@ -1,0 +1,9 @@
+<view class="page detail-page">
+  <view wx:if="{{loading}}" class="state-panel"><view class="state-icon"><t-loading size="48rpx" /></view><text class="state-title">正在加载个人资料</text></view>
+  <view wx:elif="{{error}}" class="state-panel state-error"><view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view><text class="state-title">个人资料加载失败</text><text class="state-copy">{{error}}</text><button class="secondary" bindtap="load">重新加载</button></view>
+  <block wx:elif="{{person}}">
+    <view class="identity-card"><image wx:if="{{photoPath}}" class="avatar" src="{{photoPath}}" mode="aspectFill"/><view wx:else class="avatar avatar-empty"><t-icon name="user" size="60rpx"/></view><view><text class="name">{{person.name}}</text><text class="type">{{person.typeText}}</text></view></view>
+    <view class="info-card"><view class="info-row"><text>当前主部门</text><text>{{person.organizationText}}</text></view><view class="info-row"><text>手机号</text><text>{{person.phoneText}}</text></view><view class="info-row"><text>身份证</text><text>{{person.nationalIdMasked || '待补录'}}</text></view><view class="info-row"><text>人员状态</text><text>{{person.status === 'active' ? '在职/有效' : person.status}}</text></view></view>
+    <view class="info-strip"><t-icon name="info-circle" size="36rpx"/><text>完整身份证需在“我的”页面重新进行微信身份验证后短时查看。</text></view>
+  </block>
+</view><environment-badge />

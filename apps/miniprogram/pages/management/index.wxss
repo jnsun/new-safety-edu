@@ -2,7 +2,7 @@
 .list-item:last-child { border-bottom: 0; }
 .list-item button { margin: 12rpx 12rpx 0 0; }
 .review-panel { border: 2rpx solid var(--action); box-shadow: var(--elevation-raised); }
-.management-section { padding: 30rpx; }
+.management-section { padding: 28rpx; border-radius:32rpx; }
 .management-title { display: flex; align-items: center; gap: 14rpx; margin-bottom: 18rpx; }
 .management-title .subtitle { margin: 0; }
 .management-icon { display: flex; width: 62rpx; height: 62rpx; align-items: center; justify-content: center; color: var(--action); background: var(--action-soft); border-radius: 18rpx; }
@@ -10,3 +10,6 @@
 .management-section .field { margin-bottom: 18rpx; }
 .management-section .row { flex-wrap: wrap; }
 .review-panel { position: relative; }
+.screen-tabs { position:sticky; top:0; z-index:4; padding:0 8rpx; background:rgba(244,245,247,.96); }
+.list-item { padding:26rpx 0; }
+.list-item .status { font-size:23rpx; }

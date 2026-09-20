@@ -1,23 +1,32 @@
-.records-page { max-width: 1100rpx; margin: 0 auto; }
+.records-page { max-width: 1100rpx; margin: 0 auto; padding-bottom: calc(156rpx + env(safe-area-inset-bottom)); }
 .page-heading { margin-bottom: 30rpx; }
 .page-title { display: block; font-size: 44rpx; line-height: 1.2; font-weight: 700; letter-spacing: -1rpx; }
 .page-copy { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
+.filter-panel { margin-bottom: 24rpx; }
+.filter-scroll { width: 100%; white-space: nowrap; }
+.filter-row { display: inline-flex; gap: 14rpx; padding-right: 20rpx; }
+.filter-chip { flex: 0 0 auto; padding: 13rpx 22rpx; color: var(--muted); background: var(--surface); border: 1rpx solid var(--line); border-radius: 999rpx; font-size: 24rpx; }
+.filter-chip-active { color: var(--action); background: var(--action-soft); border-color: transparent; font-weight: 650; }
+.status-filter-row { display: flex; gap: 14rpx; margin-top: 18rpx; }
+.status-filter { flex:0 0 auto; padding: 13rpx 22rpx; color: var(--muted); background:var(--surface); border:1rpx solid var(--line); border-radius:999rpx; font-size: 24rpx; text-align: center; }
+.status-filter-active { color: var(--action); background: var(--action-soft); border-color:transparent; font-weight: 650; }
 .state-panel { padding: 58rpx 34rpx; background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--elevation); text-align: center; }
 .state-title { display: block; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
 .state-copy { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.55; }
 .state-error .state-title { color: var(--danger); }
 .retry-button { width: 100%; margin-top: 30rpx; }
-.record-item { display: block; width: 100%; min-height: 88rpx; padding: 32rpx; margin: 0 0 22rpx; box-sizing: border-box; color: var(--ink); background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); text-align: left; line-height: 1.4; }
+.record-item { display: block; width: 100%; min-height: 88rpx; padding: 28rpx 30rpx 18rpx; margin: 0 0 20rpx; box-sizing: border-box; color: var(--ink); background: var(--surface); border: 1rpx solid var(--line); border-radius: 32rpx; box-shadow: var(--elevation); text-align: left; line-height: 1.4; }
 .record-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 22rpx; }
 .record-heading-copy { min-width: 0; flex: 1; }
-.record-title { display: block; font-size: 34rpx; line-height: 1.35; font-weight: 650; }
-.record-type { display: block; margin-top: 8rpx; color: var(--muted); font-size: 28rpx; line-height: 1.4; }
-.record-facts { padding-top: 14rpx; margin-top: 22rpx; border-top: 1rpx solid var(--line); }
-.fact-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 28rpx; padding: 12rpx 0; font-size: 28rpx; line-height: 1.5; }
+.record-title { display: block; font-size: 32rpx; line-height: 1.35; font-weight: 700; }
+.record-type { display: block; margin-bottom:10rpx; color: var(--muted); font-size: 24rpx; line-height: 1.4; }
+.record-heading-copy { display:flex; flex-direction:column-reverse; }
+.record-facts { display:grid; grid-template-columns:1fr 1fr; gap:18rpx 24rpx; padding:20rpx 0; margin-top:20rpx; border-top: 1rpx solid var(--line); border-bottom:1rpx solid var(--line); }
+.fact-row { display: flex; align-items: flex-start; flex-direction:column; gap:4rpx; padding:0; font-size: 27rpx; line-height: 1.45; }
 .fact-label { flex: 0 0 auto; color: var(--muted); }
-.fact-value { min-width: 0; text-align: right; }
+.fact-value { min-width: 0; text-align: left; font-weight:600; }
 .neutral { color: var(--muted); }
-.detail-link { display: flex; align-items: center; justify-content: flex-end; gap: 4rpx; margin-top: 18rpx; color: var(--action); font-size: 28rpx; line-height: 1.45; font-weight: 600; }
+.detail-link { display: flex; align-items: center; justify-content: space-between; gap: 4rpx; margin-top: 16rpx; color: var(--action); font-size: 27rpx; line-height: 1.45; font-weight: 650; }
 
 @media (min-width: 700px) {
   .records-page { max-width: 1240rpx; padding-left: 48rpx; padding-right: 48rpx; }

@@ -1,7 +1,12 @@
 <view class="page records-page">
   <view class="page-heading">
-    <text class="page-title">我的培训记录</text>
-    <text class="page-copy">查看本人已形成的学习、考试、签字和项目确认事实。</text>
+    <text class="page-title">培训记录</text>
+    <text class="page-copy">学习、考试、签字和项目确认事实均在这里留档。</text>
+  </view>
+
+  <view wx:if="{{!loading && !error && records.length}}" class="filter-panel">
+    <scroll-view class="filter-scroll" scroll-x enhanced show-scrollbar="{{false}}"><view class="filter-row"><view wx:for="{{typeFilters}}" wx:key="value" class="filter-chip {{typeFilter === item.value ? 'filter-chip-active' : ''}}" data-value="{{item.value}}" bindtap="chooseType">{{item.label}}</view></view></scroll-view>
+    <view class="status-filter-row"><view wx:for="{{statusFilters}}" wx:key="value" class="status-filter {{statusFilter === item.value ? 'status-filter-active' : ''}}" data-value="{{item.value}}" bindtap="chooseStatus">{{item.label}}</view></view>
   </view>
 
   <view wx:if="{{loading}}" class="state-panel">
@@ -21,7 +26,11 @@
     <text class="state-copy">完成培训或提交签字后，记录会显示在这里。</text>
   </view>
 
-  <view wx:for="{{records}}" wx:key="id" class="record-item" aria-role="button" hover-class="tap-active" data-id="{{item.id}}" bindtap="open">
+  <view wx:elif="{{records.length && !visibleRecords.length}}" class="state-panel">
+    <view class="state-icon"><t-icon name="filter" size="48rpx" /></view><text class="state-title">没有符合条件的记录</text><text class="state-copy">可以切换上方培训类型或完成状态。</text>
+  </view>
+
+  <view wx:for="{{visibleRecords}}" wx:key="id" class="record-item" aria-role="button" hover-class="tap-active" data-id="{{item.id}}" bindtap="open">
     <view class="record-head">
       <view class="record-heading-copy">
         <text class="record-title">{{item.batch.name}}</text>

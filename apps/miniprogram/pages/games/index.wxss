@@ -1,0 +1,36 @@
+.games-page { max-width: 980rpx; margin: 0 auto; padding-bottom: calc(156rpx + env(safe-area-inset-bottom)); }
+.games-hero { display:flex; align-items:center; justify-content:space-between; gap:24rpx; margin-bottom: 24rpx; }
+.eyebrow,.hero-heading,.hero-copy { display:block; }
+.eyebrow { color: rgba(255,255,255,.78); font-size: 24rpx; font-weight: 650; }
+.hero-heading { font-size: 42rpx; font-weight: 750; }
+.hero-copy { margin-top: 5rpx; color: var(--muted); font-size: 27rpx; line-height: 1.5; }
+.hero-avatar { display:flex; width:76rpx; height:76rpx; align-items:center; justify-content:center; color:var(--orange); background:var(--orange-soft); border-radius:50%; }
+.points-summary { display:grid; grid-template-columns:repeat(3,1fr); min-height:142rpx; margin-bottom:28rpx; align-items:center; background:var(--surface); border:1rpx solid var(--line); border-radius:32rpx; }
+.points-summary > view { text-align:center; border-right:1rpx solid var(--line); }
+.points-summary > view:last-child { border-right:0; }
+.metric-value,.metric-label { display:block; }
+.metric-value { color:var(--orange); font-size:42rpx; line-height:1.2; font-weight:750; }
+.metric-label { margin-top:6rpx; color:var(--muted); font-size:23rpx; }
+.section-heading { display:flex; align-items:flex-end; justify-content:space-between; gap:18rpx; margin: 34rpx 4rpx 16rpx; }
+.daily-card,.ranking-card { display:flex; align-items:center; gap:20rpx; padding:28rpx; background:#fff; border:1rpx solid var(--line); border-radius:32rpx; box-shadow:var(--elevation); }
+.daily-card { padding-bottom:18rpx; border-bottom-left-radius:0; border-bottom-right-radius:0; border-bottom:0; }
+.daily-icon,.game-icon { display:flex; align-items:center; justify-content:center; color:#FF6B00; background:var(--orange-soft); border-radius:22rpx; }
+.daily-icon { width:84rpx; height:84rpx; }
+.daily-copy { min-width:0; flex:1; }
+.daily-title,.daily-subtitle,.game-title,.game-note,.ranking-title,.ranking-note { display:block; }
+.daily-title,.ranking-title { font-size:32rpx; font-weight:700; }
+.daily-subtitle,.ranking-note { margin-top:7rpx; color:var(--muted); font-size:25rpx; }
+.daily-status { flex:0 0 auto; padding:6rpx 14rpx; color:var(--orange); background:var(--orange-soft); border-radius:999rpx; font-size:23rpx; }
+.challenge-progress { height:10rpx; overflow:hidden; margin:0 28rpx; background:#E6EAF0; }
+.challenge-progress view { height:100%; background:#FF6B00; }
+.daily-button { display:flex; min-height:88rpx; align-items:center; justify-content:center; color:#fff; background:var(--orange); border-radius:0 0 32rpx 32rpx; font-size:29rpx; font-weight:700; }
+.daily-button-disabled { background:#B8BDC5; }
+.game-list { overflow:hidden; background:var(--surface); border:1rpx solid var(--line); border-radius:32rpx; }
+.game-card { display:flex; min-height:116rpx; align-items:center; gap:20rpx; padding:24rpx 28rpx; box-sizing:border-box; border-bottom:1rpx solid var(--line); }
+.game-card:last-child { border-bottom:0; }
+.game-icon { width:72rpx; height:72rpx; flex:0 0 72rpx; }
+.game-copy { min-width:0; flex:1; }
+.game-title { font-size:30rpx; font-weight:700; }
+.game-note { margin-top:6rpx; color:var(--muted); font-size:24rpx; }
+.game-action { flex:0 0 auto; color:var(--orange); font-size:25rpx; font-weight:650; }
+.ranking-card { justify-content:space-between; margin-top:28rpx; }

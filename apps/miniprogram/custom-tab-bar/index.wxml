@@ -1,0 +1,6 @@
+<view class="tab-shell">
+  <view wx:for="{{items}}" wx:key="pagePath" class="tab-item {{selected === index ? 'tab-item-active' : ''}}" data-index="{{index}}" bindtap="switchTab" aria-role="button" aria-label="{{item.text}}">
+    <view class="tab-icon"><t-icon name="{{item.icon}}" size="44rpx" color="{{selected === index ? '#087BE8' : '#5B6572'}}" /></view>
+    <text>{{item.text}}</text>
+  </view>
+</view>

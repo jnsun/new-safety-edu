@@ -5,7 +5,7 @@
 .state-error .state-title { color: var(--danger); }
 .retry-button { width: 100%; margin-top: 30rpx; }
 
-.exam-head { position: sticky; top: 0; z-index: 2; padding: 24rpx 28rpx 18rpx; margin: -4rpx 0 24rpx; background: var(--surface); border-bottom: 1rpx solid var(--line); box-shadow: 0 8rpx 24rpx rgba(0, 0, 0, .04); }
+.exam-head { position: sticky; top: 0; z-index: 2; padding: 24rpx 28rpx 18rpx; margin: -4rpx 0 24rpx; background: var(--surface); border: 1rpx solid #B9DCFF; border-radius:24rpx; box-shadow: 0 8rpx 24rpx rgba(8, 103, 198, .08); }
 .head-row, .progress-copy, .question-actions { display: flex; align-items: center; justify-content: space-between; gap: 24rpx; }
 .head-copy { min-width: 0; }
 .attempt-label { display: block; color: var(--muted); font-size: 28rpx; line-height: 1.4; }
@@ -20,12 +20,14 @@
 .inline-error text { min-width: 0; flex: 1; }
 .retry-save { flex: 0 0 auto; min-height: 88rpx; padding: 0 24rpx; margin: 0; color: var(--danger); background: var(--surface); border: 2rpx solid var(--danger); border-radius: var(--radius-control); font-size: 28rpx; }
 
-.question-surface, .review-surface { min-height: 700rpx; padding: 38rpx 34rpx; box-sizing: border-box; background: var(--surface); border: 1rpx solid var(--line); border-radius: var(--radius-card); box-shadow: var(--elevation); }
-.question-type { display: block; color: var(--action); font-size: 28rpx; line-height: 1.4; font-weight: 650; }
-.question-title { display: block; margin-top: 14rpx; font-size: 38rpx; line-height: 1.55; font-weight: 700; }
-.question-tip { display: block; margin-top: 10rpx; color: var(--muted); font-size: 28rpx; line-height: 1.45; }
+.question-surface, .review-surface { min-height: 700rpx; padding: 0 0 28rpx; box-sizing: border-box; background: transparent; }
+.review-surface { padding:34rpx; background:var(--surface); border:1rpx solid var(--line); border-radius:var(--radius-card); box-shadow:var(--elevation); }
+.question-prompt-card { padding:34rpx; color:#fff; background:var(--blue-gradient); border-radius:32rpx; box-shadow:var(--elevation-raised); }
+.question-type { display:inline-flex; padding:7rpx 16rpx; color:#fff; background:rgba(255,255,255,.16); border-radius:12rpx; font-size:25rpx; line-height:1.4; font-weight:650; }
+.question-title { display: block; margin-top: 18rpx; color:#fff; font-size: 34rpx; line-height: 1.55; font-weight: 700; }
+.question-tip { display: block; margin-top: 10rpx; color: rgba(255,255,255,.78); font-size: 26rpx; line-height: 1.45; }
 .option-list { display: block; margin-top: 32rpx; }
-.option-row { display: flex; align-items: center; gap: 20rpx; min-height: 96rpx; padding: 20rpx 24rpx; margin-top: 16rpx; box-sizing: border-box; background: var(--canvas); border: 2rpx solid transparent; border-radius: var(--radius-control); }
+.option-row { display: flex; align-items: center; gap: 20rpx; min-height: 106rpx; padding: 22rpx 26rpx; margin-top: 16rpx; box-sizing: border-box; background: var(--surface); border: 2rpx solid var(--line); border-radius: var(--radius-control); }
 .option-row:first-child { margin-top: 0; }
 .option-selected { background: var(--action-soft); border-color: var(--action); }
 .option-label { min-width: 0; flex: 1; font-size: 30rpx; line-height: 1.5; }
@@ -34,7 +36,7 @@
 .save-saving { color: var(--action); }
 .save-saved { color: var(--success); }
 .save-error { color: var(--danger); }
-.question-actions { margin-top: 28rpx; }
+.question-actions { position:sticky; bottom:0; z-index:5; margin-top:28rpx; padding:20rpx 0 calc(12rpx + env(safe-area-inset-bottom)); background:rgba(244,245,247,.96); }
 .nav-button { width: auto; min-width: 0; flex: 1; min-height: 92rpx; margin-top: 0; }
 
 .review-title { display: block; font-size: 40rpx; line-height: 1.3; font-weight: 700; }

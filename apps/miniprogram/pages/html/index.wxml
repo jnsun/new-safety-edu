@@ -1,3 +1,10 @@
 <web-view wx:if="{{url}}" src="{{url}}"></web-view>
-<view wx:else class="page"><view class="card error">{{error || '正在打开课件…'}}</view></view>
+<view wx:else class="page html-fallback">
+  <view class="state-panel state-error">
+    <view class="state-icon"><t-icon name="link-unlink" size="48rpx" /></view>
+    <text class="state-title">课件链接已失效</text>
+    <text class="state-copy">{{error || '未能打开课件。'}} 请返回课件页重新获取短时链接。</text>
+    <button class="primary" bindtap="backToCourseware">返回并重新打开</button>
+  </view>
+</view>
 <environment-badge />

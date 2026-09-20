@@ -1,13 +1,17 @@
 <view class="page messages-page">
-  <view class="page-head"><text class="page-title">消息</text><text class="page-description">培训提醒、审核结果和管理通知</text></view>
+  <view class="page-head page-head-row"><view><text class="page-title">消息中心</text><text class="page-description">培训提醒、审核结果和管理通知</text></view><text wx:if="{{unreadCount}}" class="unread-count">{{unreadCount}} 条未读</text></view>
+  <scroll-view wx:if="{{messages.length}}" class="category-scroll" scroll-x enhanced show-scrollbar="{{false}}"><view class="category-row"><view wx:for="{{categoryFilters}}" wx:key="value" class="category-chip {{category === item.value ? 'category-chip-active' : ''}}" data-value="{{item.value}}" bindtap="chooseCategory">{{item.label}}</view></view></scroll-view>
   <view wx:if="{{loading}}" class="state-panel"><view class="state-icon"><t-loading size="48rpx" /></view><text class="state-title">正在加载消息</text></view>
   <view wx:elif="{{error}}" class="state-panel state-error"><view class="state-icon"><t-icon name="error-circle" size="48rpx" /></view><text class="state-title">消息加载失败</text><text class="state-copy">{{error}}</text><button class="secondary" bindtap="onShow">重新加载</button></view>
   <view wx:elif="{{!messages.length}}" class="state-panel"><view class="state-icon"><t-icon name="notification" size="48rpx" /></view><text class="state-title">暂无消息</text><text class="state-copy">新的培训提醒和审核结果会显示在这里。</text></view>
+  <view wx:elif="{{!visibleMessages.length}}" class="state-panel"><view class="state-icon"><t-icon name="filter" size="48rpx" /></view><text class="state-title">暂无此类消息</text><text class="state-copy">可以切换上方消息分类继续查看。</text></view>
   <view wx:else class="message-list">
-    <view wx:for="{{messages}}" wx:key="id" class="message-row {{item.status === 'unread' ? 'message-unread' : ''}}" data-id="{{item.id}}" bindtap="read">
-      <view wx:if="{{item.status === 'unread'}}" class="unread-dot"></view>
-      <view class="message-copy"><text class="message-title">{{item.title}}</text><text class="message-body">{{item.body}}</text><text class="message-time">{{item.createdAt}}</text></view>
-      <t-icon name="chevron-right" size="34rpx" color="#8a94a6" />
+    <view wx:for="{{visibleMessages}}" wx:key="id" class="timeline-item">
+      <view class="timeline-rail"><view class="timeline-dot {{item.status === 'unread' ? 'timeline-dot-unread' : ''}}"></view><view wx:if="{{index < visibleMessages.length - 1}}" class="timeline-line"></view></view>
+      <view class="message-row {{item.status === 'unread' ? 'message-unread' : ''}}" data-id="{{item.id}}" bindtap="read">
+        <view class="message-copy"><text class="message-title">{{item.title}}</text><text class="message-body">{{item.body}}</text><text class="message-time">{{item.createdText}}</text></view>
+        <t-icon name="chevron-right" size="34rpx" color="#8a94a6" />
+      </view>
     </view>
   </view>
 </view>

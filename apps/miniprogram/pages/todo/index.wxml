@@ -1,7 +1,16 @@
 <view class="page todo-page">
+  <view class="welcome-row">
+    <view class="welcome-copy">
+      <text class="welcome-title">{{greeting}}{{person && person.name ? '，' + person.name : ''}}</text>
+      <text class="welcome-subtitle">今天也要平安工作</text>
+    </view>
+    <image wx:if="{{photoPath}}" class="welcome-avatar" src="{{photoPath}}" mode="aspectFill" />
+    <view wx:else class="welcome-avatar welcome-avatar-empty"><t-icon name="user" size="42rpx" /></view>
+  </view>
+
   <view class="workspace-head">
     <text class="workspace-title">我的待办</text>
-    <text class="workspace-copy">先处理最需要完成的一项，其他任务仍可随时查看。</text>
+    <text wx:if="{{totalTasks}}" class="workspace-count">{{totalTasks}} 项未完成</text>
   </view>
 
   <view wx:if="{{loading}}" class="state-panel">
@@ -21,6 +30,7 @@
     <view class="state-icon"><t-icon name="check-circle" size="48rpx" /></view>
     <text class="state-title">当前没有待完成任务</text>
     <text class="state-copy">新的培训任务下发后会显示在这里。</text>
+    <view class="empty-actions"><button class="primary" bindtap="openGames">去安全闯关</button><button class="secondary" bindtap="openRecords">查看培训记录</button></view>
   </view>
 
   <block wx:else>
@@ -33,9 +43,10 @@
       <view class="primary-section">
         <text class="section-title">现在先做</text>
         <view class="primary-task" aria-role="button" hover-class="tap-active" data-id="{{primaryTask.id}}" bindtap="open">
+          <view class="primary-badge">现在先做</view>
           <view class="task-heading">
             <text class="task-title">{{primaryTask.batch.name}}</text>
-            <text class="status">{{primaryTask.statusText}}</text>
+            <text class="primary-status">{{primaryTask.statusText}}</text>
           </view>
           <text class="task-meta">{{primaryTask.typeText}}</text>
           <text class="task-meta">截止时间：{{primaryTask.dueText}}</text>
@@ -44,9 +55,9 @@
           </view>
           <view class="task-summary">
             <text>学习进度 {{primaryTask.progress.completed}}/{{primaryTask.progress.total}}</text>
-            <text class="task-action">下一步：{{primaryTask.nextAction}}</text>
           </view>
-          <view class="enter-copy"><text>进入任务</text><t-icon name="chevron-right" size="32rpx" /></view>
+          <view class="next-step"><t-icon name="file-paste" size="31rpx" /><text>下一步：{{primaryTask.nextAction}}</text></view>
+          <view class="enter-copy"><text>继续完成</text><t-icon name="chevron-right" size="32rpx" /></view>
         </view>
       </view>
 
@@ -62,8 +73,8 @@
                 <text class="task-row-title">{{item.batch.name}}</text>
                 <text class="status">{{item.statusText}}</text>
               </view>
-              <text class="task-meta">{{item.typeText}} · 截止时间：{{item.dueText}}</text>
-              <text class="task-meta">学习进度 {{item.progress.completed}}/{{item.progress.total}}</text>
+              <text class="task-meta">{{item.typeText}} · 截止 {{item.dueText}}</text>
+              <view class="compact-progress"><view style="width: {{item.percent}}%"></view></view>
             </view>
             <view class="row-action"><text>下一步：{{item.nextAction}}</text><t-icon name="chevron-right" size="28rpx" /></view>
           </view>
