@@ -12,8 +12,14 @@ type SnapshotQuestion = { questionId: string; questionVersionId: string; type: Q
 type Snapshot = { version: 1; date: string; questions: SnapshotQuestion[] };
 const TIME_ZONE = "Asia/Shanghai";
 
-const principalOf = (request: FastifyRequest) => {
+const accountPrincipalOf = (request: FastifyRequest) => {
   const principal = request.principal;
+  if (!principal) throw Object.assign(new Error("未登录或会话已失效"), { statusCode: 401, code: "UNAUTHORIZED" });
+  return principal;
+};
+
+const principalOf = (request: FastifyRequest) => {
+  const principal = accountPrincipalOf(request);
   if (!principal?.personId) throw Object.assign(new Error("账号尚未绑定在用人员档案"), { statusCode: 403, code: "PERSON_REQUIRED" });
   return { ...principal, personId: principal.personId };
 };
@@ -239,7 +245,7 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
   });
 
   app.get("/api/challenge/admin/questions", manager, async (request) => {
-    const principal = principalOf(request);
+    const principal = accountPrincipalOf(request);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
     const query = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(10).max(100).default(20), keyword: z.string().trim().max(100).optional(), enabled: z.enum(["all", "enabled", "disabled"]).default("all") }).parse(request.query);
     const where: Prisma.QuestionWhereInput = { active: true, bank: { active: true }, ...(query.keyword ? { prompt: { contains: query.keyword, mode: "insensitive" } } : {}), ...(query.enabled === "enabled" ? { challengeEnabled: true } : query.enabled === "disabled" ? { challengeEnabled: false } : {}) };
@@ -253,7 +259,7 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
   });
 
   app.patch("/api/challenge/admin/questions/:id", manager, async (request) => {
-    const principal = principalOf(request);
+    const principal = accountPrincipalOf(request);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const input = z.object({ challengeEnabled: z.boolean(), challengeCategory: z.string().trim().min(1).max(80).nullable(), challengeDifficulty: z.enum(["easy", "medium", "hard"]).nullable() }).strict().parse(request.body);
@@ -266,7 +272,7 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
   });
 
   app.post("/api/challenge/admin/questions/bulk", manager, async (request) => {
-    const principal = principalOf(request);
+    const principal = accountPrincipalOf(request);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
     const input = z.object({ ids: z.array(z.string().uuid()).min(1).max(100), challengeEnabled: z.boolean() }).strict().parse(request.body);
     const result = await prisma.$transaction(async (tx) => {
@@ -278,7 +284,7 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
   });
 
   app.post("/api/challenge/admin/questions/enable-all", manager, async (request) => {
-    const principal = principalOf(request);
+    const principal = accountPrincipalOf(request);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以配置日常挑战题");
     const updated = await prisma.$transaction(async (tx) => {
       const changed = await tx.question.updateMany({ where: { active: true, challengeEnabled: false, bank: { active: true } }, data: { challengeEnabled: true } });
@@ -289,7 +295,7 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
   });
 
   app.get("/api/challenge/admin/points", manager, async (request) => {
-    const principal = principalOf(request);
+    const principal = accountPrincipalOf(request);
     const query = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(), organizationId: z.string().uuid().optional(), personId: z.string().uuid().optional() }).strict().parse(request.query);
     const range = query.month ? challengeMonthRangeFromKey(query.month, TIME_ZONE) : challengeMonthRange(new Date(), TIME_ZONE);
     const organizationIds = isCompanyAdmin(principal) ? null : await accessibleOrganizationIds(principal);
@@ -309,7 +315,7 @@ export async function registerDailyChallengeRoutes(app: FastifyInstance, deps: {
   });
 
   app.post("/api/challenge/admin/points/:id/void", manager, async (request) => {
-    const principal = principalOf(request);
+    const principal = accountPrincipalOf(request);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以作废异常积分");
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const { reason } = z.object({ reason: z.string().trim().min(2).max(500) }).strict().parse(request.body);
