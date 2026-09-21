@@ -6,8 +6,8 @@
 
 | Figma | 节点 | 现有路由 | 当前代码 | 接入方式 |
 | --- | --- | --- | --- | --- |
-| A01 登录 | 60:419 | `/login` | `apps/admin/src/App.tsx` | 保留微信扫码与密码备用登录，统一登录画布与卡片 |
-| A02 系统入口 | 60:453 | `/` | `apps/admin/src/App.tsx` | 九宫格继续使用真实权限决定入口 |
+| A01 登录 | 60:419 | `/login` | `apps/admin/src/App.tsx` | 按设计实现“微信扫码 / 账号密码”双标签；微信配置异常时保留扫码标签并明确提示 |
+| A02 系统入口 | 60:453 | `/` | `apps/admin/src/App.tsx` | 仅双权限人员显示独立的双系统选择页；单系统权限人员直接进入相应系统 |
 | A03/A04 工作台 | 60:523 / 60:557 | `/training-dashboard` | `apps/admin/src/Day4Pages.tsx` | 统一导航、顶栏、卡片与数据表；统计继续来自管理概览接口 |
 | T01–T02 制作中心 | 60:3136 / 60:3333 | `/courseware`、`/questions` | `courseware/CoursewarePage.tsx`、`questions/QuestionsPage.tsx` | 共用页头、标签页和制作入口 |
 | T03–T08 培训创建状态 | 60:3518–60:4602 | `/training` | `training/TrainingPage.tsx` | 保留组织/项目整组下发、考试规则、部分成功和编辑/撤回 |

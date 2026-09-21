@@ -44,9 +44,11 @@ import {
   UploadOutlined,
   SafetyCertificateOutlined,
   CalendarOutlined,
-  WechatOutlined,
   SearchOutlined,
   AccountBookOutlined,
+  SafetyOutlined,
+  LockOutlined,
+  LogoutOutlined,
 } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
@@ -381,9 +383,6 @@ function Login() {
     queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config"),
     retry: false,
   });
-  useEffect(() => {
-    if ((wechat.data && !wechat.data.enabled) || wechat.isError) setLoginMode("password");
-  }, [wechat.data, wechat.isError]);
   async function submit(values: { username: string; password: string }) {
     setBusy(true);
     try {
@@ -400,27 +399,29 @@ function Login() {
   return (
     <div className="login-shell">
       <section className="login-intro">
-        <h1>安全生产管理平台</h1>
-        <p>
-          统一连接人员、组织、项目与业务模块，让协同更清晰，过程更规范，记录更可追溯。
-        </p>
+        <span className="login-brand-icon"><SafetyOutlined /></span>
+        <h1>山西省地球物理化学勘查院有限公司</h1>
+        <p>统一业务平台 · 安全登录</p>
+        <span className="login-security-note"><LockOutlined /> 国家骨干地质勘查队伍 · 线上安全控制中心</span>
       </section>
-      <div className={`login-card-shell${loginMode === "password" ? " is-flipped" : ""}`}>
-        <div className="login-flip-inner">
-          <section className="login-face login-face-wechat" aria-hidden={loginMode !== "wechat"} inert={loginMode !== "wechat"}>
-            <Card className="login-card">
-              <Typography.Title level={2}>微信扫码登录</Typography.Title>
-              <Typography.Paragraph type="secondary">使用本人微信扫码，安全进入对应业务模块</Typography.Paragraph>
-              {wechat.isLoading && <Typography.Text type="secondary">正在检查微信登录配置…</Typography.Text>}
-              {wechat.data?.enabled && <WechatQrLogin active={loginMode === "wechat"} />}
-              {wechat.data && !wechat.data.enabled && <Alert type="warning" showIcon message="微信扫码登录尚未配置" />}
-              <Button block icon={<WechatOutlined />} onClick={() => setLoginMode("password")}>使用用户名密码登录</Button>
-            </Card>
-          </section>
-          <section className="login-face login-face-password" aria-hidden={loginMode !== "password"} inert={loginMode !== "password"}>
-            <Card className="login-card">
-              <Typography.Title level={2}>用户名密码登录</Typography.Title>
-              <Typography.Paragraph type="secondary">作为微信扫码不可用时的备用登录方式</Typography.Paragraph>
+      <div className="login-card-shell">
+        <Card className="login-card">
+          <div className="login-mode-tabs" role="tablist" aria-label="登录方式">
+            <button type="button" role="tab" aria-selected={loginMode === "wechat"} className={loginMode === "wechat" ? "active" : ""} onClick={() => setLoginMode("wechat")}>微信扫码</button>
+            <button type="button" role="tab" aria-selected={loginMode === "password"} className={loginMode === "password" ? "active" : ""} onClick={() => setLoginMode("password")}>账号密码</button>
+          </div>
+          {loginMode === "wechat" ? (
+            <section className="login-mode-panel" role="tabpanel">
+              {wechat.isLoading && <div className="login-panel-status">正在检查微信登录配置…</div>}
+              {wechat.data?.enabled && <WechatQrLogin active />}
+              {(wechat.isError || (wechat.data && !wechat.data.enabled)) && (
+                <Alert type="warning" showIcon message="微信扫码登录尚未配置" description="请联系管理员完善网站应用配置，或暂时使用账号密码登录。" />
+              )}
+              <div className="login-waiting-status"><span />{wechat.data?.enabled ? "等待扫码..." : "扫码服务暂不可用"}</div>
+              <Button type="link" onClick={() => setRecoveryOpen(true)}>忘记密码？</Button>
+            </section>
+          ) : (
+            <section className="login-mode-panel login-password-panel" role="tabpanel">
               <Form layout="vertical" onFinish={submit}>
                 <Form.Item label="用户名" name="username" rules={[{ required: true }]}>
                   <Input autoComplete="username" />
@@ -429,13 +430,13 @@ function Login() {
                   <Input.Password autoComplete="current-password" />
                 </Form.Item>
                 <Button block type="primary" htmlType="submit" loading={busy}>登录</Button>
-                <Button block type="link" onClick={() => setRecoveryOpen(true)}>忘记密码</Button>
+                <Button block type="link" onClick={() => setRecoveryOpen(true)}>忘记密码？</Button>
               </Form>
-              {wechat.data?.enabled && <Button block icon={<WechatOutlined />} onClick={() => setLoginMode("wechat")}>返回微信扫码登录</Button>}
-            </Card>
-          </section>
-        </div>
+            </section>
+          )}
+        </Card>
       </div>
+      <footer className="login-footer">© 山西省地球物理化学勘查院有限公司</footer>
       <Modal title="通过已验证手机号找回密码" open={recoveryOpen} footer={null} onCancel={() => setRecoveryOpen(false)}>
         <Alert type="info" showIcon message="验证码五分钟有效。未配置正式短信服务时，本功能不会发送模拟验证码。" style={{ marginBottom: 16 }} />
         <Form layout="vertical" onFinish={async (values) => { try { await api("/api/auth/password-recovery/confirm", json("POST", values)); message.success("密码已更新，请使用新密码登录"); setRecoveryOpen(false); } catch (error) { message.error((error as Error).message); } }}>
@@ -2731,23 +2732,45 @@ function PlatformGateway({ principal }: { principal: Principal }) {
     );
   }
   const financePath = receivablesMode === "confirm" ? "/receivables/departments" : "/receivables";
+  const financeRole = currentAccess?.role === "owner"
+    ? "财务负责人"
+    : currentAccess?.role === "admin"
+      ? "财务管理员"
+      : currentAccess?.role === "reporter"
+        ? "报账员"
+        : "财务只读";
   return (
-    <div className="system-choice-page">
-      <AdminPageHeader title="选择业务系统" description="当前账号同时拥有两个系统的权限，请选择本次要进入的工作空间。" />
-      <div className="system-choice-grid">
-        <button type="button" className="system-choice-card system-choice-safety" onClick={() => navigate("/safety")}>
-          <span className="system-choice-icon"><SafetyCertificateOutlined /></span>
-          <span className="system-choice-title">安全生产管理系统</span>
-          <span className="system-choice-description">培训教育、人员组织、野外项目报送与资质证照</span>
-          <span className="system-choice-enter">进入安全管理 ›</span>
-        </button>
-        <button type="button" className="system-choice-card system-choice-finance" onClick={() => navigate(financePath)}>
-          <span className="system-choice-icon"><AccountBookOutlined /></span>
-          <span className="system-choice-title">财务应收账款系统</span>
-          <span className="system-choice-description">应收台账、开票回款、催收跟踪与财务配置</span>
-          <span className="system-choice-enter">{receivablesMode === "confirm" ? "完成首次启用 ›" : "进入应收管理 ›"}</span>
-        </button>
-      </div>
+    <div className="system-choice-shell">
+      <header className="system-choice-topbar">
+        <div className="system-choice-brand"><strong>山西省地球物理化学勘查院有限公司</strong><span>统一业务平台</span></div>
+        <div className="system-choice-user">
+          <div><strong>{principal.displayName} · {principal.primaryOrganization?.name ?? "未设置部门"}</strong><span><i />已登录</span></div>
+          <button type="button" onClick={() => navigate("/logout")}><LogoutOutlined />退出</button>
+        </div>
+      </header>
+      <main className="system-choice-main">
+        <div className="system-choice-heading"><h1>请选择要进入的系统</h1><p>你拥有两个系统的访问权限，可在进入后通过右上角切换系统。</p></div>
+        <div className="system-choice-grid">
+          <section className="system-choice-card">
+            <div>
+              <div className="system-choice-card-head"><span className="system-choice-icon"><SafetyOutlined /></span><span className="system-choice-role">{principalRoleSummary(principal.roles, labels)}</span></div>
+              <h2>安全生产管理系统</h2><p>培训教育与日常安全业务</p>
+              <ul><li>人员与组织、项目管理</li><li>培训教育、野外项目报送、资质证照</li></ul>
+            </div>
+            <Button type="primary" block onClick={() => navigate("/safety")}>进入安全系统</Button>
+          </section>
+          <section className="system-choice-card">
+            <div>
+              <div className="system-choice-card-head"><span className="system-choice-icon"><FileDoneOutlined /></span><span className="system-choice-role">{financeRole}</span></div>
+              <h2>财务应收账款系统</h2><p>合同应收与回款管理</p>
+              <ul><li>合同应收、开票与回款</li><li>催收台账、财务统计与报表</li></ul>
+            </div>
+            <Button block onClick={() => navigate(financePath)}>{receivablesMode === "confirm" ? "完成首次启用" : "进入应收账款"}</Button>
+          </section>
+        </div>
+        <p className="system-choice-note">两个系统共用当前登录身份，业务权限分别管理。</p>
+      </main>
+      <footer className="system-choice-footer"><span>© 山西省地球物理化学勘查院有限公司</span><span>系统选择</span></footer>
     </div>
   );
 }
@@ -3001,6 +3024,7 @@ export default function App() {
   if (principal.isLoading) return <div className="center">正在加载…</div>;
   if (principal.isError) return <Navigate to="/login" replace />;
   if (principal.data!.mustChangePassword) return <AntApp><RequiredPasswordChange /></AntApp>;
+  if (location.pathname === "/") return <AntApp><PlatformGateway principal={principal.data!} /></AntApp>;
   return (
     <AntApp>
       <Shell principal={principal.data!} />
