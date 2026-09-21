@@ -47,7 +47,6 @@ import {
   SearchOutlined,
   AccountBookOutlined,
   SafetyOutlined,
-  LockOutlined,
   LogoutOutlined,
 } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
@@ -402,8 +401,7 @@ function Login() {
       <section className="login-intro">
         <span className="login-brand-icon"><SafetyOutlined /></span>
         <h1>山西省地球物理化学勘查院有限公司</h1>
-        <p>统一业务平台 · 安全登录</p>
-        <span className="login-security-note"><LockOutlined /> 国家骨干地质勘查队伍 · 线上安全控制中心</span>
+        <p>安全生产统一管理平台</p>
       </section>
       <div className="login-card-shell">
         <Card className="login-card">

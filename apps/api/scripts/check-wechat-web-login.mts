@@ -17,6 +17,7 @@ assert.equal(JSON.stringify(config).includes("must-not-leak"), false);
 const url = new URL(buildWechatWebAuthorizeUrl(env, "state-token"));
 assert.equal(url.origin, "https://open.weixin.qq.com");
 assert.equal(url.searchParams.get("appid"), "wx-public-id");
+assert.equal(url.searchParams.get("redirect_uri"), "https://example.test/api/auth/wechat-web/callback");
 assert.equal(url.searchParams.get("state"), "state-token");
 
 console.log("WECHAT_WEB_LOGIN_OK");

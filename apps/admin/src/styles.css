@@ -2411,16 +2411,16 @@ html, body { color: var(--safety-text); background: var(--safety-bg); }
 .login-mode-tabs button::after { content: ""; position: absolute; bottom: 0; left: 50%; width: 40px; height: 3px; border-radius: 2px; background: transparent; transform: translateX(-50%); }
 .login-mode-tabs button.active { color: #245bc5; font-weight: 700; }
 .login-mode-tabs button.active::after { background: #245bc5; }
-.login-mode-panel { min-height: 400px; padding-top: 24px; display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; }
-.login-password-panel { align-items: stretch; justify-content: flex-start; }
-.login-password-panel .ant-form { width: 100%; margin-top: 0; }
+.login-mode-panel { width: 100%; min-height: 400px; padding-top: 24px; display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; }
+.login-password-panel { justify-content: flex-start; }
+.login-password-panel .ant-form { width: min(300px, 100%); margin-top: 0; }
 .login-panel-status { color: #52617a; }
 .login-waiting-status { width: 100%; margin-top: 12px; padding: 8px 16px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #52617a; font-size: 13px; border-radius: 6px; background: #f4f6fa; }
 .login-waiting-status span { width: 6px; height: 6px; border-radius: 50%; background: #245bc5; }
 .login-footer { position: absolute; left: 0; right: 0; bottom: 40px; color: #245bc5; font-size: 12px; text-align: center; }
-.login-mode-panel .wechat-login-panel { min-height: 292px; }
-.login-mode-panel #wechat-login-container { width: 240px; min-height: 292px; }
-.login-mode-panel #wechat-login-container iframe { width: 240px !important; height: 292px !important; }
+.login-mode-panel .wechat-login-panel { width: min(300px, 100%); min-height: 390px; }
+.login-mode-panel #wechat-login-container { width: 300px; min-height: 390px; }
+.login-mode-panel #wechat-login-container iframe { width: 300px !important; height: 390px !important; }
 
 .ant-modal .ant-modal-content,
 .ant-drawer .ant-drawer-content { border-radius: 8px; }
