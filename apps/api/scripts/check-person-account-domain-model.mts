@@ -50,4 +50,9 @@ assert.ok(migration.includes(`NOT ("role" = 'company_admin' AND "scope_type" = '
 const preflight = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("./preflight-identity.mts", import.meta.url), "utf8"));
 assert.ok(preflight.includes(`NOT (role = 'company_admin' AND scope_type = 'company' AND scope_id IS NULL)`), "Identity preflight must allow the bootstrap company_admin exception");
 
+const identity = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("../src/identity.ts", import.meta.url), "utf8"));
+assert.match(identity, /receivableAccessGrant\.updateMany/, "Disabling a person must revoke active receivables grants");
+assert.match(identity, /revokedBy:\s*input\.actorId/, "Receivables grant revocation must retain the actor");
+assert.match(identity, /revokeReason:\s*input\.reason/, "Receivables grant revocation must retain the reason");
+
 console.log("PERSON_ACCOUNT_DOMAIN_MODEL_OK");

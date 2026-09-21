@@ -1,19 +1,9 @@
 <view class="page">
-  <view class="page-head"><text class="page-title">资料变更</text><text class="page-description">提交身份、单位或责任实体变更，并查看处理进度。</text></view>
+  <view class="page-head"><text class="page-title">资料变更</text><text class="page-description">提交姓名更正，并查看处理进度。调换部门请从部门调动入口申请。</text></view>
   <form bindsubmit="submit">
     <view class="card request-card">
-      <text class="subtitle">选择变更事项</text>
-      <radio-group class="request-types" bindchange="chooseType">
-        <label class="request-type {{type === 'profile_change' ? 'request-type-active' : ''}}"><radio value="profile_change" checked="{{type === 'profile_change'}}"/>姓名修改</label>
-        <label class="request-type {{type === 'identity_correction' ? 'request-type-active' : ''}}"><radio value="identity_correction" checked="{{type === 'identity_correction'}}"/>身份更正</label>
-        <label class="request-type {{type === 'contractor_unit_change' ? 'request-type-active' : ''}}"><radio value="contractor_unit_change" checked="{{type === 'contractor_unit_change'}}"/>外协单位变更</label>
-        <label class="request-type {{type === 'responsible_entity_change' ? 'request-type-active' : ''}}"><radio value="responsible_entity_change" checked="{{type === 'responsible_entity_change'}}"/>责任实体变更</label>
-      </radio-group>
-      <input wx:if="{{type === 'profile_change'}}" class="field" name="name" placeholder="新姓名"/>
-      <block wx:if="{{type === 'identity_correction'}}"><picker range="{{personTypes}}" range-key="label" value="{{personTypeIndex}}" bindchange="choosePersonType"><view class="field">更正为：{{personTypes[personTypeIndex].label}}</view></picker></block>
-      <picker wx:if="{{type === 'responsible_entity_change' || (type === 'identity_correction' && personTypes[personTypeIndex].value !== 'employee')}}" range="{{businessEntities}}" range-key="name" value="{{organizationIndex}}" bindchange="chooseOrganization"><view class="field">责任经营实体：{{businessEntities[organizationIndex].name || '请选择'}}</view></picker>
-      <picker wx:if="{{type === 'contractor_unit_change' || (type === 'identity_correction' && personTypes[personTypeIndex].value === 'contractor')}}" range="{{contractors}}" range-key="name" value="{{contractorIndex}}" bindchange="chooseContractor"><view class="field">外协单位：{{contractors[contractorIndex].name || '请选择'}}</view></picker>
-      <button wx:if="{{type === 'identity_correction' || type === 'contractor_unit_change' || type === 'responsible_entity_change'}}" class="secondary attachment-button" bindtap="chooseAttachment"><t-icon name="attach" size="30rpx" />添加核验附件（已选 {{attachmentIds.length}}）</button>
+      <text class="subtitle">姓名修改</text>
+      <input class="field" name="name" placeholder="新姓名"/>
       <textarea class="field" name="reason" placeholder="说明变更原因"/>
       <button class="primary" form-type="submit" loading="{{busy}}">提交审核</button>
       <view class="info-strip"><t-icon name="info-circle" size="30rpx" /><text>手机号修改需要短信验证；微信换绑请使用新微信重新进入小程序并按提示验证手机号。</text></view>

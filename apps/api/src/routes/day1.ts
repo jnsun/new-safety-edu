@@ -27,6 +27,7 @@ import { changeRequestKey } from "../request-policy.js";
 import { prepareBulkPrimaryOrganizationAssignment } from "../person-bulk-organization-policy.js";
 import { previewBulkPersonDisable } from "../person-bulk-lifecycle-policy.js";
 import { authMeProfile } from "../auth-me-profile.js";
+import { assertFirstReleaseWorkflowAllowed } from "../first-release-policy.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -233,6 +234,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request);
     const input = organizationCreateSchema.parse(request.body);
     if (!isCompanyAdmin(principal)) forbidden("只有公司管理员可以创建组织");
+    if (input.type === "contractor") assertFirstReleaseWorkflowAllowed("registration");
     const company = await prisma.organization.findFirst({ where: { type: "company" }, orderBy: { createdAt: "asc" }, select: { id: true } });
     if (input.type === "company" && company) throw Object.assign(new Error("系统只能有一个公司根组织"), { statusCode: 409, code: "COMPANY_ROOT_EXISTS" });
     if (input.type !== "company" && !company) throw Object.assign(new Error("请先创建公司根组织"), { statusCode: 409, code: "COMPANY_ROOT_REQUIRED" });
@@ -428,7 +430,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
   app.get("/api/persons/:id/sensitive", manager, async (request) => {
     const principal = principalOf(request);
     const { id } = idParam.parse(request.params);
-    if (!await canAccessPerson(principal, id)) forbidden();
+    if (!isCompanyAdmin(principal)) forbidden("当前仅公司管理员可以查看人员完整资料");
     await verifySensitiveToken(request, deps.env, { targetPersonId: id, field: "nationalId", action: "read" });
     const person = await prisma.person.findUniqueOrThrow({ where: { id } });
     if (!person.nationalIdCipher || !person.nationalIdIv || !person.nationalIdTag) throw Object.assign(new Error("该人员尚未补录身份证号码"), { statusCode: 404, code: "NATIONAL_ID_MISSING" });
@@ -447,7 +449,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const principal = principalOf(request);
     const { id } = idParam.parse(request.params);
     const { password } = z.object({ password: z.string().min(8).max(200) }).parse(request.body);
-    if (!await canAccessPerson(principal, id)) forbidden();
+    if (!isCompanyAdmin(principal)) forbidden("当前仅公司管理员可以查看人员完整资料");
     const account = await prisma.account.findUniqueOrThrow({ where: { id: principal.accountId }, select: { passwordHash: true } });
     if (!account.passwordHash) throw Object.assign(new Error("当前账号未配置密码，暂不能查看完整身份证号码"), { statusCode: 409, code: "REAUTH_METHOD_UNAVAILABLE" });
     if (!await argon2.verify(account.passwordHash, password)) throw Object.assign(new Error("当前密码错误"), { statusCode: 401, code: "INVALID_CURRENT_PASSWORD" });

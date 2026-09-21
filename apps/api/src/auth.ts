@@ -7,6 +7,7 @@ import type { Env } from "./env.js";
 import { sessionAbsoluteTtlMs } from "./auth-security.js";
 import { sha256 } from "./crypto.js";
 import { assertSensitiveTokenScope, type SensitiveTokenScope } from "./sensitive-token-scope.js";
+import { assertFirstReleaseEmployee } from "./first-release-policy.js";
 
 export type Principal = {
   accountId: string;
@@ -50,7 +51,8 @@ export async function verifySensitiveToken(request: FastifyRequest, env: Env, ex
 
 export async function issueSession(accountId: string, env: Env, context: { clientKind?: string | undefined; loginMethod?: string | undefined; userAgent?: string | undefined } = {}) {
   const refreshToken = randomBytes(48).toString("base64url");
-  const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { sessionVersion: true } });
+  const account = await prisma.account.findUniqueOrThrow({ where: { id: accountId }, select: { sessionVersion: true, personId: true, person: { select: { type: true } } } });
+  if (account.personId) assertFirstReleaseEmployee(account.person?.type);
   const absoluteExpiresAt = new Date(Date.now() + sessionAbsoluteTtlMs(context.clientKind));
   const session = await prisma.refreshSession.create({ data: { accountId, tokenHash: sha256(refreshToken), clientKind: context.clientKind ?? null, loginMethod: context.loginMethod ?? null, userAgent: context.userAgent?.slice(0, 500) ?? null, expiresAt: absoluteExpiresAt, absoluteExpiresAt } });
   const accessToken = await signAccessToken(accountId, account.sessionVersion, session.id, env);
@@ -73,9 +75,12 @@ export function authHandlers(env: Env) {
       }
       const account = await prisma.account.findUnique({
         where: { id: accountId },
-        include: { person: { select: { status: true } } }
+        include: { person: { select: { status: true, type: true } } }
       });
       if (!account || !["active", "pending"].includes(account.status) || account.sessionVersion !== sessionVersion || (account.personId && account.person?.status !== "active")) throw unauthorized();
+      if (account.personId) {
+        try { assertFirstReleaseEmployee(account.person?.type); } catch { throw unauthorized(); }
+      }
       if (sessionId && !await prisma.refreshSession.findFirst({ where: { id: sessionId, accountId: account.id, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } })) throw unauthorized();
       const path = request.url.split("?", 1)[0];
       if (account.status === "pending") {
@@ -106,8 +111,11 @@ export function authHandlers(env: Env) {
 }
 
 export async function rotateRefreshToken(refreshToken: string, env: Env) {
-  const session = await prisma.refreshSession.findUnique({ where: { tokenHash: sha256(refreshToken) }, include: { account: true } });
+  const session = await prisma.refreshSession.findUnique({ where: { tokenHash: sha256(refreshToken) }, include: { account: { include: { person: { select: { type: true } } } } } });
   if (!session || session.expiresAt <= new Date() || !["active", "pending"].includes(session.account.status)) throw unauthorized();
+  if (session.account.personId) {
+    try { assertFirstReleaseEmployee(session.account.person?.type); } catch { throw unauthorized(); }
+  }
   if (session.revokedAt) {
     await prisma.$transaction([
       prisma.refreshSession.updateMany({ where: { accountId: session.accountId, ...(session.familyId ? { OR: [{ familyId: session.familyId }, { id: session.familyId }] } : {}) }, data: { revokedAt: new Date() } }),

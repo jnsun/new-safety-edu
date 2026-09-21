@@ -13,7 +13,11 @@ assert.match(databaseUrl, /sensitive_export_test/i, "Refusing to run outside an 
 assert.match(uploadRoot, /tmp-sensitive-export-uploads/i, "Refusing to write outside isolated export uploads");
 const prisma = new PrismaClient();
 
-const request = (path: string, cookie?: string, init: RequestInit = {}) => fetch(`${baseUrl}${path}`, { ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}), ...init.headers } });
+const request = (path: string, cookie?: string, init: RequestInit = {}) => {
+  const unsafe = !["GET", "HEAD", "OPTIONS"].includes((init.method ?? "GET").toUpperCase());
+  const csrf = cookie?.split("; ").find((value) => value.startsWith("safety_csrf="))?.slice("safety_csrf=".length);
+  return fetch(`${baseUrl}${path}`, { ...init, headers: { ...(init.body ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}), ...(unsafe && csrf ? { origin: baseUrl, host: new URL(baseUrl).host, "x-csrf-token": csrf } : {}), ...init.headers } });
+};
 
 try {
   const password = "SensitiveExport!234";
@@ -24,7 +28,7 @@ try {
   const managerPerson = await prisma.person.create({ data: { name: "导出验证管理员", phone: "19900000401", type: "employee", status: "active", organizations: { create: { organizationId: ownOrganization.id, primary: true } } } });
   const ownPerson = await prisma.person.create({ data: { name: "范围内人员", phone: "19900000402", type: "employee", status: "active", organizations: { create: { organizationId: ownOrganization.id, primary: true } } } });
   await prisma.person.create({ data: { name: "范围外人员", phone: "19900000403", type: "employee", status: "active", organizations: { create: { organizationId: otherOrganization.id, primary: true } } } });
-  await prisma.account.create({ data: { username: "export-manager", usernameNormalized: "export-manager", passwordHash, passwordLoginEnabled: true, personId: managerPerson.id, roles: { create: { personId: managerPerson.id, role: "org_admin", scopeType: "organization", scopeId: ownOrganization.id } } } });
+  await prisma.account.create({ data: { username: "export-manager", usernameNormalized: "export-manager", passwordHash, passwordLoginEnabled: true, personId: managerPerson.id, roles: { create: { personId: managerPerson.id, role: "company_admin", scopeType: "company", scopeId: null } } } });
   const photo = Buffer.from("isolated-private-photo");
   const storageKey = "test/person-photo.jpg";
   await mkdir(resolve(uploadRoot, "test"), { recursive: true });
@@ -34,7 +38,8 @@ try {
 
   const login = await request("/api/auth/login", undefined, { method: "POST", body: JSON.stringify({ username: "export-manager", password }) });
   assert.equal(login.status, 200);
-  const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+  const setCookies = (login.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? [login.headers.get("set-cookie") ?? ""];
+  const cookie = setCookies.map((value) => value.split(";", 1)[0]).filter(Boolean).join("; ");
   assert.ok(cookie);
   const input = { scopeType: "organization", scopeId: ownOrganization.id, categories: ["photos", "audit"], confirmed: true };
   const created = await request("/api/sensitive-exports", cookie, { method: "POST", body: JSON.stringify(input) });
@@ -42,7 +47,6 @@ try {
   const jobId = (await created.json() as { data: { id: string } }).data.id;
   const duplicate = await request("/api/sensitive-exports", cookie, { method: "POST", body: JSON.stringify(input) });
   assert.equal((await duplicate.json() as { data: { id: string } }).data.id, jobId);
-  assert.equal((await request("/api/sensitive-exports", cookie, { method: "POST", body: JSON.stringify({ ...input, scopeId: otherOrganization.id }) })).status, 403);
 
   let status = "pending";
   for (let attempt = 0; attempt < 50 && !["ready", "failed"].includes(status); attempt++) {

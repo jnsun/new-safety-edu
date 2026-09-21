@@ -20,7 +20,6 @@ export type ReceivablesAccessFacts = {
   accountActive: boolean;
   personActive: boolean;
   isCompanyAdmin?: boolean;
-  isFinanceOrganizationMember?: boolean;
   configured?: boolean;
   configurationConfirmed?: boolean;
   hasBoundOrgLeader?: boolean;
@@ -134,15 +133,6 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   }
 
   const grant = facts.grant;
-  if (!grant && facts.isFinanceOrganizationMember) {
-    return {
-      ...denied,
-      role: "readonly",
-      canEnter: true,
-      canReadLedger: true,
-      canViewAll: true,
-    };
-  }
   if (!grant) return denied;
   const scopes = grant.departments ?? [];
   const readDepartmentIds = [...new Set(scopes.filter(({ canRead }) => canRead).map(({ departmentId }) => departmentId))].sort();
@@ -205,10 +195,6 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
         person: {
           select: {
             status: true,
-            organizations: {
-              where: { active: true, primary: true },
-              select: { organizationId: true },
-            },
           },
         },
       },
@@ -238,8 +224,6 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
   }));
   const financeOrganizationId = setting?.financeOrganizationId ?? inferredFinanceOrganization?.id ?? null;
   const configured = !!financeOrganizationId && (setting?.financeOrganization?.type === "department" || inferredFinanceOrganization?.type === "department");
-  const isFinanceOrganizationMember = Boolean(configured
-    && account?.person?.organizations.some(({ organizationId }) => organizationId === financeOrganizationId));
   const [leaderRoles, grants] = await Promise.all([
     configured
       ? db.roleAssignment.findMany({
@@ -281,7 +265,6 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
     accountActive,
     personActive,
     isCompanyAdmin,
-    isFinanceOrganizationMember,
     configured,
     configurationConfirmed: !!setting?.configurationConfirmedAt,
     hasBoundOrgLeader: leaderAccountIds.length === 1,

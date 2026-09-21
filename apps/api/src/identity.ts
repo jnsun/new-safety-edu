@@ -176,6 +176,10 @@ export async function disablePerson(tx: Tx, input: { personId: string; actorId: 
   if (accountIds.length) {
     await tx.account.updateMany({ where: { id: { in: accountIds } }, data: { status: "disabled", sessionVersion: { increment: 1 } } });
     await tx.refreshSession.updateMany({ where: { accountId: { in: accountIds }, revokedAt: null }, data: { revokedAt: now } });
+    await tx.receivableAccessGrant.updateMany({
+      where: { accountId: { in: accountIds }, active: true, revokedAt: null },
+      data: { active: false, revokedAt: now, revokedBy: input.actorId, revokeReason: input.reason, revision: { increment: 1 } }
+    });
   }
   await tx.roleAssignment.updateMany({
     where: { personId: input.personId, OR: [{ active: true }, { activationPending: true }] },

@@ -1094,7 +1094,7 @@ async function ledgerDetail(
       ...attachment,
       capabilities: {
         canDownload: attachment.status === "active" || access.canManageAll,
-        canDelete: ledger.status === "active" && access.canManageAll && (access.role === "owner" || access.role === "admin"),
+        canDelete: false,
         canVoid:
           ledger.status === "active" &&
           attachment.status === "active" &&

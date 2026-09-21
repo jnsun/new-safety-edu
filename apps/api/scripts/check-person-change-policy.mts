@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { assertPersonChangeRequestAllowed, canReviewPersonChange } from "../src/person-change-policy.js";
 
-assert.doesNotThrow(() => assertPersonChangeRequestAllowed({ requestType: "contractor_unit_change", currentPersonType: "contractor" }));
+assert.throws(() => assertPersonChangeRequestAllowed({ requestType: "contractor_unit_change", currentPersonType: "contractor" }), { code: "FIRST_RELEASE_EMPLOYEE_ONLY", statusCode: 403 });
 assert.throws(() => assertPersonChangeRequestAllowed({ requestType: "contractor_unit_change", currentPersonType: "employee" }));
 assert.throws(() => assertPersonChangeRequestAllowed({ requestType: "responsible_entity_change", currentPersonType: "employee" }));
 assert.throws(() => assertPersonChangeRequestAllowed({ requestType: "identity_correction", currentPersonType: "employee", nextPersonType: "employee" }));

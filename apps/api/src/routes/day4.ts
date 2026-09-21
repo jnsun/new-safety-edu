@@ -17,6 +17,7 @@ import { qualificationExpiryMilestone } from "../qualification-policy.js";
 import { allowedRequestActions } from "../change-requests.js";
 import { assertPersonChangeRequestAllowed, canReviewPersonChange, type PersonChangeRequestType } from "../person-change-policy.js";
 import { assertOwnedFiles } from "../file-association-policy.js";
+import { assertFirstReleaseWorkflowAllowed } from "../first-release-policy.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -287,6 +288,7 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
   app.post("/api/me/change-requests", authenticated, async (request, reply) => {
     const principal = principalOf(request); if (!principal.personId) forbidden("账号尚未绑定人员档案");
     const input = z.object({ type: z.enum(["profile_change", "binding_change", "identity_correction", "contractor_unit_change", "responsible_entity_change"]), name: z.string().trim().min(2).max(80).optional(), phone: z.string().regex(/^1\d{10}$/).optional(), newPersonType: z.enum(["employee", "contractor", "temporary_individual"]).optional(), organizationId: z.string().uuid().optional(), contractorOrganizationId: z.string().uuid().optional(), attachmentIds: z.array(z.string().uuid()).max(10).default([]), reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    assertFirstReleaseWorkflowAllowed(input.type);
     if (input.phone) throw Object.assign(new Error("修改手机号必须先完成短信验证"), { statusCode: 409, code: "SMS_VERIFICATION_REQUIRED" });
     if (input.type === "binding_change") throw Object.assign(new Error("微信换绑必须由新微信登录并完成手机号短信验证"), { statusCode: 409, code: "WECHAT_REBIND_VERIFICATION_REQUIRED" });
     if (input.type === "profile_change" && !input.name) throw Object.assign(new Error("请填写需要修改的姓名"), { statusCode: 400, code: "CHANGE_REQUIRED" });
@@ -368,6 +370,7 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
     return { data: { status: "rejected" } };
   });
   app.post("/api/management/requests/:id/approve", manager, async (request) => { const principal = principalOf(request); const { id } = idParam.parse(request.params); const { note } = z.object({ note: z.string().trim().max(500).default("") }).parse(request.body); const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden(); if (row.status !== "pending" || !["profile_change", "binding_change", "department_transfer", "account_merge", "person_merge", "project_exit", "cross_entity_project_admin", "person_reactivation", "identity_correction", "contractor_unit_change", "responsible_entity_change", "account_recovery"].includes(row.type)) throw Object.assign(new Error("该申请请使用对应的专用审核操作"), { statusCode: 409, code: "SPECIAL_APPROVAL_REQUIRED" }); const payload = row.payload as Record<string, unknown>;
+    assertFirstReleaseWorkflowAllowed(row.type);
     if (row.type === "binding_change") throw Object.assign(new Error("旧微信换绑申请不能直接批准，请申请人使用新微信完成手机号验证"), { statusCode: 409, code: "WECHAT_REBIND_VERIFICATION_REQUIRED" });
     if (row.type === "account_merge") {
       if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以确认账号合并");

@@ -44,6 +44,10 @@ export function assertReceivablesGrantManagement(actorRole: "owner" | "admin" | 
   throw httpError(403, "RECEIVABLES_ADMIN_GRANT_FORBIDDEN", "财务管理员只能管理报账员和只读授权");
 }
 
+export function assertReceivablesOwnerAction(role: "owner" | ReceivableGrantRole | null): asserts role is "owner" {
+  if (role !== "owner") throw httpError(403, "RECEIVABLES_OWNER_REQUIRED", "只有应收账款负责人可以执行历史口径迁移");
+}
+
 export function receivablesGrantSubjectDisposition(input: { personType: string; personStatus: string; accountStatus: string | null }): "existing" | "create_pending" {
   if (input.personType !== "employee" || input.personStatus !== "active" || (input.accountStatus !== null && input.accountStatus !== "pending" && input.accountStatus !== "active")) {
     throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是有效正式员工，且账号不得停用或合并");
@@ -140,6 +144,12 @@ function validateGrantPolicy(input: GrantFields) {
 async function requireAction(context: ReceivablesAdminContext, action: ReceivablesAction, tx?: Prisma.TransactionClient) {
   const access = await resolveReceivablesAccess(context.principal, tx ?? prisma);
   requireReceivables(access, action);
+  return access;
+}
+
+async function requireOwnerAction(context: ReceivablesAdminContext, action: ReceivablesAction, tx?: Prisma.TransactionClient) {
+  const access = await requireAction(context, action, tx);
+  assertReceivablesOwnerAction(access.role);
   return access;
 }
 
@@ -353,7 +363,7 @@ async function updateDictionary(context: ReceivablesAdminContext, id: string, in
 
 async function renameDictionary(context: ReceivablesAdminContext, id: string, input: DictionaryRenameInput) {
   const value = input.value.trim();
-  await requireAction(context, "manageConfiguration");
+  await requireOwnerAction(context, "manageConfiguration");
   const inspect = async (tx: Prisma.TransactionClient) => {
     const source = await tx.receivableDictionaryOption.findUnique({ where: { id }, select: dictionarySelect });
     if (!source || !source.active) throw httpError(409, "RECEIVABLES_DICTIONARY_INACTIVE", "业务字典值不存在或已停用");
@@ -367,7 +377,7 @@ async function renameDictionary(context: ReceivablesAdminContext, id: string, in
   };
   if (input.mode === "preview") {
     return prisma.$transaction(async (tx) => {
-      await requireAction(context, "manageConfiguration", tx);
+      await requireOwnerAction(context, "manageConfiguration", tx);
       const { source, migration } = await inspect(tx);
       const snapshot = migrationSnapshot(await migration.affected(tx, source.value));
       const expiresAt = Date.now() + migrationTokenLifetimeMs;
@@ -379,7 +389,7 @@ async function renameDictionary(context: ReceivablesAdminContext, id: string, in
   assertTokenIdentity(payload, { kind: "dictionary-rename", actorId: context.principal.accountId, sourceId: id, targetId: id });
   if (payload.targetValue !== value) throw httpError(400, "RECEIVABLES_MIGRATION_TOKEN_MISMATCH", "改名令牌与当前请求不匹配");
   return runMigrationApply(() => prisma.$transaction(async (tx) => {
-    const access = await requireAction(context, "manageConfiguration", tx);
+    const access = await requireOwnerAction(context, "manageConfiguration", tx);
     await tx.$queryRaw`SELECT id FROM receivable_dictionary_options WHERE id = ${id}::uuid FOR UPDATE`;
     const { source, migration } = await inspect(tx);
     const initialRows = await migration.affected(tx, source.value);
@@ -413,10 +423,10 @@ async function renameDictionary(context: ReceivablesAdminContext, id: string, in
 
 async function migrateDepartment(context: ReceivablesAdminContext, sourceId: string, input: MigrationInput) {
   if (sourceId === input.targetId) throw httpError(400, "RECEIVABLES_MIGRATION_TARGET_INVALID", "迁移目标不能与来源相同");
-  await requireAction(context, "manageAccess");
+  await requireOwnerAction(context, "manageAccess");
   if (input.mode === "preview") {
     return prisma.$transaction(async (tx) => {
-      await requireAction(context, "manageAccess", tx);
+      await requireOwnerAction(context, "manageAccess", tx);
       const [source, target, rows] = await Promise.all([
         tx.receivableDepartment.findUnique({ where: { id: sourceId }, select: departmentSelect }),
         tx.receivableDepartment.findUnique({ where: { id: input.targetId }, select: departmentSelect }),
@@ -432,7 +442,7 @@ async function migrateDepartment(context: ReceivablesAdminContext, sourceId: str
   const payload = readMigrationToken(input.token);
   assertTokenIdentity(payload, { kind: "department", actorId: context.principal.accountId, sourceId, targetId: input.targetId });
   return runMigrationApply(() => prisma.$transaction(async (tx) => {
-    const access = await requireAction(context, "manageAccess", tx);
+    const access = await requireOwnerAction(context, "manageAccess", tx);
     const departmentIds = [sourceId, input.targetId].sort();
     await tx.$queryRaw`SELECT id FROM receivable_departments WHERE id IN (${Prisma.join(departmentIds.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`;
     const [source, target] = await Promise.all([
@@ -459,10 +469,10 @@ async function migrateDepartment(context: ReceivablesAdminContext, sourceId: str
 
 async function migrateDictionary(context: ReceivablesAdminContext, sourceId: string, input: MigrationInput) {
   if (sourceId === input.targetId) throw httpError(400, "RECEIVABLES_MIGRATION_TARGET_INVALID", "迁移目标不能与来源相同");
-  await requireAction(context, "manageAccess");
+  await requireOwnerAction(context, "manageAccess");
   if (input.mode === "preview") {
     return prisma.$transaction(async (tx) => {
-      await requireAction(context, "manageAccess", tx);
+      await requireOwnerAction(context, "manageAccess", tx);
       const [source, target] = await Promise.all([
         tx.receivableDictionaryOption.findUnique({ where: { id: sourceId }, select: dictionarySelect }),
         tx.receivableDictionaryOption.findUnique({ where: { id: input.targetId }, select: dictionarySelect }),
@@ -480,7 +490,7 @@ async function migrateDictionary(context: ReceivablesAdminContext, sourceId: str
   const payload = readMigrationToken(input.token);
   assertTokenIdentity(payload, { kind: "dictionary", actorId: context.principal.accountId, sourceId, targetId: input.targetId });
   return runMigrationApply(() => prisma.$transaction(async (tx) => {
-    const access = await requireAction(context, "manageAccess", tx);
+    const access = await requireOwnerAction(context, "manageAccess", tx);
     const [source, target] = await Promise.all([
       tx.receivableDictionaryOption.findUnique({ where: { id: sourceId }, select: dictionarySelect }),
       tx.receivableDictionaryOption.findUnique({ where: { id: input.targetId }, select: dictionarySelect }),

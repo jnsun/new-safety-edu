@@ -1,7 +1,7 @@
 {
   "pages": [
     "pages/todo/index", "pages/records/index", "pages/games/index", "pages/messages/index", "pages/profile/index",
-    "pages/login/index", "pages/bind/index", "pages/pending/index", "pages/register/index",
+    "pages/login/index", "pages/bind/index", "pages/pending/index",
     "pages/task/index", "pages/courseware/index", "pages/html/index", "pages/exam/index", "pages/signature/index", "pages/record-detail/index",
     "pages/management/index", "pages/change-request/index", "pages/challenge/index", "pages/leaderboard/index",
     "pages/profile-detail/index", "pages/credentials/index", "pages/account-security/index", "pages/points/index"

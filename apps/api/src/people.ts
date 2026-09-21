@@ -5,6 +5,7 @@ import { encryptNationalId, normalizePhone } from "./crypto.js";
 import type { Env } from "./env.js";
 import { prisma } from "./db.js";
 import { assertOwnedFiles } from "./file-association-policy.js";
+import { assertFirstReleaseEmployee } from "./first-release-policy.js";
 
 export type PersonInput = {
   name: string;
@@ -24,6 +25,7 @@ const safeSelect = {
 } satisfies Prisma.PersonSelect;
 
 export async function createPerson(input: PersonInput, principal: Principal, env: Env, tx: Prisma.TransactionClient | typeof prisma = prisma) {
+  assertFirstReleaseEmployee(input.type);
   if (input.organizationId ? !await canAccessOrganization(principal, input.organizationId) : !isCompanyAdmin(principal)) forbidden();
   const phone = normalizePhone(input.phone);
   if (!/^1\d{10}$/.test(phone)) throw Object.assign(new Error("手机号格式错误"), { statusCode: 400, code: "INVALID_PHONE" });

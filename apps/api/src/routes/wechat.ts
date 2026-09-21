@@ -20,6 +20,7 @@ import { getWechatPhoneNumber } from "../wechat-api.js";
 import { issueWechatPhoneVerificationToken, verifyWechatPhoneVerificationToken } from "../wechat-phone-verification.js";
 import { decideWebLoginDestination, safetyWebRoleNames } from "../web-login-access.js";
 import { resolveReceivablesAccess } from "../receivables-access.js";
+import { assertFirstReleaseEmployee, assertFirstReleaseWorkflowAllowed } from "../first-release-policy.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -78,10 +79,10 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
   });
 
   app.get("/api/wechat/registration-options", { preHandler: deps.authenticate }, async () => ({ data: {
-    organizations: await prisma.organization.findMany({ where: { type: "contractor" }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    organizations: [],
     businessEntities: await prisma.organization.findMany({ where: { type: "business_entity" }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     departments: await prisma.organization.findMany({ where: { type: { in: ["business_entity", "department"] } }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
-    projects: await prisma.project.findMany({ where: { status: "active", responsibleOrganization: { type: "business_entity" } }, select: { id: true, name: true, responsibleOrganizationId: true, responsibleOrganization: { select: { name: true } } }, orderBy: { name: "asc" } })
+    projects: []
   } }));
 
   app.post("/api/wechat/identity/phone-code", { preHandler: deps.authenticate }, async (request) => {
@@ -98,7 +99,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     const input = z.object({ code: z.string().min(1).max(300) }).parse(request.body);
     const phone = await getWechatPhoneNumber(input.code, deps.env);
     const [matches, phoneOwner, activeBinding] = await Promise.all([
-      prisma.person.findMany({ where: { phone, status: "active" }, take: 3, include: { organizations: { where: { active: true, primary: true }, include: { organization: { select: { type: true } } } }, account: { include: { wechatBindings: { where: { active: true } } } } } }),
+      prisma.person.findMany({ where: { phone, type: "employee", status: "active" }, take: 3, include: { organizations: { where: { active: true, primary: true }, include: { organization: { select: { type: true } } } }, account: { include: { wechatBindings: { where: { active: true } } } } } }),
       prisma.account.findUnique({ where: { verifiedPhone: phone }, select: { id: true, personId: true } }),
       prisma.wechatBinding.findFirst({ where: { accountId: principal.accountId, active: true }, select: { id: true } })
     ]);
@@ -142,7 +143,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     const verificationMethod = verification ? "sms" : "wechat";
     const [organization, matches, phoneOwner, activeBinding] = await Promise.all([
       prisma.organization.findFirst({ where: { id: input.organizationId, type: { in: ["business_entity", "department"] } }, select: { id: true, type: true } }),
-      prisma.person.findMany({ where: { phone, status: "active" }, take: 3, include: { organizations: { where: { active: true, primary: true }, include: { organization: { select: { type: true } } } }, account: { include: { wechatBindings: { where: { active: true } } } } } }),
+      prisma.person.findMany({ where: { phone, type: "employee", status: "active" }, take: 3, include: { organizations: { where: { active: true, primary: true }, include: { organization: { select: { type: true } } } }, account: { include: { wechatBindings: { where: { active: true } } } } } }),
       prisma.account.findUnique({ where: { verifiedPhone: phone }, select: { id: true, personId: true } }),
       prisma.wechatBinding.findFirst({ where: { accountId: principal.accountId, active: true }, select: { unionid: true } })
     ]);
@@ -210,6 +211,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
   });
 
   app.post("/api/wechat/registration-requests", { preHandler: deps.authenticate }, async (request, reply) => {
+    assertFirstReleaseWorkflowAllowed("registration");
     const input = z.object({
       name: z.string().trim().min(2).max(80), phone: z.string().regex(/^1\d{10}$/),
       type: z.enum(["contractor", "temporary_individual"]), organizationId: z.string().uuid().optional(), projectId: z.string().uuid(),
@@ -346,6 +348,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     if (change.projectId && !await canAccessProject(request.principal!, change.projectId)) forbidden();
     if (!change.accountId || change.status !== "pending") throw Object.assign(new Error("申请状态不可审批"), { statusCode: 409, code: "REQUEST_NOT_PENDING" });
     if (change.type === "registration") {
+      assertFirstReleaseWorkflowAllowed("registration");
       if (!change.projectId) throw Object.assign(new Error("注册申请缺少项目"), { statusCode: 409, code: "INVALID_REGISTRATION" });
       const payload = z.object({
         name: z.string().min(2), phone: z.string().regex(/^1\d{10}$/), type: z.enum(["contractor", "temporary_individual"]),
@@ -386,6 +389,8 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       throw Object.assign(new Error("身份绑定申请请使用专用审核操作"), { statusCode: 409, code: "IDENTITY_REVIEW_REQUIRED" });
     } else {
       if (!personId || !await canAccessPerson(request.principal!, personId)) forbidden();
+      const target = await prisma.person.findUnique({ where: { id: personId }, select: { type: true } });
+      assertFirstReleaseEmployee(target?.type);
       const result = await prisma.$transaction(async (tx) => {
         const bound = await bindAccountToPerson(tx, { currentAccountId: change.accountId!, personId, reason: "管理员审批档案绑定" });
         if (bound.status === "pending_merge") return bound;

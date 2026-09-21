@@ -122,8 +122,8 @@ assert.match(transfersSource, /needsOpeningBalanceDate\s*&&/, "opening balance d
 assert.match(styles, /\.receivables-import-start\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center/s, "initial import controls use a compact aligned row");
 assert.match(transfersSource, /receivables-transfer-workspace/, "data processing uses one continuous compact workspace");
 assert.match(styles, /\.receivables-transfer-card \.ant-steps-item-title\s*\{[^}]*font-size:\s*12px/s, "data processing steps stay visually compact");
-assert.match(ledgerSource, /attachment-delete/, "finance managers can open physical attachment deletion");
-assert.match(ledgerSource, /capabilities\.canDelete/, "physical attachment deletion is rendered from a server capability");
+assert.doesNotMatch(ledgerSource, /attachment-delete/, "business users cannot open physical attachment deletion");
+assert.doesNotMatch(ledgerSource, /capabilities\.canDelete/, "physical attachment deletion is not rendered from a business capability");
 assert.doesNotMatch(styles, /\.receivables-import-upload\s*\{[^}]*max-width:\s*680px/s, "initial import content does not leave a large empty right side");
 assert.match(pageSource, /暂无法计算/, "an unreliable balance is described instead of rendered as a dash");
 assert.match(pageSource, /查看待补充台账/, "unreliable balance links directly to missing final amounts");

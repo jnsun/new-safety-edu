@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { Prisma } from "@prisma/client";
 import {
   assertLedgerPatchAllowed,
@@ -25,11 +26,11 @@ import {
   resolveReceivablesRoute,
 } from "../../admin/src/receivables-types.js";
 import { buildReceivablesDashboardStatements, normalizeStoredReceivablesColumnPreference, normalizeStoredReceivablesDashboardPreference, receivablesDashboardPreferenceSchema } from "../src/receivables-query.js";
-import { assertReceivableAttachmentDeletionAllowed } from "../src/receivables-files.js";
 
-assert.doesNotThrow(() => assertReceivableAttachmentDeletionAllowed({ canManageAll: true, role: "admin" }));
-assert.doesNotThrow(() => assertReceivableAttachmentDeletionAllowed({ canManageAll: true, role: "owner" }));
-assert.throws(() => assertReceivableAttachmentDeletionAllowed({ canManageAll: false, role: "reporter" }), (error: Error & { code?: string }) => error.code === "RECEIVABLES_ATTACHMENT_NOT_FOUND");
+const receivablesRoutes = await readFile(new URL("../src/routes/receivables.ts", import.meta.url), "utf8");
+const receivablesFiles = await readFile(new URL("../src/receivables-files.ts", import.meta.url), "utf8");
+assert.doesNotMatch(receivablesRoutes, /attachments\/:attachmentId\/delete/);
+assert.doesNotMatch(receivablesFiles, /deleteReceivableAttachment/);
 
 assert.equal(normalizeContractNo("  HT-001  "), "HT-001");
 assert.equal(defaultCreditorUnitForContract(" wh19-001 "), "山西省地球物理化学勘查院有限公司");

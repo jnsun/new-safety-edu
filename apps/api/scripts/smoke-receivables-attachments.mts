@@ -194,6 +194,7 @@ async function cleanup() {
     () => prisma.roleAssignment.deleteMany({ where: { id: { in: ids.roles } } }),
     () => prisma.account.deleteMany({ where: { id: { in: ids.accounts } } }),
     () => prisma.person.deleteMany({ where: { id: { in: ids.people } } }),
+    () => prisma.challengeMonthlyOrganizationSnapshot.deleteMany({ where: { organizationId: { in: ids.organizations } } }),
     () => prisma.organization.deleteMany({ where: { id: { in: ids.organizations } } }),
     () => rm(uploadRoot, { recursive: true, force: true }),
   ];
@@ -326,14 +327,11 @@ try {
   const deletePath = (attachment: Attachment) => `${attachmentPath}/${attachment.id}/delete`;
   const deleteBody = (reason: string, revision: number) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ledgerRevision, revision, reason, confirm: true }) });
   await unchanged(ledger.id, () => expect(deletePath(uploaded[4]!), reporterToken, 404, deleteBody("reporter forbidden", 1)));
-  await expect(deletePath(uploaded[2]!), adminToken, 200, deleteBody("remove obsolete voided file", 2)); ledgerRevision += 1;
-  assert.equal(await prisma.receivableAttachment.count({ where: { id: uploaded[2]!.id } }), 0);
-  assert.equal(await prisma.privateFile.count({ where: { id: uploaded[2]!.file.id } }), 0);
-  await assert.rejects(() => stat(resolve(uploadRoot, uploaded[2]!.file.storageKey)), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
-  const deleteAudit = await prisma.auditLog.findFirstOrThrow({ where: { action: "receivables.attachment.delete", objectId: uploaded[2]!.id } });
-  const deleteMetadata = deleteAudit.metadata as Record<string, unknown> | null;
-  assert.equal(deleteMetadata?.reason, "remove obsolete voided file");
-  assert.ok(deleteAudit.metadata && typeof deleteAudit.metadata === "object" && !Array.isArray(deleteAudit.metadata) && "before" in deleteAudit.metadata, "delete audit must retain the deleted attachment snapshot");
+  await unchanged(ledger.id, () => expect(deletePath(uploaded[2]!), adminToken, 404, deleteBody("business deletion disabled", 2)));
+  assert.equal(await prisma.receivableAttachment.count({ where: { id: uploaded[2]!.id } }), 1);
+  assert.equal(await prisma.privateFile.count({ where: { id: uploaded[2]!.file.id } }), 1);
+  assert.equal((await stat(resolve(uploadRoot, uploaded[2]!.file.storageKey))).isFile(), true);
+  assert.equal(await prisma.auditLog.count({ where: { action: "receivables.attachment.delete", objectId: uploaded[2]!.id } }), 0);
   await prisma.receivableDepartment.update({ where: { id: department.id }, data: { active: false } });
   const inactiveHistoryUpload = (await expect<Attachment>(attachmentPath, reporterToken, 201, { method: "POST", body: form(ledgerRevision, fixtures[0]!) })).body!.data!;
   uploaded.push(inactiveHistoryUpload); ids.files.push(inactiveHistoryUpload.file.id); ledgerRevision += 1;

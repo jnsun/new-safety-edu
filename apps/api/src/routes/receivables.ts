@@ -9,7 +9,7 @@ import { assertReceivablesFinanceOrganization, receivablesFinanceOrganizationNam
 import { getReceivablesColumnPreference, getReceivablesDashboardPreference, getReceivablesReferenceData, previewReceivablesExport, queryReceivables, receivablesColumnPreferenceSchema, receivablesDashboardPreferenceSchema, receivablesExportCategoryIds, receivablesExportColumnIds, saveReceivablesColumnPreference, saveReceivablesDashboardPreference } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
-import { authorizeReceivableAttachmentUpload, createReceivableAttachment, deleteReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
+import { authorizeReceivableAttachmentUpload, createReceivableAttachment, newReceivableAttachmentStorageKey, removeReceivableAttachmentFiles, storeReceivableAttachment, validateReceivableAttachment, voidReceivableAttachment } from "../receivables-files.js";
 import { applyReceivablesImport, authorizeReceivablesImport, inspectReceivablesImport, listReceivablesImports, previewReceivablesImport, receivablesImportFields, rollbackReceivablesImport, type ReceivablesImportColumnMappings } from "../receivables-import.js";
 import { consumeReceivablesExport, createReceivablesExportJob, issueReceivablesExportToken, listReceivablesExports, removeConsumedReceivablesExport } from "../receivables-export.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
@@ -100,7 +100,6 @@ const receiptParams = z.object({ id: z.string().uuid(), receiptId: z.string().uu
 const writeoffInput = z.object({ ledgerRevision: z.number().int().positive(), reason: reasonInput, writeoffAmount: amountInput }).strict();
 const attachmentFields = z.object({ ledgerRevision: z.coerce.number().int().positive(), category: z.string().trim().min(1).max(120).default("general") }).strict();
 const attachmentVoidInput = z.object({ ledgerRevision: z.number().int().positive(), revision: z.number().int().positive(), reason: reasonInput }).strict();
-const attachmentDeleteInput = attachmentVoidInput.extend({ confirm: z.literal(true) }).strict();
 const attachmentParams = z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() }).strict();
 const importApplyInput = z.object({ revision: z.number().int().positive(), openingBalanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), decisions: z.array(z.object({ rowNumber: z.number().int().min(2), decision: z.enum(["skip", "update"]) }).strict()).max(200_000) }).strict();
 const importRollbackInput = z.object({ revision: z.number().int().positive(), reason: reasonInput }).strict();
@@ -297,10 +296,6 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.post("/api/receivables/departments", { preHandler: deps.authenticate }, async (request, reply) => {
     const data = await administerReceivables(adminContext(request), { type: "department.create", input: departmentCreateInput.parse(request.body) });
     return reply.code(201).send({ data });
-  });
-  app.post("/api/receivables/ledgers/:id/attachments/:attachmentId/delete", { preHandler: deps.authenticate }, async (request) => {
-    const params = attachmentParams.parse(request.params);
-    return { data: await deleteReceivableAttachment(ledgerContext(request), { ledgerId: params.id, attachmentId: params.attachmentId, ...attachmentDeleteInput.parse(request.body) }, process.env.UPLOAD_ROOT ?? "var/uploads") };
   });
   app.patch("/api/receivables/departments/reorder", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "department.reorder", input: departmentReorderInput.parse(request.body) }) }));
   app.patch("/api/receivables/departments/:id", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "department.update", id: idParams.parse(request.params).id, input: departmentUpdateInput.parse(request.body) }) }));

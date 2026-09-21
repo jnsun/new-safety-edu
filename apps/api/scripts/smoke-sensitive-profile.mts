@@ -18,13 +18,15 @@ try {
   const second = await prisma.person.create({ data: { name: "验证人员乙", phone: "19900000502", type: "employee", status: "active", nationalIdLast4: "5678", ...encryptNationalId("110101199001015678", env), organizations: { create: { organizationId: department.id, primary: true } } } });
   const managerPassword = "SensitiveProfile!234";
   const managerPerson = await prisma.person.create({ data: { name: "验证管理员", phone: "19900000503", type: "employee", status: "active", organizations: { create: { organizationId: department.id, primary: true } } } });
-  await prisma.account.create({ data: { username: "profile-manager", usernameNormalized: "profile-manager", passwordHash: await argon2.hash(managerPassword), passwordLoginEnabled: true, personId: managerPerson.id, roles: { create: { personId: managerPerson.id, role: "org_admin", scopeType: "organization", scopeId: department.id } } } });
+  await prisma.account.create({ data: { username: "profile-manager", usernameNormalized: "profile-manager", passwordHash: await argon2.hash(managerPassword), passwordLoginEnabled: true, personId: managerPerson.id, roles: { create: { personId: managerPerson.id, role: "company_admin", scopeType: "company", scopeId: null } } } });
   const selfAccount = await prisma.account.create({ data: { personId: first.id, wechatBindings: { create: { appId: "development", openid: "dev-profile-user" } } } });
 
   const login = await request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: "profile-manager", password: managerPassword }) });
-  const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
-  assert.equal(login.status, 200); assert.ok(cookie);
-  const grant = await request(`/api/persons/${first.id}/sensitive-access`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ password: managerPassword }) });
+  const setCookies = (login.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? [login.headers.get("set-cookie") ?? ""];
+  const cookie = setCookies.map((value) => value.split(";", 1)[0]).filter(Boolean).join("; ");
+  const csrf = setCookies.map((value) => value.split(";", 1)[0]).find((value) => value.startsWith("safety_csrf="))?.slice("safety_csrf=".length);
+  assert.equal(login.status, 200); assert.ok(cookie); assert.ok(csrf);
+  const grant = await request(`/api/persons/${first.id}/sensitive-access`, { method: "POST", headers: { cookie, origin: baseUrl, host: new URL(baseUrl).host, "x-csrf-token": csrf, "content-type": "application/json" }, body: JSON.stringify({ password: managerPassword }) });
   assert.equal(grant.status, 200);
   const scopedToken = (await grant.json() as { data: { token: string } }).data.token;
   assert.equal((await request(`/api/persons/${first.id}/sensitive`, { headers: { cookie, "x-sensitive-token": scopedToken } })).status, 200);

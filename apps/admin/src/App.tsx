@@ -1160,7 +1160,7 @@ function ReviewCenter({ principal }: { principal: Principal }) {
 function DataToolsPage({ principal }: { principal: Principal }) {
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: () => api<Organization[]>("/api/organizations") });
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => api<Project[]>("/api/projects") });
-  const canExportSensitive = principal.roles.some((role) => ["company_admin", "org_leader", "org_admin", "project_admin"].includes(role.role));
+  const canExportSensitive = principal.roles.some((role) => role.role === "company_admin");
   return <><Typography.Title level={3}>数据工具</Typography.Title><Alert showIcon type="info" message="导入和导出是低频、高影响操作，请按任务逐项展开。" style={{ marginBottom: 16 }} /><Collapse className="data-tools-list" defaultActiveKey={["import"]} items={[
     { key: "import", label: "人员 Excel 与照片导入", children: <PersonImport enabled={principal.roles.some((role) => role.role === "company_admin")} /> },
     ...(canExportSensitive ? [{ key: "exports", label: "敏感资料导出", children: <SensitiveExports principal={principal} organizations={organizations.data ?? []} projects={projects.data ?? []} /> }] : []),
@@ -1559,13 +1559,9 @@ function People({ principal }: { principal: Principal }) {
           >
             <Input />
           </Form.Item>
-          <Form.Item name="type" label="人员类型" rules={[{ required: true }]}>
+          <Form.Item name="type" label="人员类型" initialValue="employee" rules={[{ required: true }]}>
             <Select
-              options={[
-                { value: "employee", label: "正式员工" },
-                { value: "contractor", label: "外协人员" },
-                { value: "temporary_individual", label: "临时个人" },
-              ]}
+              options={[{ value: "employee", label: "正式员工" }]}
             />
           </Form.Item>
           <Form.Item
@@ -2331,12 +2327,7 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
           </Form.Item>
           <Form.Item name="type" label="类型" rules={[{ required: true }]}>
             <Select
-              options={[
-                "company",
-                "business_entity",
-                "department",
-                "contractor",
-              ].map((v) => ({ value: v, label: organizationTypeLabels[v] }))}
+              options={["company", "business_entity", "department"].map((v) => ({ value: v, label: organizationTypeLabels[v] }))}
             />
           </Form.Item>
           <Typography.Paragraph type="secondary">

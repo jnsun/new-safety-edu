@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { assertReceivablesFinanceOrganization, decideReceivablesAccess, requireReceivables, selectReceivablesFinanceOrganization, selectSingleReceivablesGrant } from "../src/receivables-access.js";
-import { assertReceivablesGrantManagement, receivablesGrantSubjectDisposition } from "../src/receivables-admin.js";
+import { assertReceivablesGrantManagement, assertReceivablesOwnerAction, receivablesGrantSubjectDisposition } from "../src/receivables-admin.js";
 import { receivableSettingBinding, selectFinanceOrganizationId } from "../../../prisma/receivables-defaults.js";
 
 assert.equal(selectFinanceOrganizationId([{ id: "finance-org" }]), "finance-org");
@@ -81,18 +81,17 @@ const financeDepartmentMember = decideReceivablesAccess({
   accountActive: true,
   personActive: true,
   configured: true,
-  isFinanceOrganizationMember: true,
   grant: null,
 });
-assert.equal(financeDepartmentMember.role, "readonly");
-assert.equal(financeDepartmentMember.canEnter, true);
-assert.equal(financeDepartmentMember.canReadLedger, true);
-assert.equal(financeDepartmentMember.canViewAll, true);
+assert.equal(financeDepartmentMember.role, null);
+assert.equal(financeDepartmentMember.canEnter, false);
+assert.equal(financeDepartmentMember.canReadLedger, false);
+assert.equal(financeDepartmentMember.canViewAll, false);
 assert.equal(financeDepartmentMember.canWriteLedger, false);
 assert.equal(financeDepartmentMember.canCreateLedger, false);
 assert.equal(financeDepartmentMember.canExport, false);
 assert.equal(financeDepartmentMember.canManageConfiguration, false);
-assert.doesNotThrow(() => requireReceivables(financeDepartmentMember, "read", "any-department"));
+assert.throws(() => requireReceivables(financeDepartmentMember, "read", "any-department"), { code: "RECEIVABLES_FORBIDDEN", statusCode: 403 });
 assert.throws(() => requireReceivables(financeDepartmentMember, "write", "any-department"), { code: "RECEIVABLES_FORBIDDEN", statusCode: 403 });
 
 const financeAdmin = decideReceivablesAccess({
@@ -105,6 +104,8 @@ const financeAdmin = decideReceivablesAccess({
 assert.equal(financeAdmin.role, "admin");
 assert.equal(financeAdmin.canManageAll, true);
 assert.equal(financeAdmin.canManageAccess, true);
+assert.doesNotThrow(() => assertReceivablesOwnerAction("owner"));
+assert.throws(() => assertReceivablesOwnerAction("admin"), { code: "RECEIVABLES_OWNER_REQUIRED", statusCode: 403 });
 assert.doesNotThrow(() => assertReceivablesGrantManagement("owner", null, "admin"));
 assert.doesNotThrow(() => assertReceivablesGrantManagement("owner", "admin", null));
 assert.doesNotThrow(() => assertReceivablesGrantManagement("owner", null, "reporter"));

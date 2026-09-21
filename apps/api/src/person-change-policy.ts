@@ -1,4 +1,5 @@
 import type { PersonType } from "@prisma/client";
+import { assertFirstReleaseWorkflowAllowed } from "./first-release-policy.js";
 
 export type PersonChangeRequestType = "identity_correction" | "contractor_unit_change" | "responsible_entity_change";
 
@@ -7,6 +8,7 @@ export function assertPersonChangeRequestAllowed(input: {
   currentPersonType: PersonType;
   nextPersonType?: PersonType;
 }) {
+  assertFirstReleaseWorkflowAllowed(input.requestType);
   if (input.requestType === "contractor_unit_change" && input.currentPersonType !== "contractor") {
     throw Object.assign(new Error("仅外协人员可以申请变更外协单位"), { statusCode: 409, code: "PERSON_TYPE_NOT_CONTRACTOR" });
   }
