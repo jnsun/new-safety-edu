@@ -58,6 +58,7 @@ import {
   type ReceivablesLedgerRow,
   type ReceivablesSort,
 } from "./receivables-types";
+import { ReceivablesPageHeader } from "./ReceivablesUi";
 
 const columnLabels: Record<ReceivablesColumnId, string> = {
   financeDepartmentName: "财务归属部门",
@@ -1374,20 +1375,22 @@ export function ReceivablesLedger({
 
   return (
     <div className="receivables-page">
-      <div className="receivables-compact-toolbar">
-        <Typography.Text type="secondary">
-          默认显示未结合同；筛选、排序和分页均由服务端执行。
-        </Typography.Text>
-        <Button
-          icon={<SettingOutlined />}
-          onClick={() => {
-            setDraftPreference(preference);
-            setColumnModalOpen(true);
-          }}
-        >
-          列设置
-        </Button>
-      </div>
+      <ReceivablesPageHeader
+        title="合同台账"
+        description="一行一合同；筛选、排序和分页均由服务端执行。"
+        meta="默认显示未结合同"
+        actions={
+          <Button
+            icon={<SettingOutlined />}
+            onClick={() => {
+              setDraftPreference(preference);
+              setColumnModalOpen(true);
+            }}
+          >
+            列设置
+          </Button>
+        }
+      />
       {reference.isError && (
         <Alert
           className="receivables-inline-alert"
@@ -1580,6 +1583,7 @@ export function ReceivablesLedger({
         />
       </div>
       <Modal
+        rootClassName="receivables-column-settings-modal"
         title={
           <Space>
             <span>列设置</span>
@@ -1612,6 +1616,7 @@ export function ReceivablesLedger({
         />
       </Modal>
       <Drawer
+        rootClassName="receivables-detail-drawer"
         title="台账详情"
         width={920}
         open={!!selectedId}
@@ -1643,6 +1648,7 @@ export function ReceivablesLedger({
         )}
       </Drawer>
       <Modal
+        rootClassName="receivables-operation-modal-root"
         className="receivables-operation-modal"
         title={operation ? operationTitles[operation.type] : "财务操作"}
         open={!!operation}

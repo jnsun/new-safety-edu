@@ -89,10 +89,10 @@ assert.doesNotMatch(ledgerSource, /finalAmount:\s*"[^"]*（万元）"/, "money c
 assert.match(ledgerSource, /finalAmount:\s*"决算额"/, "money column headings use compact labels");
 assert.match(transfersSource, /合同金额（万元）/, "data entry states the authoritative unit");
 assert.match(adminSource, /receivables-department-toolbar/, "department controls share one compact toolbar");
-assert.match(adminSource, /receivables-department-grid/, "departments use a dense unpaginated grid");
-assert.match(adminSource, /draggable=\{canReorderDepartments\}/, "department cards expose native drag ordering only when the full list is visible");
-assert.match(adminSource, /账号 \{row\.accountCount\} 个/, "department cards show the assigned account count");
-assert.match(adminSource, /应收账款 \{row\.receivableCount\} 笔/, "department cards show the receivables count");
+assert.match(adminSource, /receivables-department-grid/, "departments use a dense unpaginated list");
+assert.match(adminSource, /draggable=\{canReorderDepartments\}/, "department rows expose native drag ordering only when the full list is visible");
+assert.match(adminSource, /receivables-department-account-count[^\n]+\{row\.accountCount\} 人/, "department rows show the assigned account count");
+assert.match(adminSource, /receivables-department-count[^\n]+\{row\.receivableCount\} 笔/, "department rows show the receivables count");
 assert.doesNotMatch(adminSource, /显示应收账款/, "department cards do not expose a visibility switch");
 assert.doesNotMatch(adminSource, /<span>代码 <b>/, "department cards do not expose internal codes");
 assert.doesNotMatch(adminSource, /<span>修订 <b>/, "department cards do not expose revision numbers");
@@ -111,7 +111,8 @@ for (const label of ["月度开票／回款趋势", "财务归属部门应收余
 assert.match(styles, /\.receivables-ledger-table \.ant-table-placeholder[^\{]*\{[^}]*height:\s*260px/s, "empty ledger keeps a stable desktop body height");
 assert.doesNotMatch(adminSource, /scroll=\{\{\s*x:\s*760\s*\}\}/, "grant table does not force desktop horizontal scrolling");
 assert.doesNotMatch(adminSource, /fixed:\s*["']right["']/, "grant actions are not pinned into a forced overflow table");
-assert.match(adminSource, /receivables-grant-cards/, "narrow screens use grant cards instead of a horizontal table");
+assert.match(adminSource, /receivables-grant-workbench/, "grants use a searchable master-detail workspace instead of a horizontal table");
+assert.match(adminSource, /receivables-permission-matrix/, "grant details expose business capabilities without widening the directory");
 assert.match(adminSource, /row\.account\.person\?\.name/, "grant list shows the employee name instead of only the account id");
 assert.doesNotMatch(pageSource, /defaultReceivablesDashboardPreference\.find\([^\n]+\)!/, "optional cards have a real catalog fallback size");
 assert.match(transfersSource, /openingBalanceDate:\s*openingBalanceDate\s*\|\|\s*undefined/, "final apply sends the date selected after preview");
@@ -128,7 +129,7 @@ assert.match(pageSource, /暂无法计算/, "an unreliable balance is described 
 assert.match(pageSource, /查看待补充台账/, "unreliable balance links directly to missing final amounts");
 assert.match(pageSource, /finalAmountMissingCount\s*>\s*0/, "balance reliability is driven by the missing-final count");
 assert.match(styles, /\.receivables-balance-unavailable\s*\{[^}]*place-content:\s*center/s, "unavailable balance content remains centered when resized");
-assert.match(styles, /\.receivables-department-grid\s*\{[^}]*repeat\(auto-fill,\s*minmax\(/s, "department cards use an adaptive compact grid");
+assert.match(styles, /\.receivables-department-table-head,[\s\S]*\.receivables-department-item\s*\{[^}]*display:\s*grid/s, "departments use a dense aligned table-like list");
 assert.match(styles, /@media \(hover: hover\) and \(pointer: fine\)[\s\S]*\.receivables-department-item:hover \.receivables-department-actions,[\s\S]*\.receivables-department-item:focus-within \.receivables-department-actions/, "department actions reveal on hover and keyboard focus without hiding touch controls");
 assert.match(pageSource, /receivables-balance-content/, "the available balance uses an authoritative content group");
 assert.match(pageSource, /receivables-balance-content[\s\S]*当前筛选范围[\s\S]*summaryItems\.map[\s\S]*查看当前范围台账/, "the balance card restores scope, supporting facts, and its ledger action");
@@ -138,6 +139,7 @@ assert.match(styles, /\.receivables-entry-section\s*\{[^}]*grid-template-columns
 assert.match(transfersSource, /receivables-export-workspace/, "export uses a dedicated compact workspace");
 assert.match(styles, /\.receivables-export-filter-grid\s*\{[^}]*display:\s*grid/s, "export filters use a stable compact grid");
 assert.match(transfersSource, /receivables-export-history/, "export history is visually separated from filter controls");
+assert.match(transfersSource, /categoryOptions\?\.\[category\]\s*\?\?\s*\[\]/, "partial export previews cannot crash the whole workspace");
 assert.match(transfersSource, /receivables-export-preview/, "export preview identifies the matching ledgers");
 assert.match(transfersSource, /currentPreview\.previewRows/, "export preview renders server-authorized matching rows");
 

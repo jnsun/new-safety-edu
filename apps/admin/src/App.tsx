@@ -62,7 +62,7 @@ import {
   QualificationsPage,
 } from "./SafetyManagementPages";
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
-import { receivablesNavigation, receivablesPageTitle, receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
+import { receivablesNavigation, receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 import { personMatchesSearch } from "./person-search";
 import { platformConditionalModule } from "./platform-access";
 import { masterDataSelectedKey, peopleOrganizationNav } from "./people-organization/navigation";
@@ -286,14 +286,38 @@ const moduleMenuItems = (pathname: string, receivablesAccess?: ReceivablesAccess
             },
           ]
         : pathname.startsWith("/receivables")
-          ? [
-              { key: "/", label: "返回平台首页", icon: <DashboardOutlined /> },
-              ...(receivablesAccess ? receivablesNavigation(receivablesAccess).map((item) => ({
+          ? (() => {
+              const navigation = receivablesAccess ? receivablesNavigation(receivablesAccess) : [];
+              const toMenuItem = (item: (typeof navigation)[number]) => ({
                 key: item.path,
-                label: item.label,
-                icon: item.path === "/receivables" ? <DashboardOutlined /> : item.path === "/receivables/ledger" ? <AccountBookOutlined /> : item.path.includes("imports") ? <UploadOutlined /> : <SettingOutlined />,
-              })) : []),
-            ]
+                label:
+                  item.path === "/receivables"
+                    ? item.label.replace("应收账款", "") || "工作台"
+                    : item.path === "/receivables/ledger"
+                      ? "合同台账"
+                      : item.label,
+                icon:
+                  item.path === "/receivables"
+                    ? <DashboardOutlined />
+                    : item.path === "/receivables/ledger"
+                      ? <AccountBookOutlined />
+                      : item.path === "/receivables/data"
+                        ? <UploadOutlined />
+                        : <SettingOutlined />,
+              });
+              const business = navigation.filter((item) =>
+                ["/receivables", "/receivables/ledger", "/receivables/data"].includes(item.path),
+              );
+              const management = navigation.filter((item) => !business.includes(item));
+              return [
+                ...(business.length
+                  ? [{ type: "group" as const, label: "业务", children: business.map(toMenuItem) }]
+                  : []),
+                ...(management.length
+                  ? [{ type: "group" as const, label: "管理", children: management.map(toMenuItem) }]
+                  : []),
+              ];
+            })()
           : trainingMenuItems;
 
 function WechatQrLogin({ active }: { active: boolean }) {
@@ -1468,7 +1492,7 @@ function People({ principal }: { principal: Principal }) {
           <Table rowKey="id" dataSource={filteredPeople} columns={personColumns} {...(companyAdmin ? { rowSelection: { selectedRowKeys: selectedPersonIds, preserveSelectedRowKeys: true, onChange: (keys: Key[]) => setSelectedPersonIds(keys.map(String)) } } : {})} pagination={{ current: peoplePage, defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: (total) => `共 ${total} 人`, onChange: (page) => setPeoplePage(page) }} />
         )}
       </Space>
-      <Modal title="批量停用人员" open={bulkDisableOpen} footer={null} onCancel={() => setBulkDisableOpen(false)} destroyOnClose>
+      <Modal title="批量停用人员" open={bulkDisableOpen} footer={null} onCancel={() => setBulkDisableOpen(false)} destroyOnHidden>
         <Alert showIcon type="warning" message={`可停用 ${bulkDisablePreview.filter((item) => item.eligible).length} 人；不可处理 ${bulkDisablePreview.filter((item) => !item.eligible).length} 人`} description="停用会保留历史记录，并立即结束账号会话和当前管理角色。" />
         {!!bulkDisablePreview.filter((item) => !item.eligible).length && <Table style={{ marginTop: 12 }} size="small" pagination={false} rowKey="personId" dataSource={bulkDisablePreview.filter((item) => !item.eligible)} columns={[{ title: "人员", dataIndex: "personId", render: (id: string) => (query.data ?? []).find((person) => person.id === id)?.name ?? id }, { title: "不能处理的原因", dataIndex: "reason" }]} />}
         <Form form={bulkDisableForm} layout="vertical" style={{ marginTop: 16 }} onFinish={(values) => bulkDisable.mutate(values)}>
@@ -2331,7 +2355,7 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
         open={!!editingOrg}
         footer={null}
         onCancel={() => setEditingOrg(undefined)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           layout="vertical"
@@ -2366,7 +2390,7 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
         open={!!roleOrg}
         footer={null}
         onCancel={() => setRoleOrg(undefined)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Alert
           type="info"
@@ -2753,13 +2777,13 @@ function Shell({ principal }: { principal: Principal }) {
       <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}`}>
         <Layout.Sider
           className={inReceivables ? "receivables-sider" : undefined}
-          width={inReceivables ? 168 : 228}
+          width={inReceivables ? 200 : 228}
           breakpoint="lg"
           collapsedWidth="0"
           theme="light"
         >
           <div className={`brand${inReceivables ? " receivables-brand" : ""}`}>
-            {inReceivables ? <div className="brand-copy">应收账款管理</div> : <><div className="brand-mark">安</div><div className="brand-copy">物化院<small>{workspaceTitle}</small></div></>}
+            {inReceivables ? <div className="brand-copy"><strong>财务应收</strong><small>账款管理</small></div> : <><div className="brand-mark">安</div><div className="brand-copy">物化院<small>{workspaceTitle}</small></div></>}
           </div>
           <Menu
             mode="inline"
@@ -2770,7 +2794,15 @@ function Shell({ principal }: { principal: Principal }) {
         </Layout.Sider>
         <Layout>
           <Layout.Header className="topbar">
-            <span className="topbar-title">{inReceivables ? receivablesPageTitle(location.pathname) : workspaceTitle}</span>
+            {inReceivables ? (
+              <div className="receivables-topbar-left">
+                <Button type="link" onClick={() => navigate("/")}>← 返回主系统</Button>
+                <span aria-hidden="true" />
+                <strong>财务应收账款</strong>
+              </div>
+            ) : (
+              <span className="topbar-title">{workspaceTitle}</span>
+            )}
             <Space className="topbar-actions">
               <div className="topbar-identity" aria-label="当前登录人员">
                 <span className="topbar-person-name">{principal.displayName}</span>
@@ -2832,7 +2864,7 @@ function Shell({ principal }: { principal: Principal }) {
         open={passwordOpen}
         footer={null}
         onCancel={() => setPasswordOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           layout="vertical"

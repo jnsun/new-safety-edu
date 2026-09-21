@@ -14,6 +14,15 @@ colors:
   anomaly-ink: "#9d2c00"
   anomaly-surface: "#fff0e8"
   field-border: "#d2d2d7"
+  receivables-blue: "#245bcd"
+  receivables-blue-hover: "#1f4faf"
+  receivables-ink: "#172b46"
+  receivables-text: "#52627a"
+  receivables-muted: "#8a94a6"
+  receivables-canvas: "#f4f6f9"
+  receivables-border: "#dce3ed"
+  receivables-blue-soft: "#edf3ff"
+  receivables-green: "#176b5b"
 typography:
   headline:
     fontFamily: "-apple-system, BlinkMacSystemFont, SF Pro Text, PingFang SC, Microsoft YaHei, sans-serif"
@@ -34,8 +43,22 @@ typography:
     fontSize: "12px"
     fontWeight: 650
     letterSpacing: "0.08em"
+  receivables-page-title:
+    fontSize: "22px"
+    fontWeight: 700
+    lineHeight: "28px"
+  receivables-body:
+    fontSize: "13px"
+  receivables-table:
+    fontSize: "12px"
+  receivables-caption:
+    fontSize: "11px"
 rounded:
+  compact-chip: "4px"
+  compact-control: "6px"
+  compact-field: "8px"
   count: "10px"
+  receivables-container: "12px"
   control: "12px"
   table: "18px"
   card: "20px"
@@ -84,6 +107,8 @@ components:
 这个系统像一张经过整理的权威账本：浅色管理壳保持安静，真正需要判断的金额和动作才获得对比度。它延续主系统的 Ant Design 语言、系统字体和蓝色操作语义，不另建财务子品牌。
 
 应收账款是这个世界的耐久扩展。首屏从权威金额进入异常处置或催收行动，再回到同一台账完成工作；角色文案和动作跟随服务端能力，视觉层级不暗示用户拥有未授权能力。
+
+2026-09 的应收账款界面以 Figma 文件 `qiCkbnh2I00Vby3qvvOYOC` 为视觉与交互依据，使用一套只作用于 `.receivables-shell` 的高密度层：200px 侧栏、56px 顶栏、冷灰画布、白色 12px 圆角容器、22px 页面标题和 12px 表格正文。现有主系统页面继续使用原设计令牌；应收模块不得把这套局部覆盖泄漏到其他模块。
 
 **Key Characteristics:**
 
@@ -149,6 +174,14 @@ components:
 应收工作台的首层是 1.18:0.82 的双栏：左侧为权威金额，右侧为角色化动作。第二层使用等宽双栏承载债权状态与单位分布。900px 以下首层改为单栏，768px 以下内容水平边距收至 16px，金额摘要也由三列改为纵向行；在 390px 宽度不得产生页面级横向滚动。
 
 **The Same-Order Rule.** 响应式只改变列数，不改变“金额事实 → 异常或催收行动 → 分类缩小范围”的任务顺序。
+
+### Receivables Figma Density Layer
+
+- 1440px：固定 200px 左侧导航，内容区 28px 水平内边距；筛选器尽量保持一行，表格优先占用剩余高度。
+- 1280px：内容区水平内边距收至 22px，筛选器按四列换行；台账横向滚动只发生在表格容器内部。
+- 1024px：内容区水平内边距 18px；台账保留冻结列和详情动作，详情抽屉宽度不超过视口。
+- 768px 以下：主从工作区改为上下结构，筛选器单列，卡片和表格动作保持触摸可达。
+- 页面级不得出现横向滚动；金额统一右对齐、使用等宽数字和个人小数位偏好。
 
 ## Elevation & Depth
 

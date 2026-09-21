@@ -20,6 +20,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import type { UploadFile } from "antd";
+import { FileExcelOutlined, UploadOutlined } from "@ant-design/icons";
 import { api, apiResponse, json } from "./api";
 import {
   canApplyReceivablesImport,
@@ -593,22 +594,14 @@ function ReceivablesImports({
     return <Alert type="error" showIcon message="当前账号没有导入权限" />;
   return (
     <div className="receivables-page receivables-transfer-workspace">
-      <div className="page-title receivables-page-title">
-        <div>
-          <Typography.Title level={3}>导入批次</Typography.Title>
-          <Typography.Text type="secondary">
-            上传、校验、逐条处理重复项，确认影响后再应用。
-          </Typography.Text>
-        </div>
-      </div>
       <Card className="receivables-transfer-card" title="新建导入">
         <Steps current={stageIndex[stage]} items={stageItems} responsive={false} />
         <div className="receivables-transfer-stage">
           {!preview && (
             <div className="receivables-import-upload">
               <div className="receivables-import-start">
-                <Space className="receivables-transfer-actions" wrap>
-                  <Upload
+                <Upload.Dragger
+                  className="receivables-import-dropzone"
                   accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   maxCount={1}
                   fileList={fileList}
@@ -633,28 +626,32 @@ function ReceivablesImports({
                     return true;
                   }}
                 >
-                  <Button loading={inspect.isPending}>选择并识别 XLSX</Button>
-                  </Upload>
+                  <FileExcelOutlined className="receivables-import-file-icon" />
+                  <p className="ant-upload-text">将 XLSX 文件拖放到此处，或点击上传</p>
+                  <p className="ant-upload-hint">仅支持标准后缀为 .xlsx 的文件，大小不超过 10 MiB</p>
+                </Upload.Dragger>
+                <div className="receivables-import-commandbar">
+                  <div className="receivables-import-file-state" aria-live="polite">
+                    <UploadOutlined />
+                    <Typography.Text className="receivables-import-status">
+                      {inspect.isPending
+                        ? "正在识别字段…"
+                        : inspection
+                          ? inspection.unknownColumns.length
+                            ? `已识别，${inspection.unknownColumns.length} 列需要映射`
+                            : "字段已全部识别"
+                          : fileList[0]?.name || "请选择 Excel 文件"}
+                    </Typography.Text>
+                  </div>
                   <Button
-                  type="primary"
-                  disabled={
-                    !fileList.length || !inspection || inspect.isPending
-                  }
-                  loading={upload.isPending}
-                  onClick={() => upload.mutate()}
+                    type="primary"
+                    disabled={!fileList.length || !inspection || inspect.isPending}
+                    loading={upload.isPending}
+                    onClick={() => upload.mutate()}
                   >
                     校验并生成预览
                   </Button>
-                </Space>
-                <Typography.Text type="secondary" className="receivables-import-status">
-                  {inspect.isPending
-                    ? "正在识别字段…"
-                    : inspection
-                      ? inspection.unknownColumns.length
-                        ? `已识别，${inspection.unknownColumns.length} 列需要映射`
-                        : "字段已全部识别"
-                      : fileList[0]?.name || "请选择 Excel 文件"}
-                </Typography.Text>
+                </div>
               </div>
               {inspection && (
                 <div className="receivables-column-mapping">
@@ -989,7 +986,7 @@ function ReceivablesImports({
         title="回滚导入批次"
         open={!!rollback}
         footer={null}
-        destroyOnClose
+        destroyOnHidden
         onCancel={closeRollback}
       >
         <Alert
@@ -1232,7 +1229,7 @@ function ReceivablesExports({
                     allowClear
                     value={categoryFilters[category] ?? []}
                     style={{ minWidth: 190 }}
-                    options={currentPreview.categoryOptions[category]}
+                    options={currentPreview.categoryOptions?.[category] ?? []}
                     onChange={(values) => {
                       setCategoryFilters((current) => ({
                         ...current,

@@ -23,6 +23,7 @@ import { api, json } from "./api";
 import { ReceivablesLedger } from "./ReceivablesLedger";
 import { ReceivablesAdmin } from "./ReceivablesAdmin";
 import { ReceivablesTransfers } from "./ReceivablesTransfers";
+import { ReceivablesPageHeader, ReceivablesStatePanel } from "./ReceivablesUi";
 import {
   formatReceivablesMoney,
   defaultReceivablesDashboardPreference,
@@ -559,15 +560,12 @@ function ReceivablesDashboard({
 
   return (
     <div className="receivables-page">
-      <div className="page-title receivables-page-title">
-        <div>
-          <Typography.Title level={3}>{mode.title}</Typography.Title>
-          <Typography.Text type="secondary">{mode.description}</Typography.Text>
-        </div>
-        <Button type="primary" onClick={() => navigate(mode.actionPath)}>
-          {mode.actionLabel}
-        </Button>
-      </div>
+      <ReceivablesPageHeader
+        title={mode.title}
+        description={mode.description}
+        meta={access.canViewAll ? "当前可见：全部财务归属部门" : `当前可见：${access.readDepartmentIds.length} 个授权部门`}
+        actions={<Button type="primary" onClick={() => navigate(mode.actionPath)}>{mode.actionLabel}</Button>}
+      />
       <Card className="filters receivables-filter-bar" aria-label="看板筛选">
         <Form layout="inline">
           <Form.Item label="记录状态">
@@ -618,11 +616,7 @@ function ReceivablesDashboard({
           </Form.Item>
         </Form>
       </Card>
-      {dashboard.isFetching && (
-        <div className="receivables-state">
-          <Spin tip="正在加载应收账款看板…" />
-        </div>
-      )}
+      {dashboard.isFetching && <ReceivablesStatePanel kind="loading" title="正在加载应收账款看板…" description="正在按当前权限范围汇总台账和金额" />}
       {dashboard.isError && (
         <Alert
           type="error"
@@ -707,7 +701,7 @@ function ReceivablesDashboard({
                   className={`receivables-dashboard-card card-${card.id}`}
                   style={{
                     gridColumn: `span ${card.w}`,
-                    minHeight: card.h * 64,
+                    minHeight: card.h * 56,
                   }}
                   draggable={editingDashboard}
                   onDragStart={(event) =>
@@ -925,11 +919,7 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
     return <Navigate to="/receivables/data?tab=export" replace />;
   if (route === "redirect") return <Navigate to="/receivables" replace />;
   if (access.isFetching)
-    return (
-      <div className="receivables-state">
-        <Spin tip="正在核验应收账款权限…" />
-      </div>
-    );
+    return <ReceivablesStatePanel kind="loading" title="正在核验应收账款权限…" description="权限确认完成前不会展示任何财务数据" />;
   if (access.isError || !currentAccess)
     return (
       <Result
@@ -1106,6 +1096,7 @@ export function ReceivablesPage({ accountId }: { accountId: string }) {
     ];
     return (
       <div className="receivables-page">
+        <ReceivablesPageHeader title="数据处理" description="新增台账、导入和导出均使用当前账号的服务端权限范围。" />
         <Tabs
           activeKey={requested}
           items={items}

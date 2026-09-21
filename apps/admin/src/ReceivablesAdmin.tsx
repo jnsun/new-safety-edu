@@ -3,6 +3,7 @@ import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, message, Modal
 import { HolderOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, json } from "./api";
+import { ReceivablesPageHeader } from "./ReceivablesUi";
 import { filterReceivablesDepartments, groupReceivablesDictionaryOptions, moveReceivablesDepartment, normalizeReceivablesGrantDraft, preserveReceivablesConflictDraft, receivablesErrorKind, receivablesQueryKey, receivablesReferenceCategories, receivablesReferenceCategoryLabels, receivablesScopeQueryPrefix, receivablesScopedQueryKey, updateReceivablesSelectedScopes, usableReceivablesData, type ReceivablesAccess, type ReceivablesDepartment, type ReceivablesDictionaryOption, type ReceivablesGrant, type ReceivablesGrantCandidate, type ReceivablesReferenceCategory } from "./receivables-types";
 
 type Section = "grants" | "departments" | "dictionaries";
@@ -22,6 +23,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
   const [deactivateReconfirm, setDeactivateReconfirm] = useState(false);
   const [candidateSearch, setCandidateSearch] = useState("");
   const [listSearch, setListSearch] = useState("");
+  const [selectedGrantId, setSelectedGrantId] = useState<string>();
   const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("active");
   const [expandedDepartmentId, setExpandedDepartmentId] = useState<string>();
   const [draggedDepartmentId, setDraggedDepartmentId] = useState<string>();
@@ -46,6 +48,16 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     return !listSearch.trim() || row.value.toLocaleLowerCase("zh-CN").includes(listSearch.trim().toLocaleLowerCase("zh-CN"));
   }), [listSearch, selectedDictionaryGroup, statusFilter]);
   const visibleDepartments = useMemo(() => filterReceivablesDepartments(section === "departments" ? (currentRows ?? []) as ReceivablesDepartment[] : [], listSearch, statusFilter), [currentRows, listSearch, section, statusFilter]);
+  const visibleGrants = useMemo(() => {
+    if (section !== "grants") return [];
+    const query = listSearch.trim().toLocaleLowerCase("zh-CN");
+    return ((currentRows ?? []) as ReceivablesGrant[]).filter((row) => {
+      if (!query) return true;
+      return [row.account.person?.name, row.account.username, row.account.person?.organizations[0]?.organization.name]
+        .some((value) => value?.toLocaleLowerCase("zh-CN").includes(query));
+    });
+  }, [currentRows, listSearch, section]);
+  const selectedGrant = visibleGrants.find((row) => row.id === selectedGrantId) ?? visibleGrants[0];
   const canReorderDepartments = section === "departments" && statusFilter === "active" && !listSearch.trim();
 
   const invalidate = async () => {
@@ -190,18 +202,62 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
     </Space>;
   };
   const createLabel = section === "grants" ? "新建授权" : section === "departments" ? "新增部门" : "新增选项";
+  const sectionCopy = section === "grants"
+    ? { title: "账号与权限", description: "按财务归属部门配置数据范围，并为人员单独设置业务能力。" }
+    : section === "departments"
+      ? { title: "财务归属部门", description: "独立于主系统组织口径，作为财务数据授权与分组范围。" }
+      : { title: "业务字典", description: "维护业务中使用的分类值；改名会同步受影响的台账引用。" };
   return <div className="receivables-page receivables-admin-page">
-    {section !== "departments" && <div className="receivables-compact-toolbar"><Typography.Text type="secondary">配置与授权变更均记录原因、修订号和审计信息。</Typography.Text><Button type="primary" onClick={() => openEditor()}>{createLabel}</Button></div>}
+    <ReceivablesPageHeader
+      title={sectionCopy.title}
+      description={sectionCopy.description}
+      meta="所有变更均记录原因、修订号和审计信息"
+      actions={section !== "departments" ? <Button type="primary" onClick={() => openEditor()}>{createLabel}</Button> : undefined}
+    />
     {rows.isFetching && <Card loading />}
     {rows.isError && <Alert type="error" showIcon message="数据加载失败，已隐藏缓存内容" action={<Button onClick={() => void rows.refetch()}>重试</Button>} />}
-    {currentRows && section === "grants" && <><Table className="receivables-grant-table" tableLayout="fixed" size="small" rowKey="id" dataSource={currentRows as ReceivablesGrant[]} pagination={{ pageSize: 20, hideOnSinglePage: true }} locale={{ emptyText: "暂无财务授权" }} columns={[
-      { title: "人员", ellipsis: true, width: "24%", render: (_: unknown, row: ReceivablesGrant) => <div><strong>{row.account.person?.name ?? "未关联人员"}</strong><br/><Typography.Text type="secondary">{row.account.username ?? "账号待激活"} · {row.account.person?.organizations[0]?.organization.name ?? "未设置主部门"}</Typography.Text></div> },
-      { title: "角色", width: 112, render: (_: unknown, row: ReceivablesGrant) => <Tag>{roleLabels[row.role]}</Tag> },
-      { title: "部门范围", width: 150, render: (_: unknown, row: ReceivablesGrant) => row.role === "admin" ? "全模块管理" : row.canViewAll ? <Tag color="blue">查看全部</Tag> : `${row.departments.filter((item) => item.canRead || item.canWrite).length} 个部门` },
-      { title: "附加权限", render: (_: unknown, row: ReceivablesGrant) => <Space wrap size={[4, 4]}>{row.canCreate && <Tag>新建台账</Tag>}{row.canMaintainCollection && <Tag>催收维护</Tag>}{row.canExport && <Tag>导出</Tag>}{!row.canCreate && !row.canMaintainCollection && !row.canExport && "—"}</Space> },
-      { title: "状态", width: 84, render: (_: unknown, row: ReceivablesGrant) => <Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "已撤销"}</Tag> },
-      { title: "操作", width: 132, render: (_: unknown, row: ReceivablesGrant) => rowActions(row) },
-    ]} /><div className="receivables-grant-cards">{(currentRows as ReceivablesGrant[]).length === 0 ? <div className="receivables-grant-empty">暂无财务授权</div> : (currentRows as ReceivablesGrant[]).map((row) => <article key={row.id}><div><strong>{row.account.person?.name ?? "未关联人员"}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "已撤销"}</Tag></div><p><span>{row.account.person?.organizations[0]?.organization.name ?? "未设置主部门"}</span><Tag>{roleLabels[row.role]}</Tag><span>{row.role === "admin" ? "全模块管理" : row.canViewAll ? "查看全部" : `${row.departments.filter((item) => item.canRead || item.canWrite).length} 个部门`}</span></p><div>{rowActions(row)}</div></article>)}</div></>}
+    {currentRows && section === "grants" && <div className="receivables-grant-workbench">
+      <aside className="receivables-grant-directory">
+        <div className="receivables-grant-directory-toolbar">
+          <Input.Search allowClear value={listSearch} placeholder="搜索姓名、账号或部门" aria-label="搜索财务授权" onChange={(event) => setListSearch(event.target.value)} />
+          <Typography.Text type="secondary">{visibleGrants.length} 个授权账号</Typography.Text>
+        </div>
+        <div className="receivables-grant-directory-list">
+          {visibleGrants.length === 0 ? <div className="receivables-grant-empty">{listSearch ? "没有匹配的授权账号" : "暂无财务授权"}</div> : visibleGrants.map((row) => <button type="button" key={row.id} className={row.id === selectedGrant?.id ? "is-active" : ""} onClick={() => setSelectedGrantId(row.id)}>
+            <span className="receivables-grant-avatar" aria-hidden="true">{(row.account.person?.name ?? row.account.username ?? "?").slice(0, 1)}</span>
+            <span className="receivables-grant-person"><strong>{row.account.person?.name ?? "未关联人员"}</strong><small>{row.account.username ?? "账号待激活"} · {row.account.person?.organizations[0]?.organization.name ?? "未设置主部门"}</small></span>
+            <Tag color={row.active ? "green" : "default"}>{row.active ? "有效" : "撤销"}</Tag>
+          </button>)}
+        </div>
+      </aside>
+      <section className="receivables-grant-detail">
+        {selectedGrant ? <>
+          <header className="receivables-grant-detail-head">
+            <div><Typography.Title level={4}>{selectedGrant.account.person?.name ?? "未关联人员"}</Typography.Title><Typography.Text type="secondary">{selectedGrant.account.username ?? "账号待激活"} · {selectedGrant.account.person?.organizations[0]?.organization.name ?? "未设置主部门"}</Typography.Text></div>
+            {rowActions(selectedGrant)}
+          </header>
+          <div className="receivables-grant-summary">
+            <div><span>角色</span><strong>{roleLabels[selectedGrant.role]}</strong></div>
+            <div><span>数据范围</span><strong>{selectedGrant.role === "admin" ? "全模块管理" : selectedGrant.canViewAll ? "查看全部部门" : `${selectedGrant.departments.filter((item) => item.canRead || item.canWrite).length} 个财务部门`}</strong></div>
+            <div><span>账号状态</span><strong>{selectedGrant.account.status === "active" ? "已激活" : "待激活"}</strong></div>
+            <div><span>授权状态</span><strong>{selectedGrant.active ? "有效" : "已撤销"}</strong></div>
+          </div>
+          <div className="receivables-grant-section">
+            <h3>部门数据范围</h3>
+            {selectedGrant.role === "admin" ? <Alert type="info" showIcon message="财务管理员拥有全模块管理权限" /> : selectedGrant.departments.length === 0 ? <Typography.Text type="secondary">尚未配置部门范围</Typography.Text> : <div className="receivables-grant-scope-grid">{selectedGrant.departments.map((scope) => {
+              const department = currentDepartments.find((item) => item.id === scope.financeDepartmentId);
+              return <div key={scope.financeDepartmentId}><span>{department?.name ?? "未知部门"}</span><Space size={4}><Tag color="blue">可读</Tag>{scope.canWrite && <Tag color="green">可写</Tag>}</Space></div>;
+            })}</div>}
+          </div>
+          <div className="receivables-grant-section">
+            <h3>业务能力</h3>
+            <div className="receivables-permission-matrix">
+              {[{ label: "新建台账", enabled: selectedGrant.canCreate }, { label: "导出数据", enabled: selectedGrant.canExport }, { label: "查看全部", enabled: selectedGrant.canViewAll }, { label: "维护催收与附件", enabled: selectedGrant.canMaintainCollection }].map((item) => <div key={item.label}><span>{item.label}</span><Tag color={item.enabled ? "green" : "default"}>{item.enabled ? "已允许" : "未允许"}</Tag></div>)}
+            </div>
+          </div>
+        </> : <div className="receivables-grant-empty">请选择一个授权账号</div>}
+      </section>
+    </div>}
 
     {currentRows && section === "departments" && <>
       <div className="receivables-department-toolbar">
@@ -211,11 +267,14 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
         <Button type="primary" onClick={() => openEditor()}>新增部门</Button>
       </div>
       {visibleDepartments.length === 0 ? <div className="receivables-department-empty">{listSearch ? "没有匹配的财务归属部门" : "暂无财务归属部门"}</div> : <div className="receivables-department-grid">
-        {visibleDepartments.map((row) => <article className={`receivables-department-item${row.active ? "" : " is-inactive"}${dragOverDepartmentId === row.id ? " is-drag-over" : ""}`} key={row.id}
+        <div className="receivables-department-table-head" aria-hidden="true"><span>排序 / 部门名称</span><span>当前台账</span><span>授权人数</span><span>状态</span><span>操作</span></div>
+        {visibleDepartments.map((row) => <article className={`receivables-department-item${row.active ? "" : " is-inactive"}${dragOverDepartmentId === row.id ? " is-drag-over" : ""}`} key={row.id} tabIndex={0} aria-label={`${row.name}，${row.receivableCount} 笔应收账款，${row.accountCount} 个授权账号`}
           onDragOver={(event) => { if (!canReorderDepartments || !draggedDepartmentId) return; event.preventDefault(); setDragOverDepartmentId(row.id); }}
           onDrop={(event) => { event.preventDefault(); if (draggedDepartmentId) moveDepartment(draggedDepartmentId, row.id); setDraggedDepartmentId(undefined); setDragOverDepartmentId(undefined); }}>
-          <div className="receivables-department-heading"><Button type="text" size="small" className="receivables-department-drag" draggable={canReorderDepartments} disabled={!canReorderDepartments || reorderDepartments.isPending} title={canReorderDepartments ? "拖拽或使用方向键调整顺序" : "清除搜索并切换到启用部门后可排序"} aria-label={`调整${row.name}顺序`} icon={<HolderOutlined />} onDragStart={(event) => { setDraggedDepartmentId(row.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDraggedDepartmentId(undefined); setDragOverDepartmentId(undefined); }} onKeyDown={(event) => { const offset = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : 0; if (!offset) return; const index = visibleDepartments.findIndex(({ id }) => id === row.id); const target = visibleDepartments[index + offset]; if (target) { event.preventDefault(); moveDepartment(row.id, target.id); } }} /><strong title={row.name}>{row.name}</strong><Tag color={row.active ? "green" : "default"}>{row.active ? "启用" : "停用"}</Tag></div>
-          <div className="receivables-department-meta"><span>账号 {row.accountCount} 个</span><span>应收账款 {row.receivableCount} 笔</span></div>
+          <div className="receivables-department-heading"><Button type="text" size="small" className="receivables-department-drag" draggable={canReorderDepartments} disabled={!canReorderDepartments || reorderDepartments.isPending} title={canReorderDepartments ? "拖拽或使用方向键调整顺序" : "清除搜索并切换到启用部门后可排序"} aria-label={`调整${row.name}顺序`} icon={<HolderOutlined />} onDragStart={(event) => { setDraggedDepartmentId(row.id); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDraggedDepartmentId(undefined); setDragOverDepartmentId(undefined); }} onKeyDown={(event) => { const offset = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : 0; if (!offset) return; const index = visibleDepartments.findIndex(({ id }) => id === row.id); const target = visibleDepartments[index + offset]; if (target) { event.preventDefault(); moveDepartment(row.id, target.id); } }} /><strong title={row.name}>{row.name}</strong></div>
+          <div className="receivables-department-count">{row.receivableCount} 笔</div>
+          <div className="receivables-department-account-count">{row.accountCount} 人</div>
+          <Tag color={row.active ? "green" : "default"}>{row.active ? "启用" : "停用"}</Tag>
           <div className="receivables-department-actions">
             <Button size="small" disabled={!row.active} onClick={() => openEditor(row)}>编辑</Button>
             <Button size="small" danger disabled={!row.active} onClick={() => openDeactivate(row)}>停用</Button>
@@ -242,7 +301,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
       </section>
     </div>}
 
-    <Modal title={`${editor === "create" ? "新建" : "编辑"}${title}`} open={!!editor} footer={null} destroyOnClose width={section === "grants" ? 720 : 520} onCancel={closeEditor}>
+    <Modal rootClassName="receivables-admin-modal" title={`${editor === "create" ? "新建" : "编辑"}${title}`} open={!!editor} footer={null} destroyOnHidden width={section === "grants" ? 720 : 520} onCancel={closeEditor}>
       <Form form={form} layout="vertical" onFinish={(values) => void submitEditor(values)}>
         {section === "grants" && <>
           <Form.Item name={editor === "create" ? "personId" : "accountId"} label={editor === "create" ? "搜索正式员工" : "账号"} rules={[{ required: true }]} extra={editor === "create" ? "输入姓名或用户名至少 2 个字符；待激活或尚无账号的员工也可提前授权。" : undefined}><Select showSearch filterOption={false} placeholder={editor === "create" ? "输入姓名或用户名，至少 2 个字符" : undefined} disabled={editor !== "create"} onSearch={setCandidateSearch} notFoundContent={candidates.isFetching ? "搜索中…" : candidates.isError ? "搜索失败，已关闭候选数据" : "请输入至少 2 个字符"} options={currentCandidates.map((item) => ({ value: item.personId, disabled: item.hasActiveGrant, label: `${item.name} · ${item.username ?? (item.accountStatus === "pending" ? "账号待激活" : "尚无账号")}${item.hasActiveGrant ? "（已有授权）" : ""}` }))} /></Form.Item>
@@ -260,7 +319,7 @@ export function ReceivablesAdmin({ accountId, scopeFingerprint, access, section 
         <Space className="receivables-form-actions"><Button htmlType="button" onClick={closeEditor}>取消</Button><Button type="primary" htmlType="submit" loading={save.isPending}>保存</Button></Space>
       </Form>
     </Modal>
-    <Modal title={section === "grants" ? "撤销财务授权" : "停用配置项"} open={!!deactivateTarget} onCancel={closeDeactivate} onOk={() => void deactivate()} okButtonProps={{ danger: true }} cancelText="取消" okText={section === "grants" ? "确认撤销" : "确认停用"}><Input.TextArea value={deactivateReason} onChange={(event) => setDeactivateReason(event.target.value)} placeholder="请输入原因" />{conflict && <><Alert className="receivables-modal-alert" type="warning" showIcon message="服务端数据已变化，请核对最新值" description={<pre className="receivables-conflict-detail">{JSON.stringify(conflict.latest)}</pre>} /><Checkbox checked={deactivateReconfirm} onChange={(event) => setDeactivateReconfirm(event.target.checked)}>使用最新修订号再次确认</Checkbox></>}</Modal>
-    <Modal title="迁移引用" open={!!migration} footer={null} destroyOnClose onCancel={closeMigration}>{migration && <><Alert type="warning" showIcon message={`将迁移 ${migration.impactCount} 条引用`} description={`预览有效期至 ${new Date(migration.expiresAt).toLocaleString()}。应用前服务端会再次验证源项、目标项和影响集合。`} />{migrationConflict && <Alert type="warning" showIcon message="旧预览令牌已作废" description={`旧影响 ${migrationConflict.draft.impactCount} 条；最新影响 ${migrationConflict.latest.impactCount} 条。请重新确认。`} />}<Form form={migrationForm} layout="vertical" onFinish={(values) => applyMigration.mutate(values)}><Form.Item name="reason" label="迁移原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item><Form.Item name={migrationConflict ? "reconfirm" : "confirm"} valuePropName="checked" rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error("请确认迁移影响")) }]}><Checkbox>我已核对最新影响数量并确认迁移</Checkbox></Form.Item><Space className="receivables-form-actions"><Button htmlType="button" onClick={closeMigration}>取消</Button><Button type="primary" danger htmlType="submit" loading={applyMigration.isPending}>确认应用迁移</Button></Space></Form></>}</Modal>
+    <Modal rootClassName="receivables-admin-modal" title={section === "grants" ? "撤销财务授权" : "停用配置项"} open={!!deactivateTarget} onCancel={closeDeactivate} onOk={() => void deactivate()} okButtonProps={{ danger: true }} cancelText="取消" okText={section === "grants" ? "确认撤销" : "确认停用"}><Input.TextArea value={deactivateReason} onChange={(event) => setDeactivateReason(event.target.value)} placeholder="请输入原因" />{conflict && <><Alert className="receivables-modal-alert" type="warning" showIcon message="服务端数据已变化，请核对最新值" description={<pre className="receivables-conflict-detail">{JSON.stringify(conflict.latest)}</pre>} /><Checkbox checked={deactivateReconfirm} onChange={(event) => setDeactivateReconfirm(event.target.checked)}>使用最新修订号再次确认</Checkbox></>}</Modal>
+    <Modal rootClassName="receivables-admin-modal" title="迁移引用" open={!!migration} footer={null} destroyOnHidden onCancel={closeMigration}>{migration && <><Alert type="warning" showIcon message={`将迁移 ${migration.impactCount} 条引用`} description={`预览有效期至 ${new Date(migration.expiresAt).toLocaleString()}。应用前服务端会再次验证源项、目标项和影响集合。`} />{migrationConflict && <Alert type="warning" showIcon message="旧预览令牌已作废" description={`旧影响 ${migrationConflict.draft.impactCount} 条；最新影响 ${migrationConflict.latest.impactCount} 条。请重新确认。`} />}<Form form={migrationForm} layout="vertical" onFinish={(values) => applyMigration.mutate(values)}><Form.Item name="reason" label="迁移原因" rules={[{ required: true, whitespace: true }]}><Input.TextArea /></Form.Item><Form.Item name={migrationConflict ? "reconfirm" : "confirm"} valuePropName="checked" rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error("请确认迁移影响")) }]}><Checkbox>我已核对最新影响数量并确认迁移</Checkbox></Form.Item><Space className="receivables-form-actions"><Button htmlType="button" onClick={closeMigration}>取消</Button><Button type="primary" danger htmlType="submit" loading={applyMigration.isPending}>确认应用迁移</Button></Space></Form></>}</Modal>
   </div>;
 }
