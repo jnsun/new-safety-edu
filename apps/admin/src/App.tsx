@@ -371,6 +371,34 @@ function WechatQrLogin({ active }: { active: boolean }) {
   );
 }
 
+function LoginModeTabs({ face, onChange }: {
+  face: "wechat" | "password";
+  onChange: (mode: "wechat" | "password") => void;
+}) {
+  return (
+    <div className="login-mode-tabs" role="tablist" aria-label="登录方式">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={face === "wechat"}
+        className={face === "wechat" ? "active" : ""}
+        onClick={() => onChange("wechat")}
+      >
+        微信扫码
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={face === "password"}
+        className={face === "password" ? "active" : ""}
+        onClick={() => onChange("password")}
+      >
+        账号密码
+      </button>
+    </div>
+  );
+}
+
 function Login() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -403,37 +431,40 @@ function Login() {
         <h1>山西省地球物理化学勘查院有限公司</h1>
         <p>安全生产统一管理平台</p>
       </section>
-      <div className="login-card-shell">
-        <Card className="login-card">
-          <div className="login-mode-tabs" role="tablist" aria-label="登录方式">
-            <button type="button" role="tab" aria-selected={loginMode === "wechat"} className={loginMode === "wechat" ? "active" : ""} onClick={() => setLoginMode("wechat")}>微信扫码</button>
-            <button type="button" role="tab" aria-selected={loginMode === "password"} className={loginMode === "password" ? "active" : ""} onClick={() => setLoginMode("password")}>账号密码</button>
-          </div>
-          {loginMode === "wechat" ? (
-            <section className="login-mode-panel" role="tabpanel">
-              {wechat.isLoading && <div className="login-panel-status">正在检查微信登录配置…</div>}
-              {wechat.data?.enabled && <WechatQrLogin active />}
-              {(wechat.isError || (wechat.data && !wechat.data.enabled)) && (
-                <Alert type="warning" showIcon message="微信扫码登录尚未配置" description="请联系管理员完善网站应用配置，或暂时使用账号密码登录。" />
-              )}
-              <div className="login-waiting-status"><span />{wechat.data?.enabled ? "等待扫码..." : "扫码服务暂不可用"}</div>
-              <Button type="link" onClick={() => setRecoveryOpen(true)}>忘记密码？</Button>
-            </section>
-          ) : (
-            <section className="login-mode-panel login-password-panel" role="tabpanel">
-              <Form layout="vertical" onFinish={submit}>
-                <Form.Item label="用户名" name="username" rules={[{ required: true }]}>
-                  <Input autoComplete="username" />
-                </Form.Item>
-                <Form.Item label="密码" name="password" rules={[{ required: true }]}>
-                  <Input.Password autoComplete="current-password" />
-                </Form.Item>
-                <Button block type="primary" htmlType="submit" loading={busy}>登录</Button>
-                <Button block type="link" onClick={() => setRecoveryOpen(true)}>忘记密码？</Button>
-              </Form>
-            </section>
-          )}
-        </Card>
+      <div className={`login-card-shell${loginMode === "password" ? " is-flipped" : ""}`}>
+        <div className="login-flip-inner">
+          <section className="login-face login-face-wechat" aria-hidden={loginMode !== "wechat"} inert={loginMode !== "wechat"}>
+            <Card className="login-card">
+              <LoginModeTabs face="wechat" onChange={setLoginMode} />
+              <section className="login-mode-panel" role="tabpanel" aria-label="微信扫码登录">
+                {wechat.isLoading && <div className="login-panel-status">正在检查微信登录配置…</div>}
+                {wechat.data?.enabled && <WechatQrLogin active={loginMode === "wechat"} />}
+                {(wechat.isError || (wechat.data && !wechat.data.enabled)) && (
+                  <Alert type="warning" showIcon message="微信扫码登录尚未配置" description="请联系管理员完善网站应用配置，或暂时使用账号密码登录。" />
+                )}
+                <div className="login-waiting-status"><span />{wechat.data?.enabled ? "等待扫码..." : "扫码服务暂不可用"}</div>
+                <Button type="link" onClick={() => setRecoveryOpen(true)}>忘记密码？</Button>
+              </section>
+            </Card>
+          </section>
+          <section className="login-face login-face-password" aria-hidden={loginMode !== "password"} inert={loginMode !== "password"}>
+            <Card className="login-card">
+              <LoginModeTabs face="password" onChange={setLoginMode} />
+              <section className="login-mode-panel login-password-panel" role="tabpanel" aria-label="账号密码登录">
+                <Form layout="vertical" onFinish={submit}>
+                  <Form.Item label="用户名" name="username" rules={[{ required: true }]}>
+                    <Input autoComplete="username" />
+                  </Form.Item>
+                  <Form.Item label="密码" name="password" rules={[{ required: true }]}>
+                    <Input.Password autoComplete="current-password" />
+                  </Form.Item>
+                  <Button block type="primary" htmlType="submit" loading={busy}>登录</Button>
+                  <Button block type="link" onClick={() => setRecoveryOpen(true)}>忘记密码？</Button>
+                </Form>
+              </section>
+            </Card>
+          </section>
+        </div>
       </div>
       <footer className="login-footer">© 山西省地球物理化学勘查院有限公司</footer>
       <Modal title="通过已验证手机号找回密码" open={recoveryOpen} footer={null} onCancel={() => setRecoveryOpen(false)}>

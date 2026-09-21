@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "check:account-form": "tsx scripts/check-account-form.mts",
     "check:platform-access": "tsx scripts/check-platform-access.mts",
+    "check:login-card": "tsx scripts/check-login-card.mts",
     "check:receivables-admin-ui": "tsx scripts/check-receivables-admin-ui.mts",
     "typecheck": "tsc -b --pretty false"
   },
