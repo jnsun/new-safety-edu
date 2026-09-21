@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Dropdown, Form, Input, message, Modal, Select, Space, Table, Tabs, Tag, Typography, Upload } from "antd";
 import type { UploadProps } from "antd";
 import { useEffect, useRef, useState } from "react";
-import { useBlocker } from "react-router-dom";
+import { useBlocker, useNavigate } from "react-router-dom";
 import { api, json } from "../api";
 import { AdminPageHeader } from "../AdminUi";
 import { CoursewareEditor } from "./CoursewareEditor";
@@ -37,6 +37,7 @@ function parseScopeKey(value: string): CoursewareScope {
 }
 
 export function CoursewarePage() {
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const coursewares = useQuery({ queryKey: ["coursewares"], queryFn: () => api<Courseware[]>("/api/coursewares") });
   const templates = useQuery({ queryKey: ["training-templates"], queryFn: () => api<Template[]>("/api/training-templates") });
@@ -156,7 +157,7 @@ export function CoursewarePage() {
     : <Table rowKey="id" loading={templates.isLoading || templates.isFetching} locale={{ emptyText: "暂无培训模板" }} dataSource={templates.data ?? []} columns={[{ title: "名称", dataIndex: "name" }, { title: "培训类型", dataIndex: "type", render: (value: string) => typeNames[value] ?? value }, { title: "课件顺序", render: (_: unknown, row: Template) => row.items.map((item) => item.coursewareVersion.courseware.title).join(" → ") }, { title: "操作", width: 150, render: (_: unknown, row: Template) => <Space><Button size="small" onClick={() => { setEditingTemplate(row); setTemplateOpen(true); }}>编辑</Button><Button danger size="small" onClick={() => Modal.confirm({ title: `删除模板“${row.name}”？`, content: "已下发培训不会受影响。", okText: "删除", okButtonProps: { danger: true }, onOk: async () => { await api(`/api/training-templates/${row.id}`, { method: "DELETE" }); message.success("模板已删除"); void qc.invalidateQueries({ queryKey: ["training-templates"] }); } })}>删除</Button></Space> }]} />;
 
   return <div className="admin-workspace training-production-page">
-    <AdminPageHeader title="培训制作中心" description="集中维护课件和培训模板；已下发培训继续保留当时使用的内容快照。" actions={<><Button disabled={!scopeOptions.length} onClick={() => { setKind("rich_text"); setFileId(undefined); setCourseOpen(true); }}>新建课件</Button><Button disabled={!scopeOptions.length} onClick={() => setImportOpen(true)}>批量导入课件</Button><Button type="primary" onClick={() => setTemplateOpen(true)}>新建模板</Button>{companyAdmin && <Button onClick={() => setGrantOpen(true)}>发布权限</Button>}</>} />
+    <AdminPageHeader title="培训制作中心" description="集中维护课件和培训模板；已下发培训继续保留当时使用的内容快照。" actions={<><Button type="primary" onClick={() => navigate("/training/new")}>新建培训</Button><Button disabled={!scopeOptions.length} onClick={() => { setKind("rich_text"); setFileId(undefined); setCourseOpen(true); }}>新建课件</Button><Button disabled={!scopeOptions.length} onClick={() => setImportOpen(true)}>批量导入课件</Button><Button onClick={() => setTemplateOpen(true)}>新建模板</Button>{companyAdmin && <Button onClick={() => setGrantOpen(true)}>发布权限</Button>}</>} />
     {!scopeOptions.length && <Alert type="warning" showIcon message="当前账号没有可创建课件的授权范围" />}
     <Tabs activeKey={activeTab} onChange={switchTab} items={[{ key: "course", label: "课件", children: coursewareList }, { key: "template", label: "培训模板", children: templateList }]} />
 

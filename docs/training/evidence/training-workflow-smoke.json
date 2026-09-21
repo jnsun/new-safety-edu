@@ -1,0 +1,76 @@
+{
+  "generatedAt": "2026-09-21T06:27:18.660Z",
+  "environment": "local isolated PostgreSQL; no remote server",
+  "marker": "training-workflow-b84df126",
+  "checks": [
+    {
+      "check": "未发布课件阻断",
+      "result": "PASS",
+      "detail": "模板接口拒绝引用未发布课件"
+    },
+    {
+      "check": "就地课件发布回填基础",
+      "result": "PASS",
+      "detail": "通过真实课件、发布和模板 API 建立有序已发布内容"
+    },
+    {
+      "check": "就地题库题目试卷回填基础",
+      "result": "PASS",
+      "detail": "通过真实题库、题目、固定和随机试卷 API 创建对象"
+    },
+    {
+      "check": "必须考试不可关闭",
+      "result": "PASS",
+      "detail": "项目入场教育关闭考试被服务端拒绝"
+    },
+    {
+      "check": "题量不足阻断",
+      "result": "PASS",
+      "detail": "服务端准备度检查返回 INSUFFICIENT_QUESTIONS"
+    },
+    {
+      "check": "无有效人员阻断",
+      "result": "PASS",
+      "detail": "空项目返回 NO_TARGETS 且未生成任务"
+    },
+    {
+      "check": "非法范围阻断",
+      "result": "PASS",
+      "detail": "实体A管理员不能选择实体B完整组织"
+    },
+    {
+      "check": "可选考试默认关闭",
+      "result": "PASS",
+      "detail": "日常培训不选择试卷仍可通过准备度检查"
+    },
+    {
+      "check": "真实覆盖与排除",
+      "result": "PASS",
+      "detail": "项目2名成员，1名active纳入，1名disabled排除"
+    },
+    {
+      "check": "幂等派发",
+      "result": "PASS",
+      "detail": "相同幂等键重试返回同一批次，数据库仅1批次1任务"
+    },
+    {
+      "check": "历史快照",
+      "result": "PASS",
+      "detail": "批次保存课件顺序、试卷题目版本和真实派发结果快照"
+    },
+    {
+      "check": "学习端读取",
+      "result": "PASS",
+      "detail": "新任务可通过原学习任务和课件读取接口访问"
+    },
+    {
+      "check": "配置与范围变化使预检失效",
+      "result": "PASS",
+      "detail": "新增项目成员后使用旧预检被服务端拒绝"
+    }
+  ],
+  "summary": {
+    "passed": 13,
+    "failed": 0
+  }
+}

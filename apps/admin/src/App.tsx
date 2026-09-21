@@ -57,6 +57,7 @@ import { accountUsernamePattern, accountUsernameRuleMessage } from "./account-fo
 import { CoursewarePage } from "./Day2Pages";
 import { QuestionsPage } from "./questions/QuestionsPage";
 import { TrainingPage } from "./training/TrainingPage";
+import { TrainingWorkflowPage } from "./training/TrainingWorkflowPage";
 import { DashboardPage, RecordsPage, ReportsPage } from "./Day4Pages";
 import { PersonImport } from "./PersonImport";
 import { SensitiveExports } from "./SensitiveExports";
@@ -2902,6 +2903,7 @@ function Shell({ principal }: { principal: Principal }) {
               <Route path="/courseware" element={<CoursewarePage />} />
               <Route path="/questions" element={<QuestionsPage />} />
               <Route path="/training" element={<TrainingPage />} />
+              <Route path="/training/new" element={<TrainingWorkflowPage />} />
               <Route path="/records" element={<RecordsPage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/monthly-reports" element={<MonthlyReportsPage />} />

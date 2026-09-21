@@ -10,12 +10,13 @@ export class ApiError extends Error {
 const cookieValue = (name: string) => document.cookie.split("; ").find((item) => item.startsWith(`${name}=`))?.slice(name.length + 1);
 
 async function csrfToken() {
-  const existing = cookieValue("safety_csrf");
-  if (existing) return decodeURIComponent(existing);
   const response = await fetch("/api/auth/csrf", { credentials: "include" });
-  if (!response.ok) return undefined;
-  const body = await response.json() as ApiEnvelope<{ token: string }>;
-  return body.data.token;
+  if (response.ok) {
+    const body = await response.json() as ApiEnvelope<{ token: string }>;
+    return body.data.token;
+  }
+  const existing = cookieValue("safety_csrf");
+  return existing ? decodeURIComponent(existing) : undefined;
 }
 
 export async function apiResponse(path: string, init?: RequestInit, refreshed = false): Promise<Response> {

@@ -4,6 +4,7 @@ import { UploadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, json } from "./api";
 import { AdminPageHeader } from "./AdminUi";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 type Option = { id: string; name: string };
 type Overview = { required: number; completed: number; incomplete: number; failed: number; locked: number; pendingRequests: number; people: Array<{ id: string; person: Option; batch: Option; status: string }> };
@@ -17,6 +18,7 @@ const requestStatusNames: Record<string, string> = { pending: "待审核", appro
 const queryString = (values: Record<string, string | undefined>) => { const params = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => value && params.set(key, value)); const text = params.toString(); return text ? `?${text}` : ""; };
 
 export function DashboardPage() {
+  const navigate = useNavigate();
   const [filters, setFilters] = useState<Record<string, string | undefined>>({});
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: () => api<Option[]>("/api/organizations") });
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => api<Option[]>("/api/projects") });
@@ -28,7 +30,7 @@ export function DashboardPage() {
     ["failed", "考试不合格人数", overview.data?.failed ?? 0], ["locked", "考试锁定人数", overview.data?.locked ?? 0], ["pendingRequests", "待审核申请数", overview.data?.pendingRequests ?? 0]
   ] as const;
   const visible = preferences.data ?? cards.map(([key]) => key);
-  return <div className="admin-workspace"><AdminPageHeader title="安全工作台" description="查看当前培训完成情况、异常状态和待处理申请。" /><Card className="filters"><Space wrap>
+  return <div className="admin-workspace"><AdminPageHeader title="培训教育首页" description="查看当前培训完成情况、异常状态和待处理申请。" actions={<Space><Button onClick={() => navigate("/courseware")}>培训制作中心</Button><Button type="primary" onClick={() => navigate("/training/new")}>新建培训</Button></Space>} /><Card className="filters"><Space wrap>
     <Select allowClear placeholder="按组织" style={{ width: 180 }} options={(organizations.data ?? []).map((x) => ({ value: x.id, label: x.name }))} onChange={(organizationId) => setFilters((v) => ({ ...v, organizationId }))} />
     <Select allowClear placeholder="按项目" style={{ width: 180 }} options={(projects.data ?? []).map((x) => ({ value: x.id, label: x.name }))} onChange={(projectId) => setFilters((v) => ({ ...v, projectId }))} />
     <Select allowClear placeholder="按培训任务" style={{ width: 240 }} options={(batches.data ?? []).map((x) => ({ value: x.id, label: x.name }))} onChange={(batchId) => setFilters((v) => ({ ...v, batchId }))} />
@@ -38,7 +40,8 @@ export function DashboardPage() {
 }
 
 export function RecordsPage() {
-  const qc = useQueryClient(); const [batchId, setBatchId] = useState<string>(); const [status, setStatus] = useState<string>(); const [selected, setSelected] = useState<Key[]>([]); const [unlock, setUnlock] = useState<Assignment>(); const [request, setRequest] = useState<RequestRow>(); const [decision, setDecision] = useState<"approve" | "reject">("approve"); const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [searchParams] = useSearchParams();
+  const qc = useQueryClient(); const [batchId, setBatchId] = useState<string | undefined>(() => searchParams.get("batchId") ?? undefined); const [status, setStatus] = useState<string>(); const [selected, setSelected] = useState<Key[]>([]); const [unlock, setUnlock] = useState<Assignment>(); const [request, setRequest] = useState<RequestRow>(); const [decision, setDecision] = useState<"approve" | "reject">("approve"); const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const assignments = useQuery({ queryKey: ["management-assignments", batchId, status], queryFn: () => api<Assignment[]>(`/api/management/assignments${queryString({ batchId, status })}`) });
   const batches = useQuery({ queryKey: ["training-batches"], queryFn: () => api<Batch[]>("/api/training-batches") }); const persons = useQuery({ queryKey: ["persons"], queryFn: () => api<Option[]>("/api/persons") }); const projects = useQuery({ queryKey: ["projects"], queryFn: () => api<Option[]>("/api/projects") }); const organizations = useQuery({ queryKey: ["organizations"], queryFn: () => api<Option[]>("/api/organizations") }); const papers = useQuery({ queryKey: ["exam-papers"], queryFn: () => api<Option[]>("/api/exam-papers") });
   const requests = useQuery({ queryKey: ["management-requests"], queryFn: () => api<RequestRow[]>("/api/management/requests") });

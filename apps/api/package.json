@@ -35,6 +35,7 @@
     "check:change-request-lifecycle": "tsx scripts/check-change-request-lifecycle.mts",
     "check:project-membership-policy": "tsx scripts/check-project-membership-policy.mts",
     "check:training-governance": "tsx scripts/check-training-governance.mts",
+    "check:training-workflow": "tsx scripts/check-training-workflow.mts",
     "check:courseware-learning": "tsx scripts/check-courseware-learning.mts",
     "check:daily-challenge-policy": "tsx scripts/check-daily-challenge-policy.mts",
     "check:training-todo-priority": "tsx scripts/check-training-todo-priority.mts",
@@ -78,6 +79,7 @@
     "smoke:receivables-e2e": "tsx scripts/smoke-receivables-e2e.mts",
     "smoke:structured-courseware": "tsx scripts/smoke-structured-courseware.mts",
     "smoke:daily-challenge": "tsx scripts/smoke-daily-challenge.mts",
+    "smoke:training-workflow": "tsx scripts/smoke-training-workflow.mts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js"
   },

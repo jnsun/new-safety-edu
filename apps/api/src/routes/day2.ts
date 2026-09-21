@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -12,9 +12,9 @@ import { prisma } from "../db.js";
 import type { Env } from "../env.js";
 import { parseQuestionImport, questionImportTemplate } from "../question-import.js";
 import { coursewareViewerHeaders } from "../courseware-viewer-policy.js";
-import { questionVersionSnapshot } from "../question-versions.js";
 import { canPublishCourseware } from "../courseware-publish-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
+import { freezeTrainingPaper, preflightTrainingWorkflow, resolveTrainingWorkflow, trainingWorkflowInputSchema, verifyTrainingPreflight, type BatchPaperSnapshot, type CoursewareSnapshotItem } from "../training-workflow.js";
 import { decorateTodoPriority, sortTodoAssignments } from "../training-todo-priority.js";
 import { completionEvidenceError, latestLearningProgress, resumeUpdateData } from "../learning-progress-policy.js";
 import { serializeStructuredCoursewareForLearner } from "../structured-courseware.js";
@@ -82,7 +82,6 @@ const normalize = (value: unknown) => Array.isArray(value) ? [...value].map(Stri
 const sameAnswer = (a: unknown, b: unknown) => JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
 type SnapshotQuestion = { id: string; type: QuestionType; prompt: string; options: unknown; correct: unknown; score: number };
 type ExamSnapshot = { questions: SnapshotQuestion[]; totalScore: number };
-type BatchPaperSnapshot = { mode: "fixed" | "random"; questions: SnapshotQuestion[]; randomCount?: number };
 export const publicAttempt = (attempt: { id: string; attemptNumber: number; startedAt: Date; expiresAt: Date; status: string; snapshot: Prisma.JsonValue; answers?: Array<{ questionId: string; answer: Prisma.JsonValue }> }) => {
   const snapshot = attempt.snapshot as unknown as ExamSnapshot;
   return { id: attempt.id, attemptNumber: attempt.attemptNumber, startedAt: attempt.startedAt, expiresAt: attempt.expiresAt, status: attempt.status,
@@ -105,7 +104,9 @@ const nextAction = (status: string) => ({
 function learnerAssignment(row: LearnerAssignment) {
   const current = new Map<string, LearnerAssignment["progress"][number]>();
   row.progress.forEach((item) => current.set(item.coursewareVersionId, item));
-  const coursewares = [...current.values()].map((item) => ({
+  const frozenOrder = Array.isArray(row.batch.coursewareSnapshot) ? (row.batch.coursewareSnapshot as unknown as CoursewareSnapshotItem[]).map(({ coursewareVersionId }) => coursewareVersionId) : [];
+  const ordered = frozenOrder.length ? frozenOrder.flatMap((id) => current.get(id) ? [current.get(id)!] : []) : [...current.values()];
+  const coursewares = ordered.map((item) => ({
     progressId: item.id, versionId: item.coursewareVersionId, title: item.coursewareVersion.courseware.title,
     type: item.coursewareVersion.courseware.type, version: item.coursewareVersion.version, remediationRound: item.remediationRound,
     openedAt: item.openedAt, completedAt: item.completedAt
@@ -123,10 +124,14 @@ function learnerAssignment(row: LearnerAssignment) {
 
 async function createAssignments(tx: Prisma.TransactionClient, batchId: string, templateId: string, personIds: string[], env: Env) {
   const [batch, items] = await Promise.all([
-    tx.trainingBatch.findUniqueOrThrow({ where: { id: batchId }, select: { name: true } }),
-    tx.trainingTemplateItem.findMany({ where: { templateId }, orderBy: { sortOrder: "asc" } })
+    tx.trainingBatch.findUniqueOrThrow({ where: { id: batchId }, select: { name: true, coursewareSnapshot: true } }),
+    tx.trainingTemplateItem.findMany({ where: { templateId }, orderBy: { sortOrder: "asc" }, include: { coursewareVersion: { include: { courseware: true } } } })
   ]);
   if (!items.length) throw Object.assign(new Error("培训模板没有已发布课件"), { statusCode: 400, code: "EMPTY_TEMPLATE" });
+  if (!Array.isArray(batch.coursewareSnapshot) || batch.coursewareSnapshot.length === 0) {
+    const snapshot = items.map(({ coursewareVersion, sortOrder }) => ({ coursewareVersionId: coursewareVersion.id, coursewareId: coursewareVersion.coursewareId, title: coursewareVersion.courseware.title, type: coursewareVersion.courseware.type, version: coursewareVersion.version, sortOrder }));
+    await tx.trainingBatch.update({ where: { id: batchId }, data: { coursewareSnapshot: snapshot as unknown as Prisma.InputJsonValue } });
+  }
   for (const personId of personIds) {
     const assignment = await tx.trainingAssignment.create({ data: { batchId, personId } });
     await tx.learningProgress.createMany({ data: items.map((item) => ({ assignmentId: assignment.id, coursewareVersionId: item.coursewareVersionId })) });
@@ -139,12 +144,9 @@ async function createAssignments(tx: Prisma.TransactionClient, batchId: string, 
 }
 
 export async function freezePaper(paperId: string): Promise<BatchPaperSnapshot> {
-  const paper = await prisma.examPaper.findUniqueOrThrow({ where: { id: paperId }, include: { items: { include: { question: { include: { versions: { orderBy: { version: "desc" }, take: 1 } } }, questionVersion: true }, orderBy: { sortOrder: "asc" } }, bank: { include: { questions: { where: { active: true }, include: { versions: { orderBy: { version: "desc" }, take: 1 } }, orderBy: { createdAt: "asc" } } } } } });
-  const questions = paper.mode === "fixed"
-    ? paper.items.map(({ question, questionVersion, score }) => questionVersionSnapshot(questionVersion ?? question.versions[0] ?? { id: question.id, version: question.currentVersion, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, explanation: question.explanation }, Number(score)))
-    : (paper.bank?.questions ?? []).map((question) => questionVersionSnapshot(question.versions[0] ?? { id: question.id, version: question.currentVersion, type: question.type, prompt: question.prompt, options: question.options, correct: question.correct, explanation: question.explanation }, 100 / (paper.randomCount ?? 1)));
-  if (!questions.length || (paper.mode === "random" && questions.length < (paper.randomCount ?? 0))) throw Object.assign(new Error("试卷题目不足"), { statusCode: 409, code: "INSUFFICIENT_QUESTIONS" });
-  return { mode: paper.mode, questions, ...(paper.mode === "random" ? { randomCount: paper.randomCount ?? 0 } : {}) };
+  const frozen = await freezeTrainingPaper(prisma as unknown as Prisma.TransactionClient, paperId);
+  if (!frozen.snapshot) throw Object.assign(new Error(frozen.blocker?.message ?? "试卷不可用"), { statusCode: 409, code: frozen.blocker?.code ?? "PAPER_INVALID" });
+  return frozen.snapshot;
 }
 
 export async function autoDispatchInTransaction(tx: Prisma.TransactionClient, type: "three_level" | "project_induction", personId: string, env: Env, projectId?: string) {
@@ -158,7 +160,9 @@ export async function autoDispatchInTransaction(tx: Prisma.TransactionClient, ty
     for (const admin of admins) if (admin.personId) await tx.notification.upsert({ where: { dedupeKey: `auto-config-missing:${type}:${projectId ?? "company"}` }, create: { personId: admin.personId, title: "自动培训配置缺失", body: `${type === "three_level" ? "三级教育" : "项目入场教育"}未生成，请先配置默认模板和试卷。`, dedupeKey: `auto-config-missing:${type}:${projectId ?? "company"}` }, update: {} });
     return null;
   }
-  const paperSnapshot = await freezePaper(config.paperId);
+  const frozenPaper = await freezeTrainingPaper(tx, config.paperId);
+  if (!frozenPaper.snapshot) throw Object.assign(new Error(frozenPaper.blocker?.message ?? "试卷不可用"), { statusCode: 409, code: frozenPaper.blocker?.code ?? "PAPER_INVALID" });
+  const paperSnapshot = frozenPaper.snapshot;
   const businessKey = `auto:${type}:${projectId ?? "company"}:${personId}`;
   const existing = await tx.trainingBatch.findUnique({ where: { businessKey }, include: { assignments: true } });
   if (existing) return existing;
@@ -195,7 +199,7 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
   app.get("/api/training-automation-configs", manager, async (request) => ({ data: await prisma.trainingAutomationConfig.findMany({ where: await visibleScope(principalOf(request)), include: { template: true, paper: true }, orderBy: { createdAt: "desc" } }) }));
   app.post("/api/training-automation-configs", manager, async (request, reply) => {
     const principal = principalOf(request); const input = scopeSchema.extend({ type: z.enum(["three_level", "project_induction"]), templateId: z.string().uuid(), paperId: z.string().uuid() }).parse(request.body); await assertScope(principal, input.scopeType, input.scopeId);
-    const [template, snapshot] = await Promise.all([prisma.trainingTemplate.findUniqueOrThrow({ where: { id: input.templateId } }), freezePaper(input.paperId)]); void snapshot;
+    const [template, frozenPaper] = await Promise.all([prisma.trainingTemplate.findUniqueOrThrow({ where: { id: input.templateId } }), freezeTrainingPaper(prisma as unknown as Prisma.TransactionClient, input.paperId)]); if (!frozenPaper.snapshot) throw Object.assign(new Error(frozenPaper.blocker?.message ?? "试卷不可用"), { statusCode: 409, code: frozenPaper.blocker?.code ?? "PAPER_INVALID" });
     if (template.type !== input.type || !template.active) throw Object.assign(new Error("默认模板类型不匹配或已停用"), { statusCode: 409, code: "AUTOMATION_TEMPLATE_INVALID" });
     const row = await prisma.$transaction(async (tx) => { await tx.trainingAutomationConfig.updateMany({ where: { type: input.type, scopeType: input.scopeType, scopeId: input.scopeId ?? null, active: true }, data: { active: false } }); const created = await tx.trainingAutomationConfig.create({ data: { ...input, scopeId: input.scopeId ?? null, createdBy: principal.accountId } }); await writeCriticalAudit(tx, { actorId: principal.accountId, action: "training.automation_config", objectType: "training_automation_config", objectId: created.id, metadata: { type: input.type, scopeType: input.scopeType, scopeId: input.scopeId } }); return created; });
     return reply.code(201).send({ data: row });
@@ -385,41 +389,76 @@ export async function registerDay2Routes(app: FastifyInstance, deps: Deps) {
     const where = isCompanyAdmin(principal) ? {} : { OR: [{ projectId: { in: projectIds } }, { assignments: { some: { person: { organizations: { some: { active: true, organizationId: { in: orgIds } } } } } } }] };
     return { data: await prisma.trainingBatch.findMany({ where, include: { template: true, paper: true, project: true, assignments: { include: { person: { select: { id: true, name: true, phone: true } } } } }, orderBy: { createdAt: "desc" } }) };
   });
+  app.post("/api/training-batches/preflight", manager, async (request) => {
+    const principal = principalOf(request);
+    return { data: await preflightTrainingWorkflow(principal, request.body, deps.env) };
+  });
   app.post("/api/training-batches", manager, async (request, reply) => {
     const principal = principalOf(request);
-    const input = z.object({ name: z.string().min(2).max(180), type: z.enum(["three_level", "project_induction", "routine", "change_update"]), templateId: z.string().uuid(), paperId: z.string().uuid().optional(), projectId: z.string().uuid().optional(), dueAt: z.coerce.date().optional(), durationMin: z.number().int().min(1).max(240).default(30), passScore: z.number().min(0).max(100).default(80), maxAttempts: z.number().int().min(1).max(10).default(3), personIds: z.array(z.string().uuid()).default([]), organizationIds: z.array(z.string().uuid()).default([]) }).parse(request.body);
-    if (["three_level", "project_induction"].includes(input.type) && !input.paperId) throw Object.assign(new Error("三级教育和项目入场教育必须配置考试"), { statusCode: 400, code: "EXAM_REQUIRED" });
-    if (input.type === "project_induction" && !input.projectId) throw Object.assign(new Error("项目入场教育必须绑定项目"), { statusCode: 400, code: "PROJECT_REQUIRED" });
-    if (input.projectId) { if (!await canAccessProject(principal, input.projectId)) forbidden(); const project = await prisma.project.findUniqueOrThrow({ where: { id: input.projectId }, select: { status: true } }); if (project.status !== "active") throw Object.assign(new Error("暂停或结束项目不能下发新培训"), { statusCode: 409, code: "PROJECT_READ_ONLY" }); }
-    const template = await prisma.trainingTemplate.findFirstOrThrow({ where: { id: input.templateId, active: true } }); await assertScope(principal, template.scopeType, template.scopeId);
-    if (template.type !== input.type) throw Object.assign(new Error("模板培训类型不匹配"), { statusCode: 400, code: "TYPE_MISMATCH" });
-    let paperSnapshot: BatchPaperSnapshot | undefined;
-    if (input.paperId) {
-      const paper = await prisma.examPaper.findFirstOrThrow({ where: { id: input.paperId, active: true }, include: { bank: true, items: { include: { question: { include: { bank: true } } } } } });
-      if (paper.bank) await assertScope(principal, paper.bank.scopeType, paper.bank.scopeId);
-      for (const item of paper.items) await assertScope(principal, item.question.bank.scopeType, item.question.bank.scopeId);
-      paperSnapshot = await freezePaper(input.paperId);
+    const envelope = z.object({
+      draft: trainingWorkflowInputSchema,
+      preflightToken: z.string().min(20),
+      preflightFingerprint: z.string().length(64),
+      idempotencyKey: z.string().uuid()
+    }).parse(request.body);
+    const businessKey = `manual:${principal.accountId}:${envelope.idempotencyKey}`;
+    const existing = await prisma.trainingBatch.findUnique({ where: { businessKey } });
+    if (existing) {
+      if (existing.dispatchFingerprint !== envelope.preflightFingerprint) throw Object.assign(new Error("幂等键已用于另一份培训配置"), { statusCode: 409, code: "IDEMPOTENCY_KEY_REUSED" });
+      return { data: { ...(existing.dispatchResult as Record<string, unknown>), batchId: existing.id, duplicate: true } };
     }
-    if (input.personIds.length) throw Object.assign(new Error("培训下发只允许按完整部门或完整项目选择"), { statusCode: 400, code: "INDIVIDUAL_TARGET_DISABLED" });
-    const ids = new Set<string>();
-    const directOrgScopes = organizationScopeIds(principal);
-    if (input.projectId && !isCompanyAdmin(principal) && !directOrgScopes.length) {
-      if (!projectScopeIds(principal).includes(input.projectId)) forbidden();
-      (await prisma.projectMember.findMany({ where: { projectId: input.projectId, status: "active" }, select: { personId: true } })).forEach(({ personId }) => ids.add(personId));
-    } else if (input.type === "project_induction" && input.projectId) {
-      (await prisma.projectMember.findMany({ where: { projectId: input.projectId, status: "active" }, select: { personId: true } })).forEach(({ personId }) => ids.add(personId));
-    } else {
-      const selectableOrgIds = isCompanyAdmin(principal) ? (await prisma.organization.findMany({ where: { type: { in: ["department", "business_entity"] } }, select: { id: true } })).map(({ id }) => id) : directOrgScopes;
-      const requestedOrgIds = input.organizationIds.length ? [...new Set(input.organizationIds)] : selectableOrgIds;
-      if (requestedOrgIds.some((id) => !selectableOrgIds.includes(id))) forbidden("只能选择完整的授权部门");
-      (await prisma.organizationMembership.findMany({ where: { active: true, organizationId: { in: requestedOrgIds }, person: { status: "active" } }, select: { personId: true } })).forEach(({ personId }) => ids.add(personId));
+    const externalQueued = Boolean(deps.env.WECHAT_APP_ID && deps.env.WECHAT_APP_SECRET && deps.env.WECHAT_SUBSCRIBE_TEMPLATE_TASK);
+    let result;
+    try { result = await prisma.$transaction(async (tx) => {
+      const resolution = await resolveTrainingWorkflow(tx, principal, envelope.draft);
+      if (resolution.blockers.length) throw Object.assign(new Error(resolution.blockers.map(({ message }) => message).join("；")), { statusCode: 409, code: "TRAINING_NOT_READY", details: resolution.blockers });
+      if (resolution.fingerprint !== envelope.preflightFingerprint) throw Object.assign(new Error("培训配置或人员范围已经变化，请重新预检"), { statusCode: 409, code: "PREFLIGHT_STALE" });
+      await verifyTrainingPreflight(envelope.preflightToken, resolution.fingerprint, principal, deps.env);
+      const input = resolution.input;
+      const dispatchResult = {
+        assignmentCount: resolution.included.length,
+        excludedCount: resolution.excluded.length,
+        failedCount: 0,
+        excluded: resolution.excluded,
+        notification: { systemCreated: resolution.included.length, externalDelivery: externalQueued ? "queued" : "not_configured" }
+      };
+      const created = await tx.trainingBatch.create({ data: {
+        businessKey,
+        dispatchFingerprint: resolution.fingerprint,
+        name: input.name,
+        description: input.description || null,
+        type: input.type,
+        templateId: input.templateId,
+        paperId: input.examRequired ? input.paperId ?? null : null,
+        paperSnapshot: resolution.paperSnapshot as unknown as Prisma.InputJsonValue,
+        coursewareSnapshot: resolution.coursewares as unknown as Prisma.InputJsonValue,
+        dispatchResult: dispatchResult as unknown as Prisma.InputJsonValue,
+        projectId: input.targetType === "project" ? input.projectId ?? null : null,
+        dueAt: input.dueAt ?? null,
+        durationMin: input.durationMin,
+        passScore: input.passScore,
+        maxAttempts: input.maxAttempts
+      } });
+      await createAssignments(tx, created.id, input.templateId, resolution.included.map(({ id }) => id), deps.env);
+      await tx.auditLog.create({ data: { actorId: principal.accountId, action: "training_batch.dispatch", objectType: "training_batch", objectId: created.id, result: "success", metadata: { assignmentCount: resolution.included.length, excludedCount: resolution.excluded.length, deduplicatedCount: resolution.deduplicatedCount, fingerprint: resolution.fingerprint } } });
+      return { created, resolution };
+    }, { isolationLevel: "Serializable" }); }
+    catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const raced = await prisma.trainingBatch.findUnique({ where: { businessKey } });
+        if (raced?.dispatchFingerprint === envelope.preflightFingerprint) return { data: { ...(raced.dispatchResult as Record<string, unknown>), batchId: raced.id, duplicate: true } };
+      }
+      throw error;
     }
-    const persons = await prisma.person.findMany({ where: { id: { in: [...ids] }, status: "active", ...(input.type === "three_level" ? { type: "employee" as const } : {}) }, select: { id: true } });
-    for (const person of persons) if (!await canAccessPerson(principal, person.id)) forbidden();
-    if (!persons.length) throw Object.assign(new Error("没有符合条件的在用人员"), { statusCode: 400, code: "NO_TARGETS" });
-    const batch = await prisma.$transaction(async (tx) => { const created = await tx.trainingBatch.create({ data: { businessKey: `manual:${randomUUID()}`, name: input.name, type: input.type, templateId: input.templateId, paperId: input.paperId ?? null, paperSnapshot: paperSnapshot as unknown as Prisma.InputJsonValue, projectId: input.projectId ?? null, dueAt: input.dueAt ?? null, durationMin: input.durationMin, passScore: input.passScore, maxAttempts: input.maxAttempts } }); await createAssignments(tx, created.id, input.templateId, persons.map(({ id }) => id), deps.env); return created; });
-    audit(principal.accountId, "training_batch.dispatch", "training_batch", batch.id, { assignmentCount: persons.length });
-    return reply.code(201).send({ data: { ...batch, assignmentCount: persons.length } });
+    return reply.code(201).send({ data: {
+      batchId: result.created.id,
+      assignmentCount: result.resolution.included.length,
+      excludedCount: result.resolution.excluded.length,
+      failedCount: 0,
+      duplicate: false,
+      excluded: result.resolution.excluded,
+      notification: { systemCreated: result.resolution.included.length, externalDelivery: externalQueued ? "queued" : "not_configured" }
+    } });
   });
   app.patch("/api/training-batches/:id", manager, async (request) => {
     const principal = principalOf(request); const { id } = idParam.parse(request.params); const input = z.object({ name: z.string().trim().min(2).max(180), dueAt: z.coerce.date().nullable() }).parse(request.body);

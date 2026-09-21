@@ -1235,6 +1235,7 @@ model TrainingBatch {
   id            String               @id @default(uuid()) @db.Uuid
   businessKey   String               @unique @map("business_key") @db.VarChar(180)
   name          String               @db.VarChar(180)
+  description   String?              @db.VarChar(1000)
   type          TrainingType
   source        BatchSource          @default(online)
   templateId    String?              @map("template_id") @db.Uuid
@@ -1249,10 +1250,14 @@ model TrainingBatch {
   maxAttempts   Int                  @default(3) @map("max_attempts")
   offlineDetail Json?                @map("offline_detail")
   paperSnapshot Json?                @map("paper_snapshot")
+  coursewareSnapshot Json            @default("[]") @map("courseware_snapshot")
+  dispatchFingerprint String?        @map("dispatch_fingerprint") @db.VarChar(64)
+  dispatchResult      Json            @default("{}") @map("dispatch_result")
   assignments   TrainingAssignment[]
   createdAt     DateTime             @default(now()) @map("created_at")
   updatedAt     DateTime             @updatedAt @map("updated_at")
 
+  @@index([dispatchFingerprint])
   @@map("training_batches")
 }
 
