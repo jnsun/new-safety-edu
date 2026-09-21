@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Principal } from "../auth.js";
 import { prisma } from "../db.js";
-import { administerReceivables } from "../receivables-admin.js";
-import { assertReceivablesFinanceOrganization, receivablesFinanceOrganizationName, requireReceivables, resolveReceivablesAccess, selectReceivablesFinanceOrganization } from "../receivables-access.js";
+import { administerReceivables, assertReceivablesOwnerAction } from "../receivables-admin.js";
+import { requireReceivables, resolveReceivablesAccess } from "../receivables-access.js";
 import { getReceivablesColumnPreference, getReceivablesDashboardPreference, getReceivablesReferenceData, previewReceivablesExport, queryReceivables, receivablesColumnPreferenceSchema, receivablesDashboardPreferenceSchema, receivablesExportCategoryIds, receivablesExportColumnIds, saveReceivablesColumnPreference, saveReceivablesDashboardPreference } from "../receivables-query.js";
 import { writeReceivablesLedger } from "../receivables-ledger.js";
 import { writeReceivablesMoney } from "../receivables-money.js";
@@ -20,15 +20,19 @@ type RouteDependencies = {
 };
 
 const setupLockKey = 8_645_136_501n;
+const reporterGrantableFields = ["projectName", "customerName", "customerType", "creditorUnit", "workNature", "sector", "projectStatus", "settlementMethod", "debtStatus", "collectionOwner", "collectionNotes", "dunningDate", "communicationMethod", "counterpartyFeedback", "latestProgress", "nextPlan"] as const;
 const reasonInput = z.string().trim().min(1).max(500);
 const idParams = z.object({ id: z.string().uuid() }).strict();
 const departmentScopeInput = z.object({ departmentId: z.string().uuid(), canRead: z.boolean(), canWrite: z.boolean() }).strict();
 const grantFields = z.object({
   role: z.enum(["admin", "reporter", "readonly"]),
   canCreate: z.boolean().default(false),
+  canEditBaseInfo: z.boolean().default(false),
   canExport: z.boolean().default(false),
   canViewAll: z.boolean().default(false),
   canMaintainCollection: z.boolean().default(false),
+  canUploadAttachments: z.boolean().default(false),
+  editableFields: z.array(z.string().trim().min(1).max(80)).max(100).default([]),
   departments: z.array(departmentScopeInput).max(200).default([]),
 }).strict();
 const grantCreateInput = grantFields.extend({ personId: z.string().uuid(), reason: reasonInput }).strict();
@@ -140,12 +144,8 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
       await lockReceivablesSetup(tx);
       const access = await resolveReceivablesAccess(principal, tx);
       requireReceivables(access, "confirmSetup");
-      let setting = await tx.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
-      if (!setting) {
-        const organization = selectReceivablesFinanceOrganization(await tx.organization.findMany({ where: { name: receivablesFinanceOrganizationName, type: "department" }, select: { id: true, type: true }, take: 2 }));
-        assertReceivablesFinanceOrganization(organization);
-        setting = await tx.receivableSetting.create({ data: { id: 1, financeOrganizationId: organization.id }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
-      }
+      const setting = await tx.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
+      if (!setting?.financeOrganizationId) throw httpError(409, "RECEIVABLES_FINANCE_ORGANIZATION_UNCONFIGURED", "应收账款主管组织尚未按稳定组织 ID 配置");
       const confirmedAt = new Date();
       await tx.receivableSetting.update({ where: { id: 1 }, data: { configurationConfirmedAt: confirmedAt, configurationConfirmedBy: principal.accountId } });
       await writeCriticalAudit(tx, {
@@ -282,6 +282,24 @@ export async function registerReceivablesRoutes(app: FastifyInstance, deps: Rout
   app.patch("/api/receivables/ledgers/:id/writeoff", { preHandler: deps.authenticate }, async (request) => ({ data: await writeReceivablesMoney(ledgerContext(request), { type: "writeoff.patch", ledgerId: idParams.parse(request.params).id, input: writeoffInput.parse(request.body) }) }));
 
   app.get("/api/receivables/grants", { preHandler: deps.authenticate }, async (request) => ({ data: await administerReceivables(adminContext(request), { type: "grant.list" }) }));
+  app.get("/api/receivables/reporter-field-policy", { preHandler: deps.authenticate }, async (request) => {
+    const access = await resolveReceivablesAccess(request.principal as Principal);
+    requireReceivables(access, "manageAccess");
+    const setting = await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { reporterEditableFields: true } });
+    return { data: { editableFields: setting?.reporterEditableFields ?? [], availableFields: reporterGrantableFields, canEdit: access.role === "owner" } };
+  });
+  app.put("/api/receivables/reporter-field-policy", { preHandler: deps.authenticate }, async (request) => {
+    const principal = request.principal as Principal;
+    const access = await resolveReceivablesAccess(principal);
+    assertReceivablesOwnerAction(access.role);
+    const editableFields = z.object({ editableFields: z.array(z.enum(reporterGrantableFields)).max(reporterGrantableFields.length) }).strict().parse(request.body).editableFields;
+    const row = await prisma.$transaction(async (tx) => {
+      const updated = await tx.receivableSetting.upsert({ where: { id: 1 }, create: { reporterEditableFields: editableFields }, update: { reporterEditableFields: editableFields } });
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "receivables.reporter_field_policy.update", objectType: "receivable_setting", objectId: "1", actorRole: access.role, actorScopeType: "receivables", metadata: { editableFields } });
+      return updated;
+    });
+    return { data: { editableFields: row.reporterEditableFields } };
+  });
   app.get("/api/receivables/grant-candidates", { preHandler: deps.authenticate }, async (request) => {
     const { search } = grantCandidateInput.parse(request.query);
     return { data: await administerReceivables(adminContext(request), { type: "candidate.list", search }) };

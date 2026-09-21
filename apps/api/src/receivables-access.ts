@@ -10,9 +10,13 @@ type DepartmentScope = { departmentId: string; canRead: boolean; canWrite: boole
 type GrantFacts = {
   role: ReceivableGrantRole;
   canCreate?: boolean;
+  canEditBaseInfo?: boolean;
   canExport?: boolean;
   canViewAll?: boolean;
   canMaintainCollection?: boolean;
+  canUploadAttachments?: boolean;
+  editableFields?: readonly string[];
+  globalEditableFields?: readonly string[];
   departments?: readonly DepartmentScope[];
 };
 
@@ -40,6 +44,9 @@ export type ReceivablesAccess = ReceivablesActorCapabilities & {
   canExport: boolean;
   canViewAll: boolean;
   canMaintainCollection: boolean;
+  canEditBaseInfo: boolean;
+  canUploadAttachments: boolean;
+  editableFields: string[];
   canConfirmSetup: boolean;
   canRecover: boolean;
   readDepartmentIds: string[];
@@ -86,6 +93,9 @@ const emptyAccess = (state: ReceivablesAccessState, canRecover: boolean): Receiv
   canExport: false,
   canViewAll: false,
   canMaintainCollection: false,
+  canEditBaseInfo: false,
+  canUploadAttachments: false,
+  editableFields: [],
   canConfirmSetup: false,
   canRecover,
   readDepartmentIds: [],
@@ -129,6 +139,9 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       canExport: true,
       canViewAll: true,
       canMaintainCollection: true,
+      canEditBaseInfo: true,
+      canUploadAttachments: true,
+      editableFields: [],
     };
   }
 
@@ -156,6 +169,9 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
       canExport: true,
       canViewAll: true,
       canMaintainCollection: true,
+      canEditBaseInfo: true,
+      canUploadAttachments: true,
+      editableFields: [],
       readDepartmentIds,
       writeDepartmentIds,
     };
@@ -164,6 +180,10 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
   const canViewAll = !!grant.canViewAll;
   const canReadLedger = canViewAll || readDepartmentIds.length > 0;
   const canWriteLedger = grant.role === "reporter" && writeDepartmentIds.length > 0;
+  const globalEditableFields = new Set(grant.globalEditableFields ?? []);
+  const editableFields = grant.role === "reporter"
+    ? [...new Set((grant.editableFields ?? []).filter((field) => globalEditableFields.has(field)))].sort()
+    : [];
   return {
     ...denied,
     role: grant.role,
@@ -174,6 +194,9 @@ export function decideReceivablesAccess(facts: ReceivablesAccessFacts): Receivab
     canExport: !!grant.canExport && canReadLedger,
     canViewAll,
     canMaintainCollection: grant.role === "reporter" && !!grant.canMaintainCollection,
+    canEditBaseInfo: grant.role === "reporter" && !!grant.canEditBaseInfo,
+    canUploadAttachments: grant.role === "reporter" && !!grant.canUploadAttachments,
+    editableFields,
     readDepartmentIds,
     writeDepartmentIds,
   };
@@ -201,7 +224,7 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
     }),
     db.receivableSetting.findUnique({
       where: { id: 1 },
-      select: { financeOrganizationId: true, configurationConfirmedAt: true, financeOrganization: { select: { type: true } } },
+      select: { financeOrganizationId: true, configurationConfirmedAt: true, reporterEditableFields: true, financeOrganization: { select: { type: true } } },
     }),
   ]);
   const accountActive = account?.status === "active";
@@ -217,13 +240,8 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
         },
         select: { id: true },
       }));
-  const inferredFinanceOrganization = setting?.financeOrganizationId ? null : selectReceivablesFinanceOrganization(await db.organization.findMany({
-    where: { name: receivablesFinanceOrganizationName, type: "department" },
-    select: { id: true, type: true },
-    take: 2,
-  }));
-  const financeOrganizationId = setting?.financeOrganizationId ?? inferredFinanceOrganization?.id ?? null;
-  const configured = !!financeOrganizationId && (setting?.financeOrganization?.type === "department" || inferredFinanceOrganization?.type === "department");
+  const financeOrganizationId = setting?.financeOrganizationId ?? null;
+  const configured = !!financeOrganizationId && setting?.financeOrganization?.type === "department";
   const [leaderRoles, grants] = await Promise.all([
     configured
       ? db.roleAssignment.findMany({
@@ -241,22 +259,26 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
       : Promise.resolve([]),
     accountActive && personActive
       ? db.receivableAccessGrant.findMany({
-          where: { accountId: principal.accountId, active: true, revokedAt: null },
+          where: { personId: account!.personId!, active: true, revokedAt: null },
           select: {
             role: true,
             canCreate: true,
+            canEditBaseInfo: true,
             canExport: true,
             canViewAll: true,
             canMaintainCollection: true,
+            canUploadAttachments: true,
+            editableFields: true,
             departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true } },
           },
         })
       : Promise.resolve([]),
   ]);
-  const leaderAccountIds = [...new Set(leaderRoles.map(({ person }) => person?.account?.id).filter((id): id is string => !!id))];
+  const leaderPersonIds = [...new Set(leaderRoles.map(({ personId }) => personId).filter((value): value is string => !!value))];
   const activeGrant = selectSingleReceivablesGrant(grants);
   const grant = activeGrant ? {
     ...activeGrant,
+    globalEditableFields: setting?.reporterEditableFields ?? [],
     departments: activeGrant.departments
       .map(({ financeDepartmentId, canRead, canWrite }) => ({ departmentId: financeDepartmentId, canRead, canWrite })),
   } : null;
@@ -267,8 +289,8 @@ export async function resolveReceivablesAccess(principal: Pick<Principal, "accou
     isCompanyAdmin,
     configured,
     configurationConfirmed: !!setting?.configurationConfirmedAt,
-    hasBoundOrgLeader: leaderAccountIds.length === 1,
-    isBoundOrgLeader: leaderAccountIds.length === 1 && leaderAccountIds[0] === principal.accountId,
+    hasBoundOrgLeader: leaderPersonIds.length === 1,
+    isBoundOrgLeader: leaderPersonIds.length === 1 && leaderPersonIds[0] === account?.personId,
     grant,
   });
 }

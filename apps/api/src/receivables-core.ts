@@ -12,7 +12,10 @@ type ReceivableAmount = DecimalValue | ReceivableAmountDetail;
 export type ReceivablesActorCapabilities = {
   canManageAll: boolean;
   canCreateLedger: boolean;
+  canEditBaseInfo?: boolean;
   canMaintainCollection?: boolean;
+  canUploadAttachments?: boolean;
+  editableFields?: readonly string[];
 };
 
 export const reporterCreateFields = Object.freeze([
@@ -118,11 +121,17 @@ export function assertLedgerPatchAllowed(
   if (actor.canManageAll) return;
   if (current === null && !actor.canCreateLedger) throw new Error("REPORTER_CREATE_NOT_ALLOWED");
 
-  const allowedFields: readonly string[] = current === null
-    ? reporterCreateFields
-    : actor.canMaintainCollection
-      ? [...reporterPatchFields, ...reporterCollectionFields]
-      : reporterPatchFields;
+  const capabilityFields = new Set<string>();
+  if (actor.canEditBaseInfo) reporterCreateFields.forEach((field) => capabilityFields.add(field));
+  if (actor.canMaintainCollection) [...reporterPatchFields, ...reporterCollectionFields].forEach((field) => capabilityFields.add(field));
+  if (current === null && actor.canCreateLedger) {
+    capabilityFields.add("financeDepartmentId");
+    capabilityFields.add("contractNo");
+  }
+  const individuallyGranted = new Set(actor.editableFields ?? []);
+  const allowedFields = [...capabilityFields].filter((field) =>
+    field === "financeDepartmentId" || field === "contractNo" || individuallyGranted.has(field),
+  );
   for (const field of Object.keys(patch)) {
     if (!allowedFields.includes(field as never)) throw new Error("REPORTER_FIELD_NOT_ALLOWED");
   }

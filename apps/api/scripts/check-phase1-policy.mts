@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { Principal } from "../src/auth.js";
-import { canGrantScopedRole, canJoinProject, canManagePersonStatus } from "../src/identity.js";
+import { canGrantScopedRole, canJoinProject, canManagePersonStatus, roleRequiresPrimaryOrganizationMembership } from "../src/identity.js";
 
 const principal = (role: Principal["roles"][number]["role"], scopeType: Principal["roles"][number]["scopeType"], scopeId: string | null): Principal => ({
   accountId: "00000000-0000-0000-0000-000000000001",
@@ -21,6 +21,9 @@ assert.equal(canGrantScopedRole(entityLeader, { role: "project_admin", scopeType
 assert.equal(canGrantScopedRole(departmentAdmin, { role: "field_reporter", scopeType: "organization", scopeId: "department-a", organizationType: "department" }), false);
 assert.equal(canGrantScopedRole(departmentAdmin, { role: "project_admin", scopeType: "project", scopeId: "project-a", projectResponsibleOrganizationId: "entity-a" }), false);
 assert.equal(canGrantScopedRole(projectAdmin, { role: "project_admin", scopeType: "project", scopeId: "project-a", projectResponsibleOrganizationId: "entity-a" }), false);
+assert.equal(roleRequiresPrimaryOrganizationMembership("org_leader"), false);
+assert.equal(roleRequiresPrimaryOrganizationMembership("org_admin"), true);
+assert.equal(roleRequiresPrimaryOrganizationMembership("field_reporter"), true);
 
 assert.equal(canManagePersonStatus(company, []), true);
 assert.equal(canManagePersonStatus(entityLeader, ["entity-a"]), true);

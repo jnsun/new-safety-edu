@@ -34,6 +34,20 @@ type Project = {
   code: string;
   responsibleOrganizationId: string;
   status: string;
+  projectType?: string | null;
+  location?: string | null;
+  contractAmount?: string | number | null;
+  plannedStartAt?: string | null;
+  plannedEndAt?: string | null;
+  managerName?: string | null;
+  managerPhone?: string | null;
+  responsibleOrganization: { id: string; name: string };
+  previousDefaults?: {
+    overallProgress?: string;
+    onsiteCount?: number;
+    onsiteVehicles?: number;
+    equipmentModels?: string;
+  };
 };
 type PersonOption = { id: string; name: string; phone: string };
 type CertificateType = {
@@ -93,7 +107,7 @@ type MonthlyReport = {
   projectId: string;
   reportingOrganizationId: string;
   reportMonth: string;
-  status: "submitted" | "withdrawn" | "voided";
+  status: "draft" | "submitted" | "withdrawn" | "voided";
   revision: number;
   progressSummary: string;
   projectTypeId?: string;
@@ -1398,6 +1412,7 @@ export function MonthlyReportsPage() {
     queryFn: () =>
       api<{
         canConfigure: boolean;
+        canReview: boolean;
         canSubmit: boolean;
         organizationIds: string[];
       }>("/api/monthly-reports/capabilities"),
@@ -1407,10 +1422,10 @@ export function MonthlyReportsPage() {
     queryFn: () => api<ReportConfig>("/api/report-config"),
   });
   const projects = useQuery({
-    queryKey: ["monthly-report-projects"],
+    queryKey: ["monthly-report-projects", month],
     queryFn: () =>
       api<Array<Project & { responsibleOrganization: Organization }>>(
-        "/api/monthly-reports/projects",
+        `/api/monthly-reports/projects?month=${month}`,
       ),
   });
   const [year, number] = month.split("-");
@@ -1446,16 +1461,21 @@ export function MonthlyReportsPage() {
         departments: Array<{
           id: string;
           name: string;
-          status: "submitted" | "no_field" | "missing";
+          status: "draft" | "submitted" | "rejected" | "confirmed" | "locked" | "missing";
+          reportType: "projects" | "no_projects";
+          returnReason?: string | null;
+          submissionId?: string | null;
           reportCount: number;
           latestSubmittedAt?: string;
         }>;
         reports: MonthlyReport[];
+        period?: { status: "closed" | "open" | "review" | "locked"; deadlineAt?: string | null } | null;
       }>(`/api/monthly-reports/summary?month=${month}`),
   });
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["monthly-reports"] });
     void qc.invalidateQueries({ queryKey: ["monthly-report-summary"] });
+    void qc.invalidateQueries({ queryKey: ["monthly-report-projects"] });
   };
   const openForm = (row?: MonthlyReport) => {
     setEditing(row);
@@ -1509,7 +1529,7 @@ export function MonthlyReportsPage() {
       );
     },
     onSuccess: () => {
-      message.success(editing ? "更正已保存，请重新提交" : "报送已提交");
+      message.success("项目月报草稿已保存；请完成本实体全部项目后统一提交");
       setOpen(false);
       setEditing(undefined);
       refresh();
@@ -1579,13 +1599,15 @@ export function MonthlyReportsPage() {
           color={
             row.status === "submitted"
               ? "green"
+              : row.status === "draft"
+                ? "blue"
               : row.status === "withdrawn"
                 ? "orange"
                 : "default"
           }
         >
           {
-            { submitted: "已提交", withdrawn: "已撤回", voided: "已作废" }[
+            { draft: "草稿", submitted: "已提交", withdrawn: "已撤回", voided: "已作废" }[
               row.status
             ]
           }{" "}
@@ -1624,32 +1646,12 @@ export function MonthlyReportsPage() {
             title: "操作",
             render: (_: unknown, row: MonthlyReport) => (
               <Space wrap>
-                {row.status === "withdrawn" && (
+                {["draft", "withdrawn"].includes(row.status) && (
                   <>
                     <Button size="small" onClick={() => openForm(row)}>
                       编辑
                     </Button>
-                    <Button
-                      size="small"
-                      type="primary"
-                      onClick={async () => {
-                        await api(`/api/monthly-reports/${row.id}/submit`, {
-                          method: "POST",
-                        });
-                        refresh();
-                      }}
-                    >
-                      重新提交
-                    </Button>
                   </>
-                )}
-                {row.status === "submitted" && (
-                  <Button
-                    size="small"
-                    onClick={() => reasonedAction(row, "withdraw")}
-                  >
-                    撤回
-                  </Button>
                 )}
                 <Button
                   size="small"
@@ -1657,7 +1659,7 @@ export function MonthlyReportsPage() {
                 >
                   历史
                 </Button>
-                {capabilities.data?.canConfigure && row.status !== "voided" && (
+                {capabilities.data?.canReview && row.status !== "voided" && (
                   <Button
                     danger
                     size="small"
@@ -1712,11 +1714,34 @@ export function MonthlyReportsPage() {
         >
           刷新
         </Button>
-        <Button
-          href={`/api/monthly-reports.csv?year=${year}&month=${Number(number)}`}
-        >
-          导出当月汇总 CSV
-        </Button>
+        {capabilities.data?.canReview && (
+          <Button href={`/api/monthly-reports.xlsx?month=${month}`}>
+            导出集团月报 Excel
+          </Button>
+        )}
+        {capabilities.data?.canConfigure && (
+          <>
+            <Select
+              style={{ width: 150 }}
+              value={summary.data?.period?.status ?? "closed"}
+              options={[
+                { value: "closed", label: "未开放" },
+                { value: "open", label: "开放填报" },
+                { value: "review", label: "复核中" },
+                { value: "locked", label: "已锁定" },
+              ]}
+              onChange={async (status) => {
+                try {
+                  await api(`/api/reporting-periods/${month}`, json("PUT", { status }));
+                  message.success("月份状态已更新");
+                  refresh();
+                } catch (error) {
+                  message.error((error as Error).message);
+                }
+              }}
+            />
+          </>
+        )}
       </Space>
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {statCards.map(([label, value]) => (
@@ -1736,7 +1761,7 @@ export function MonthlyReportsPage() {
           >
             全部
           </Button>
-          {[...["submitted", "no_field", "missing"]].map((status) => (
+          {[...["draft", "submitted", "rejected", "confirmed", "locked", "missing"]].map((status) => (
             <Button
               key={status}
               size="small"
@@ -1746,8 +1771,11 @@ export function MonthlyReportsPage() {
               {
                 (
                   {
-                    submitted: "已报送",
-                    no_field: "已确认无野外",
+                    draft: "草稿中",
+                    submitted: "待复核",
+                    rejected: "已退回",
+                    confirmed: "已确认",
+                    locked: "已锁定",
                     missing: "未报送",
                   } as Record<string, string>
                 )[status]
@@ -1765,19 +1793,34 @@ export function MonthlyReportsPage() {
                 <Tag
                   key={row.id}
                   color={
-                    row.status === "submitted"
+                    row.status === "confirmed" || row.status === "locked"
                       ? "green"
-                      : row.status === "no_field"
+                      : row.status === "submitted"
                         ? "blue"
-                        : "red"
+                        : row.status === "rejected" || row.status === "missing"
+                          ? "red"
+                          : "orange"
                   }
                 >
                   {row.name} ·{" "}
-                  {row.status === "submitted"
-                    ? `已报送 ${row.reportCount}`
-                    : row.status === "no_field"
-                      ? "无野外项目"
-                      : "未报送"}
+                  {{ draft: "草稿中", submitted: "待复核", rejected: "已退回", confirmed: "已确认", locked: "已锁定", missing: "未报送" }[row.status]}
+                  {row.reportType === "no_projects" ? " · 无在建项目" : ` · ${row.reportCount} 个项目`}
+                  {row.returnReason ? ` · ${row.returnReason}` : ""}
+                  {capabilities.data?.canReview && row.status === "submitted" && row.submissionId && (
+                    <Space size={4} style={{ marginLeft: 8 }}>
+                      <Button size="small" type="link" onClick={async () => {
+                        await api(`/api/monthly-reports/submissions/${row.submissionId}/review`, json("POST", { action: "confirm" }));
+                        message.success("已确认"); refresh();
+                      }}>确认</Button>
+                      <Button size="small" danger type="link" onClick={() => {
+                        let reason = "";
+                        Modal.confirm({ title: `退回 ${row.name} 的月报？`, content: <Input.TextArea rows={3} placeholder="填写退回原因" onChange={(event) => { reason = event.target.value; }} />, onOk: async () => {
+                          await api(`/api/monthly-reports/submissions/${row.submissionId}/review`, json("POST", { action: "reject", reason }));
+                          message.success("已退回"); refresh();
+                        } });
+                      }}>退回</Button>
+                    </Space>
+                  )}
                 </Tag>
               ))}
           </Space>
@@ -1825,9 +1868,9 @@ export function MonthlyReportsPage() {
       {!allMonths && capabilities.data?.canSubmit && noFieldOrganizationId && (
         <Alert
           showIcon
-          type="info"
+          type={summary.data?.period?.status === "open" || summary.data?.period?.status === "review" ? "info" : "warning"}
           style={{ marginBottom: 16 }}
-          message="本月没有野外施工项目？"
+          message={`${month} 部门统一提交`}
           description={
             <Space wrap>
               <Select
@@ -1841,37 +1884,57 @@ export function MonthlyReportsPage() {
                   .map((org) => ({ value: org.id, label: org.name }))}
               />
               <Button
+                type="primary"
                 onClick={() =>
                   Modal.confirm({
-                    title: `确认 ${month} 无野外施工项目？`,
+                    title: `提交 ${month} 全部项目月报？`,
                     onOk: async () => {
-                      await api(
-                        "/api/monthly-reports/no-field",
-                        json("PUT", {
-                          organizationId: noFieldOrganizationId,
-                          month,
-                        }),
-                      );
-                      message.success("已确认");
-                      refresh();
+                      try {
+                        await api(
+                          "/api/monthly-reports/submissions",
+                          json("POST", {
+                            organizationId: noFieldOrganizationId,
+                            month,
+                            reportType: "projects",
+                          }),
+                        );
+                        message.success("已统一提交，等待复核");
+                        refresh();
+                      } catch (error) {
+                        message.error((error as Error).message);
+                      }
                     },
                   })
                 }
               >
-                确认无野外项目
+                提交本实体全部项目月报
               </Button>
               <Button
-                onClick={async () => {
-                  await api(
-                    `/api/monthly-reports/no-field?organizationId=${noFieldOrganizationId}&month=${month}`,
-                    { method: "DELETE" },
-                  );
-                  message.success("确认已撤销");
-                  refresh();
-                }}
+                onClick={() =>
+                  Modal.confirm({
+                    title: `确认 ${month} 无在建或暂停项目？`,
+                    onOk: async () => {
+                      try {
+                        await api(
+                          "/api/monthly-reports/submissions",
+                          json("POST", {
+                          organizationId: noFieldOrganizationId,
+                          month,
+                            reportType: "no_projects",
+                          }),
+                        );
+                        message.success("无项目月报已提交，等待复核");
+                        refresh();
+                      } catch (error) {
+                        message.error((error as Error).message);
+                      }
+                    },
+                  })
+                }
               >
-                撤销确认
+                本月无在建项目
               </Button>
+              <Typography.Text type="secondary">部门统一提交后不能自行撤回；需要修改时由管理员退回。</Typography.Text>
             </Space>
           }
         />
@@ -2125,7 +2188,7 @@ export function MonthlyReportsPage() {
       <Space className="page-title" wrap>
         <Typography.Title level={3}>野外施工项目报送</Typography.Title>
         <Typography.Text type="secondary">
-          填写即提交，无草稿、无审核
+          项目逐项保存草稿，经营实体核对完整后统一提交，管理员复核确认并锁定月份
         </Typography.Text>
       </Space>
       <Tabs
@@ -2168,6 +2231,16 @@ export function MonthlyReportsPage() {
                   disabled={!!editing}
                   showSearch
                   optionFilterProp="label"
+                  onChange={(projectId) => {
+                    const selected = (projects.data ?? []).find((row) => row.id === projectId);
+                    if (selected) form.setFieldsValue({
+                      constructionLocation: selected.location ?? undefined,
+                      contractAmount: selected.contractAmount ?? 0,
+                      projectManager: selected.managerName ?? undefined,
+                      contactInfo: selected.managerPhone ?? undefined,
+                      ...(selected.previousDefaults ?? {}),
+                    });
+                  }}
                   options={(projects.data ?? [])
                     .filter((row) => row.status !== "ended")
                     .map((row) => ({
@@ -2373,7 +2446,7 @@ export function MonthlyReportsPage() {
             )}
           </Row>
           <Button type="primary" htmlType="submit" loading={save.isPending}>
-            提交报送
+            保存项目月报草稿
           </Button>
         </Form>
       </Modal>

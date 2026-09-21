@@ -16,7 +16,7 @@ assert.equal(selectReceivablesFinanceOrganization([]), null);
 assert.equal(selectReceivablesFinanceOrganization([{ id: "a", type: "department" }, { id: "b", type: "department" }]), null);
 assert.equal(receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: "active" }), "existing");
 assert.equal(receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: "pending" }), "existing");
-assert.equal(receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: null }), "create_pending");
+assert.equal(receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: null }), "person_only");
 assert.throws(() => receivablesGrantSubjectDisposition({ personType: "employee", personStatus: "active", accountStatus: "disabled" }), { code: "RECEIVABLES_GRANT_SUBJECT_INACTIVE", statusCode: 409 });
 assert.throws(() => receivablesGrantSubjectDisposition({ personType: "contractor", personStatus: "active", accountStatus: null }), { code: "RECEIVABLES_GRANT_SUBJECT_INACTIVE", statusCode: 409 });
 

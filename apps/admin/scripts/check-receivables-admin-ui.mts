@@ -113,7 +113,9 @@ assert.doesNotMatch(adminSource, /scroll=\{\{\s*x:\s*760\s*\}\}/, "grant table d
 assert.doesNotMatch(adminSource, /fixed:\s*["']right["']/, "grant actions are not pinned into a forced overflow table");
 assert.match(adminSource, /receivables-grant-workbench/, "grants use a searchable master-detail workspace instead of a horizontal table");
 assert.match(adminSource, /receivables-permission-matrix/, "grant details expose business capabilities without widening the directory");
-assert.match(adminSource, /row\.account\.person\?\.name/, "grant list shows the employee name instead of only the account id");
+assert.match(adminSource, /row\.person\.name/, "grant list is keyed by the employee instead of the login account");
+assert.match(adminSource, /personId:\s*values\.personId/, "grant creation submits the person id as the authorization subject");
+assert.doesNotMatch(adminSource, /row\.account\.person\?\.name/, "grant UI does not traverse through the account to identify the employee");
 assert.doesNotMatch(pageSource, /defaultReceivablesDashboardPreference\.find\([^\n]+\)!/, "optional cards have a real catalog fallback size");
 assert.match(transfersSource, /openingBalanceDate:\s*openingBalanceDate\s*\|\|\s*undefined/, "final apply sends the date selected after preview");
 assert.match(transfersSource, /最终应用前填写/, "the preview explains when the pending date is required");

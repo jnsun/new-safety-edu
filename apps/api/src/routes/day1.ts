@@ -14,7 +14,7 @@ import { maskPhone, nationalIdError } from "../person-import-core.js";
 import { createPerson, maskPerson, personSafeSelect } from "../people.js";
 import { issueSensitiveToken, issueSession, rotateRefreshToken, verifySensitiveToken, type Principal } from "../auth.js";
 import { autoDispatchInTransaction } from "./day2.js";
-import { activatePendingRoles, assertAccountMergeCandidate, canGrantScopedRole, canJoinProject, canManagePersonStatus, disablePerson, grantRole, reactivatePerson, requestAccountMerge, revokeRole, setPrimaryOrganization } from "../identity.js";
+import { activatePendingRoles, assertAccountMergeCandidate, canGrantScopedRole, canJoinProject, canManagePersonStatus, disablePerson, grantRole, reactivatePerson, requestAccountMerge, revokeRole, roleRequiresPrimaryOrganizationMembership, setPrimaryOrganization } from "../identity.js";
 import { accountDeletionBlockers, assertAccountStatusChange, normalizeUsername } from "../account-lifecycle.js";
 import { accountStatusAfterLoginMethodChange, assertLoginMethodCanBeRemoved } from "../session-login-policy.js";
 import { assertPersonMergeCandidate, requestPersonMerge } from "../person-merge.js";
@@ -812,7 +812,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     if (target.status !== "active" || target.type !== "employee") throw Object.assign(new Error("管理角色只能授予在用正式员工"), { statusCode: 409, code: "ROLE_TARGET_INVALID" });
     if (input.role === "company_admin" && (!target.account || target.account.status !== "active")) throw Object.assign(new Error("公司管理员必须先激活账号"), { statusCode: 409, code: "COMPANY_ADMIN_ACCOUNT_REQUIRED" });
     if (input.role === "company_admin" && target.account?.id === principal.accountId) throw Object.assign(new Error("不能给自己授予公司管理员角色"), { statusCode: 409, code: "ROLE_SELF_GRANT_FORBIDDEN" });
-    if (["org_leader", "org_admin", "field_reporter"].includes(input.role) && scopeId && !await prisma.organizationMembership.findFirst({ where: { personId: input.personId, organizationId: scopeId, active: true, primary: true } })) {
+    if (roleRequiresPrimaryOrganizationMembership(input.role) && scopeId && !await prisma.organizationMembership.findFirst({ where: { personId: input.personId, organizationId: scopeId, active: true, primary: true } })) {
       throw Object.assign(new Error("组织管理角色只能授予该组织当前成员"), { statusCode: 409, code: "ROLE_ORGANIZATION_MEMBERSHIP_REQUIRED" });
     }
     if (input.role === "project_admin" && target.organizations[0]?.organization.type !== "business_entity") {

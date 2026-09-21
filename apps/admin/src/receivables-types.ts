@@ -253,12 +253,16 @@ export type ReceivablesGrantCandidate = {
 
 export type ReceivablesGrant = {
   id: string;
-  accountId: string;
+  personId: string;
+  accountId: string | null;
   role: "admin" | "reporter" | "readonly";
   canCreate: boolean;
+  canEditBaseInfo: boolean;
   canExport: boolean;
   canViewAll: boolean;
   canMaintainCollection: boolean;
+  canUploadAttachments: boolean;
+  editableFields: string[];
   active: boolean;
   revision: number;
   grantedAt: string;
@@ -269,13 +273,10 @@ export type ReceivablesGrant = {
     canRead: boolean;
     canWrite: boolean;
   }>;
-  account: {
-    username: string | null;
-    status: string;
-    person: {
-      name: string;
-      organizations: Array<{ organization: { name: string } }>;
-    } | null;
+  person: {
+    name: string;
+    account: { id: string; username: string | null; status: string } | null;
+    organizations: Array<{ organization: { name: string } }>;
   };
 };
 
@@ -991,9 +992,12 @@ export function normalizeReceivablesGrantDraft(
   role: ReceivablesGrant["role"],
   draft: {
     canCreate: boolean;
+    canEditBaseInfo?: boolean;
     canExport: boolean;
     canViewAll: boolean;
     canMaintainCollection?: boolean;
+    canUploadAttachments?: boolean;
+    editableFields?: string[];
     departments: Array<{
       departmentId: string;
       canRead: boolean;
@@ -1004,16 +1008,22 @@ export function normalizeReceivablesGrantDraft(
   if (role === "admin")
     return {
       canCreate: false,
+      canEditBaseInfo: false,
       canExport: false,
       canViewAll: false,
       canMaintainCollection: false,
+      canUploadAttachments: false,
+      editableFields: [],
       departments: [],
     };
   return {
     canCreate: role === "reporter" && draft.canCreate,
+    canEditBaseInfo: role === "reporter" && !!draft.canEditBaseInfo,
     canExport: draft.canExport,
     canViewAll: draft.canViewAll,
     canMaintainCollection: role === "reporter" && !!draft.canMaintainCollection,
+    canUploadAttachments: role === "reporter" && !!draft.canUploadAttachments,
+    editableFields: role === "reporter" ? [...new Set(draft.editableFields ?? [])] : [],
     departments: normalizeReceivablesGrantScopes(role, draft.departments),
   };
 }

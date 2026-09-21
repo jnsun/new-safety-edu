@@ -111,9 +111,9 @@ async function notifyAnomaly(tx: Tx, ledger: Ledger, beforeAnomaly: string | nul
   if (!setting?.financeOrganizationId) return;
   const [leaders, administrators] = await Promise.all([
     tx.roleAssignment.findMany({ where: { role: "org_leader", scopeType: "organization", scopeId: setting.financeOrganizationId, active: true, activationPending: false, personId: { not: null }, person: { status: "active", account: { status: "active" } } }, select: { personId: true } }),
-    tx.receivableAccessGrant.findMany({ where: { role: "admin", active: true, revokedAt: null, account: { status: "active", person: { is: { status: "active" } } } }, select: { account: { select: { personId: true } } } }),
+    tx.receivableAccessGrant.findMany({ where: { role: "admin", active: true, revokedAt: null, person: { status: "active", account: { status: "active" } } }, select: { personId: true } }),
   ]);
-  const recipients = [...new Set([...leaders.map((row) => row.personId), ...administrators.map((row) => row.account.personId)].filter((id): id is string => !!id))];
+  const recipients = [...new Set([...leaders.map((row) => row.personId), ...administrators.map((row) => row.personId)].filter((id): id is string => !!id))];
   const base = `receivables-anomaly:${ledger.id}:${afterAnomaly}:${ledger.revision + 1}`;
   if (recipients.length) await tx.notification.createMany({ data: recipients.map((personId) => ({ personId, title: "应收账款待核对", body: `合同台账出现${afterAnomaly === "over_received" ? "超收" : "核销待调减"}，请核对处理。`, dedupeKey: `${base}:${personId}` })), skipDuplicates: true });
 }

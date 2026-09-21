@@ -183,6 +183,26 @@ enum MonthlyReportStatus {
   voided
 }
 
+enum DepartmentReportType {
+  projects
+  no_projects
+}
+
+enum DepartmentSubmissionStatus {
+  draft
+  submitted
+  rejected
+  confirmed
+  locked
+}
+
+enum ReportingPeriodStatus {
+  closed
+  open
+  review
+  locked
+}
+
 enum ReportProjectStatus {
   active
   completed
@@ -368,6 +388,7 @@ model Person {
   coursewarePublishGrants CoursewarePublishGrant[]
   photoHistory            PersonPhotoHistory[]
   challengeAttempts       ChallengeAttempt[]
+  receivableGrants        ReceivableAccessGrant[]      @relation("ReceivableGrantPerson")
   challengePointLedgers   ChallengePointLedger[]
   createdAt               DateTime                 @default(now()) @map("created_at")
   updatedAt               DateTime                 @updatedAt @map("updated_at")
@@ -773,7 +794,7 @@ model ProjectMonthlyReport {
   reportingOrganizationId   String                           @map("reporting_organization_id") @db.Uuid
   reportingOrganization     Organization                     @relation(fields: [reportingOrganizationId], references: [id])
   reportMonth               DateTime                         @map("report_month") @db.Date
-  status                    MonthlyReportStatus              @default(submitted)
+  status                    MonthlyReportStatus              @default(draft)
   progressSummary           String                           @map("progress_summary")
   projectTypeId             String?                          @map("project_type_id") @db.Uuid
   projectType               ReportProjectType?               @relation(fields: [projectTypeId], references: [id], onDelete: Restrict)
@@ -883,8 +904,19 @@ model DepartmentMonthStatus {
   reportingYear   Int          @map("reporting_year")
   reportingMonth  Int          @map("reporting_month")
   noFieldProjects Boolean      @default(true) @map("no_field_projects")
-  confirmedAt     DateTime     @default(now()) @map("confirmed_at")
-  confirmedBy     String       @map("confirmed_by") @db.Uuid
+  reportType      DepartmentReportType       @default(projects) @map("report_type")
+  status          DepartmentSubmissionStatus @default(draft)
+  expectedProjectCount  Int    @default(0) @map("expected_project_count")
+  completedProjectCount Int    @default(0) @map("completed_project_count")
+  submittedAt     DateTime?    @map("submitted_at")
+  submittedBy     String?      @map("submitted_by") @db.Uuid
+  reviewedAt      DateTime?    @map("reviewed_at")
+  reviewedBy      String?      @map("reviewed_by") @db.Uuid
+  returnReason    String?      @map("return_reason") @db.VarChar(1000)
+  lockedAt        DateTime?    @map("locked_at")
+  lockedBy        String?      @map("locked_by") @db.Uuid
+  confirmedAt     DateTime?    @map("confirmed_at")
+  confirmedBy     String?      @map("confirmed_by") @db.Uuid
   note            String?      @db.VarChar(1000)
   active          Boolean      @default(true)
   invalidatedAt   DateTime?    @map("invalidated_at")
@@ -906,6 +938,20 @@ model ReportSetting {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("report_settings")
+}
+
+model ReportingPeriod {
+  id           String                @id @default(uuid()) @db.Uuid
+  reportMonth  DateTime              @unique @map("report_month") @db.Date
+  deadlineAt   DateTime?             @map("deadline_at")
+  status       ReportingPeriodStatus @default(closed)
+  reopenReason String?               @map("reopen_reason") @db.VarChar(500)
+  updatedBy    String?               @map("updated_by") @db.Uuid
+  createdAt    DateTime              @default(now()) @map("created_at")
+  updatedAt    DateTime              @updatedAt @map("updated_at")
+
+  @@index([status, reportMonth])
+  @@map("reporting_periods")
 }
 
 model PhoneVerificationCode {
@@ -1521,6 +1567,7 @@ model ReceivableSetting {
   financeOrganization      Organization? @relation(fields: [financeOrganizationId], references: [id], onDelete: Restrict)
   configurationConfirmedAt DateTime?     @map("configuration_confirmed_at")
   configurationConfirmedBy String?       @map("configuration_confirmed_by") @db.Uuid
+  reporterEditableFields   String[]      @default([]) @map("reporter_editable_fields")
   configurationConfirmer   Account?      @relation("ReceivableConfigurationConfirmer", fields: [configurationConfirmedBy], references: [id], onDelete: Restrict)
   createdAt                DateTime      @default(now()) @map("created_at")
   updatedAt                DateTime      @updatedAt @map("updated_at")
@@ -1551,13 +1598,18 @@ model ReceivableDepartment {
 
 model ReceivableAccessGrant {
   id                    String                      @id @default(uuid()) @db.Uuid
-  accountId             String                      @map("account_id") @db.Uuid
-  account               Account                     @relation("ReceivableGrantAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  personId              String                      @map("person_id") @db.Uuid
+  person                Person                      @relation("ReceivableGrantPerson", fields: [personId], references: [id], onDelete: Restrict)
+  accountId             String?                     @map("account_id") @db.Uuid
+  account               Account?                    @relation("ReceivableGrantAccount", fields: [accountId], references: [id], onDelete: Restrict)
   role                  ReceivableGrantRole
   canCreate             Boolean                     @default(false) @map("can_create")
+  canEditBaseInfo       Boolean                     @default(false) @map("can_edit_base_info")
   canExport             Boolean                     @default(false) @map("can_export")
   canViewAll            Boolean                     @default(false) @map("can_view_all")
   canMaintainCollection Boolean                     @default(false) @map("can_maintain_collection")
+  canUploadAttachments  Boolean                     @default(false) @map("can_upload_attachments")
+  editableFields        String[]                    @default([]) @map("editable_fields")
   active                Boolean                     @default(true)
   revision              Int                         @default(1)
   grantedBy             String                      @map("granted_by") @db.Uuid
@@ -1571,6 +1623,7 @@ model ReceivableAccessGrant {
   createdAt             DateTime                    @default(now()) @map("created_at")
   updatedAt             DateTime                    @updatedAt @map("updated_at")
 
+  @@index([personId, active])
   @@index([accountId, active])
   @@index([role, active])
   @@map("receivable_access_grants")

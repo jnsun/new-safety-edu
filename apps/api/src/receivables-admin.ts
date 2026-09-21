@@ -7,7 +7,7 @@ import { requireReceivables, resolveReceivablesAccess, type ReceivablesAction } 
 import { writeCriticalAudit } from "./transaction-audit.js";
 
 type GrantScope = { departmentId: string; canRead: boolean; canWrite: boolean };
-type GrantFields = { role: ReceivableGrantRole; canCreate: boolean; canExport: boolean; canViewAll: boolean; canMaintainCollection: boolean; departments: GrantScope[] };
+type GrantFields = { role: ReceivableGrantRole; canCreate: boolean; canEditBaseInfo: boolean; canExport: boolean; canViewAll: boolean; canMaintainCollection: boolean; canUploadAttachments: boolean; editableFields: string[]; departments: GrantScope[] };
 type MigrationInput =
   | { mode: "preview"; targetId: string }
   | { mode: "apply"; targetId: string; token: string; reason: string; confirm: true };
@@ -48,11 +48,11 @@ export function assertReceivablesOwnerAction(role: "owner" | ReceivableGrantRole
   if (role !== "owner") throw httpError(403, "RECEIVABLES_OWNER_REQUIRED", "只有应收账款负责人可以执行历史口径迁移");
 }
 
-export function receivablesGrantSubjectDisposition(input: { personType: string; personStatus: string; accountStatus: string | null }): "existing" | "create_pending" {
+export function receivablesGrantSubjectDisposition(input: { personType: string; personStatus: string; accountStatus: string | null }): "existing" | "person_only" {
   if (input.personType !== "employee" || input.personStatus !== "active" || (input.accountStatus !== null && input.accountStatus !== "pending" && input.accountStatus !== "active")) {
     throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是有效正式员工，且账号不得停用或合并");
   }
-  return input.accountStatus === null ? "create_pending" : "existing";
+  return input.accountStatus === null ? "person_only" : "existing";
 }
 
 async function runMigrationApply<T>(apply: () => Promise<T>) {
@@ -65,10 +65,10 @@ async function runMigrationApply<T>(apply: () => Promise<T>) {
 }
 
 const grantSelect = {
-  id: true, accountId: true, role: true, canCreate: true, canExport: true, canViewAll: true, canMaintainCollection: true, active: true, revision: true,
+  id: true, personId: true, accountId: true, role: true, canCreate: true, canEditBaseInfo: true, canExport: true, canViewAll: true, canMaintainCollection: true, canUploadAttachments: true, editableFields: true, active: true, revision: true,
   grantedBy: true, grantedAt: true, revokedAt: true, revokedBy: true, revokeReason: true,
   departments: { select: { financeDepartmentId: true, canRead: true, canWrite: true }, orderBy: { financeDepartmentId: "asc" as const } },
-  account: { select: { username: true, status: true, person: { select: { name: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { name: true } } } } } } } },
+  person: { select: { name: true, account: { select: { id: true, username: true, status: true } }, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { name: true } } } } } },
 } satisfies Prisma.ReceivableAccessGrantSelect;
 const departmentSelect = { id: true, name: true, code: true, sortOrder: true, showReceivables: true, active: true, revision: true, deactivatedAt: true, deactivatedBy: true, deactivateReason: true } satisfies Prisma.ReceivableDepartmentSelect;
 const departmentSummarySelect = {
@@ -86,6 +86,24 @@ type DepartmentRow = Prisma.ReceivableDepartmentGetPayload<{ select: typeof depa
 type DictionaryRow = Prisma.ReceivableDictionaryOptionGetPayload<{ select: typeof dictionarySelect }>;
 type CandidateRow = { personId: string; accountId: string | null; accountStatus: "pending" | "active" | null; name: string; username: string | null; hasActiveGrant: boolean };
 export type ReceivablesAdminResult = CandidateRow[] | GrantRow | GrantRow[] | DepartmentRow | DepartmentRow[] | DictionaryRow | DictionaryRow[] | { impactCount: number } | { impactCount: number; token: string; expiresAt: string };
+
+async function notifyFinanceGrantChange(tx: Prisma.TransactionClient, input: { personId: string; accountId: string | null; grantId: string; revision: number; action: "create" | "update" | "revoke" }) {
+  if (input.accountId) {
+    await tx.account.update({ where: { id: input.accountId }, data: { sessionVersion: { increment: 1 } } });
+    await tx.refreshSession.updateMany({ where: { accountId: input.accountId, revokedAt: null }, data: { revokedAt: new Date() } });
+  }
+  const setting = await tx.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true } });
+  const owner = setting?.financeOrganizationId ? await tx.roleAssignment.findFirst({
+    where: { role: "org_leader", scopeType: "organization", scopeId: setting.financeOrganizationId, active: true, activationPending: false, personId: { not: null } },
+    select: { personId: true },
+  }) : null;
+  const recipientIds = [...new Set([input.personId, owner?.personId].filter((value): value is string => !!value))];
+  const labels = { create: "已授予", update: "已调整", revoke: "已撤销" } as const;
+  if (recipientIds.length) await tx.notification.createMany({
+    data: recipientIds.map((personId) => ({ personId, title: "财务权限变更", body: `一项应收账款权限${labels[input.action]}，请重新登录或刷新后查看。`, dedupeKey: `receivables-grant:${input.action}:${input.grantId}:${input.revision}:${personId}` })),
+    skipDuplicates: true,
+  });
+}
 
 const migrationTokenPayload = z.object({
   version: z.literal(2),
@@ -137,8 +155,10 @@ function validateGrantPolicy(input: GrantFields) {
   const ids = input.departments.map(({ departmentId }) => departmentId);
   if (new Set(ids).size !== ids.length) throw httpError(400, "RECEIVABLES_GRANT_SCOPE_DUPLICATE", "财务归属部门范围不能重复");
   if (input.departments.some(({ canRead, canWrite }) => canWrite && !canRead)) throw httpError(400, "RECEIVABLES_GRANT_SCOPE_INVALID", "写权限必须同时包含读权限");
-  if (input.role === "admin" && (input.canCreate || input.canExport || input.canViewAll || input.canMaintainCollection || input.departments.length > 0)) throw httpError(400, "RECEIVABLES_ADMIN_FLAGS_INVALID", "财务管理员使用固定模块权限，不能提交范围或能力标志");
-  if (input.role === "readonly" && (input.canCreate || input.canMaintainCollection || input.departments.some(({ canWrite }) => canWrite))) throw httpError(400, "RECEIVABLES_READONLY_FLAGS_INVALID", "财务只读授权不能包含新增或写权限");
+  if (input.role === "admin" && (input.canCreate || input.canEditBaseInfo || input.canExport || input.canViewAll || input.canMaintainCollection || input.canUploadAttachments || input.editableFields.length > 0 || input.departments.length > 0)) throw httpError(400, "RECEIVABLES_ADMIN_FLAGS_INVALID", "财务管理员使用固定模块权限，不能提交范围或能力标志");
+  if (input.role === "readonly" && (input.canCreate || input.canEditBaseInfo || input.canMaintainCollection || input.canUploadAttachments || input.editableFields.length > 0 || input.departments.some(({ canWrite }) => canWrite))) throw httpError(400, "RECEIVABLES_READONLY_FLAGS_INVALID", "财务只读授权不能包含写权限");
+  const protectedFields = new Set(["contractAmount", "finalAmount", "writeoffAmount", "invoicedAmount", "receivedAmount", "balance"]);
+  if (input.editableFields.some((field) => protectedFields.has(field))) throw httpError(400, "RECEIVABLES_PROTECTED_FIELD", "金额、开票、回款和核销字段不能授予报账员");
 }
 
 async function requireAction(context: ReceivablesAdminContext, action: ReceivablesAction, tx?: Prisma.TransactionClient) {
@@ -160,17 +180,24 @@ async function validateGrantDepartments(tx: Prisma.TransactionClient, input: Gra
   if (count !== ids.length) throw httpError(409, "RECEIVABLES_DEPARTMENT_INACTIVE", "授权范围包含不存在或已停用的财务归属部门");
 }
 
-async function grantAccountForPerson(tx: Prisma.TransactionClient, personId: string) {
+async function grantPerson(tx: Prisma.TransactionClient, personId: string) {
   const person = await tx.person.findUnique({ where: { id: personId }, select: { id: true, type: true, status: true, account: { select: { id: true, status: true } } } });
   if (!person) throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是有效正式员工，且账号不得停用或合并");
-  const disposition = receivablesGrantSubjectDisposition({ personType: person.type, personStatus: person.status, accountStatus: person.account?.status ?? null });
-  return disposition === "existing" ? person.account! : tx.account.upsert({ where: { personId }, update: {}, create: { personId, status: "pending" }, select: { id: true, status: true } });
+  receivablesGrantSubjectDisposition({ personType: person.type, personStatus: person.status, accountStatus: person.account?.status ?? null });
+  return person;
 }
 
-async function assertGrantAccountEligible(tx: Prisma.TransactionClient, accountId: string) {
-  const account = await tx.account.findUnique({ where: { id: accountId }, select: { status: true, person: { select: { type: true, status: true } } } });
-  if (!account?.person) throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是有效正式员工，且账号不得停用或合并");
-  receivablesGrantSubjectDisposition({ personType: account.person.type, personStatus: account.person.status, accountStatus: account.status });
+async function validateReporterFieldPolicy(tx: Prisma.TransactionClient, input: GrantFields) {
+  if (input.role !== "reporter") return;
+  const setting = await tx.receivableSetting.findUnique({ where: { id: 1 }, select: { reporterEditableFields: true } });
+  const allowed = new Set(setting?.reporterEditableFields ?? []);
+  if (input.editableFields.some((field) => !allowed.has(field))) throw httpError(409, "RECEIVABLES_REPORTER_FIELD_NOT_GRANTABLE", "个人可编辑字段超出负责人维护的全局白名单");
+}
+
+async function assertGrantPersonEligible(tx: Prisma.TransactionClient, personId: string) {
+  const person = await tx.person.findUnique({ where: { id: personId }, select: { type: true, status: true, account: { select: { status: true } } } });
+  if (!person) throw httpError(409, "RECEIVABLES_GRANT_SUBJECT_INACTIVE", "财务授权对象必须是有效正式员工");
+  receivablesGrantSubjectDisposition({ personType: person.type, personStatus: person.status, accountStatus: person.account?.status ?? null });
 }
 
 type DictionaryMigration = {
@@ -229,12 +256,14 @@ async function createGrant(context: ReceivablesAdminContext, input: Extract<Rece
   return prisma.$transaction(async (tx) => {
     const access = await requireAction(context, "manageAccess", tx);
     assertReceivablesGrantManagement(access.role, null, input.role);
-    const account = await grantAccountForPerson(tx, input.personId);
+    const person = await grantPerson(tx, input.personId);
     await validateGrantDepartments(tx, input);
+    await validateReporterFieldPolicy(tx, input);
     const created = await tx.receivableAccessGrant.create({ data: {
-      accountId: account.id, role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, grantedBy: context.principal.accountId,
+      personId: person.id, accountId: person.account?.id ?? null, role: input.role, canCreate: input.canCreate, canEditBaseInfo: input.canEditBaseInfo, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, canUploadAttachments: input.canUploadAttachments, editableFields: input.editableFields, grantedBy: context.principal.accountId,
       departments: { create: input.departments.map(({ departmentId, canRead, canWrite }) => ({ financeDepartmentId: departmentId, canRead, canWrite })) },
     }, select: grantSelect });
+    await notifyFinanceGrantChange(tx, { personId: created.personId, accountId: created.accountId, grantId: created.id, revision: created.revision, action: "create" });
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.grant.create", objectType: "receivable_access_grant", objectId: created.id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata(null, created, 1) });
     return created;
   });
@@ -253,16 +282,19 @@ async function updateGrant(context: ReceivablesAdminContext, id: string, input: 
       const result = await tx.receivableAccessGrant.updateMany({ where: { id, revision: input.revision, active: true, revokedAt: null }, data: { active: false, revision: { increment: 1 }, revokedAt: new Date(), revokedBy: context.principal.accountId, revokeReason: input.reason } });
       if (result.count !== 1) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务授权已被其他操作更新");
       const after = await tx.receivableAccessGrant.findUniqueOrThrow({ where: { id }, select: grantSelect });
+      await notifyFinanceGrantChange(tx, { personId: after.personId, accountId: after.accountId, grantId: after.id, revision: after.revision, action: "revoke" });
       await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.grant.revoke", objectType: "receivable_access_grant", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata(before, after, 1) });
       return after;
     }
-    await assertGrantAccountEligible(tx, before.accountId);
+    await assertGrantPersonEligible(tx, before.personId);
     await validateGrantDepartments(tx, input);
-    const result = await tx.receivableAccessGrant.updateMany({ where: { id, revision: input.revision, active: true, revokedAt: null }, data: { role: input.role, canCreate: input.canCreate, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, revision: { increment: 1 } } });
+    await validateReporterFieldPolicy(tx, input);
+    const result = await tx.receivableAccessGrant.updateMany({ where: { id, revision: input.revision, active: true, revokedAt: null }, data: { role: input.role, canCreate: input.canCreate, canEditBaseInfo: input.canEditBaseInfo, canExport: input.canExport, canViewAll: input.canViewAll, canMaintainCollection: input.canMaintainCollection, canUploadAttachments: input.canUploadAttachments, editableFields: input.editableFields, revision: { increment: 1 } } });
     if (result.count !== 1) throw httpError(409, "RECEIVABLES_REVISION_CONFLICT", "财务授权已被其他操作更新");
     await tx.receivableGrantDepartment.deleteMany({ where: { grantId: id } });
     if (input.departments.length) await tx.receivableGrantDepartment.createMany({ data: input.departments.map(({ departmentId, canRead, canWrite }) => ({ grantId: id, financeDepartmentId: departmentId, canRead, canWrite })) });
     const after = await tx.receivableAccessGrant.findUniqueOrThrow({ where: { id }, select: grantSelect });
+    await notifyFinanceGrantChange(tx, { personId: after.personId, accountId: after.accountId, grantId: after.id, revision: after.revision, action: "update" });
     await writeCriticalAudit(tx, { actorId: context.principal.accountId, action: "receivables.admin.grant.update", objectType: "receivable_access_grant", objectId: id, requestId: context.requestId, actorRole: access.role, actorScopeType: "receivables", reason: input.reason, metadata: auditMetadata(before, after, 1) });
     return after;
   });
@@ -526,10 +558,10 @@ export async function administerReceivables(context: ReceivablesAdminContext, op
             { OR: [{ name: { contains: operation.search, mode: "insensitive" } }, { account: { is: { username: { contains: operation.search, mode: "insensitive" } } } }] },
           ],
         },
-        select: { id: true, name: true, account: { select: { id: true, username: true, status: true, receivableGrants: { where: { active: true, revokedAt: null }, select: { id: true }, take: 1 } } } },
+        select: { id: true, name: true, receivableGrants: { where: { active: true, revokedAt: null }, select: { id: true }, take: 1 }, account: { select: { id: true, username: true, status: true } } },
         orderBy: [{ name: "asc" }, { id: "asc" }], take: 50,
       });
-      return people.map((person) => ({ personId: person.id, accountId: person.account?.id ?? null, accountStatus: person.account?.status === "active" || person.account?.status === "pending" ? person.account.status : null, name: person.name, username: person.account?.username ?? null, hasActiveGrant: (person.account?.receivableGrants.length ?? 0) > 0 }));
+      return people.map((person) => ({ personId: person.id, accountId: person.account?.id ?? null, accountStatus: person.account?.status === "active" || person.account?.status === "pending" ? person.account.status : null, name: person.name, username: person.account?.username ?? null, hasActiveGrant: person.receivableGrants.length > 0 }));
     }
     case "grant.list":
       await requireAction(context, "manageAccess");

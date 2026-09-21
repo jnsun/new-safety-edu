@@ -1,5 +1,7 @@
 # 人员、账号与权限专项审查
 
+> 历史说明：本文记录 2026-09-15 时点的审查和实施判断，其中“账号与权限工作台”、项目管理员、敏感资料导出资格及若干角色边界已被 2026-09-21 完成的统一权限访谈取代。新的目标规则、矩阵、场景和迁移顺序以 [`../../UNIFIED-PERSONNEL-AUTHORIZATION-BASELINE.md`](../../UNIFIED-PERSONNEL-AUTHORIZATION-BASELINE.md) 及当前 `CONTEXT.md` 为准；本文的“已完成”描述不得直接作为当前验收或生产就绪证据。
+
 日期：2026-09-15
 
 审查基线：当前 `main` 工作区、Prisma schema、API、Admin、小程序，以及已写入 `CONTEXT.md` 的逐项确认规则。

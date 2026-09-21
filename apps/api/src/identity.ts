@@ -32,6 +32,10 @@ export function canGrantScopedRole(principal: Principal, target: GrantContext) {
   return false;
 }
 
+export function roleRequiresPrimaryOrganizationMembership(role: RoleName) {
+  return role === "org_admin" || role === "field_reporter";
+}
+
 export function canManagePersonStatus(principal: Principal, activeOrganizationIds: string[]) {
   if (principal.roles.some((item) => item.role === "company_admin")) return true;
   const organizationIds = orgManagerIds(principal);
@@ -129,6 +133,13 @@ export async function grantRole(tx: Tx, input: { personId: string; role: RoleNam
         data: { active: false, endedAt: new Date(), endedBy: input.actorId, endReason: input.reason }
       });
     }
+    const financeSetting = await tx.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true } });
+    if (financeSetting?.financeOrganizationId === input.scopeId) {
+      await tx.receivableAccessGrant.updateMany({
+        where: { personId: input.personId, active: true, revokedAt: null },
+        data: { active: false, revokedAt: new Date(), revokedBy: input.actorId, revokeReason: "成为应收账款负责人，结束原普通财务授权", revision: { increment: 1 } },
+      });
+    }
   }
   const assignment = { ...identity, ...state };
   try {
@@ -162,6 +173,13 @@ export async function activatePendingRoles(tx: Tx, input: { personId: string; ac
         where: { role: "org_leader", scopeType: "organization", scopeId: role.scopeId, active: true, id: { not: role.id } },
         data: { active: false, endedAt: new Date(), endedBy: input.actorId, endReason: "新负责人账号已激活" }
       });
+      const financeSetting = await tx.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true } });
+      if (financeSetting?.financeOrganizationId === role.scopeId) {
+        await tx.receivableAccessGrant.updateMany({
+          where: { personId: input.personId, active: true, revokedAt: null },
+          data: { active: false, revokedAt: new Date(), revokedBy: input.actorId, revokeReason: "成为应收账款负责人，结束原普通财务授权", revision: { increment: 1 } },
+        });
+      }
     }
     await tx.roleAssignment.update({ where: { id: role.id }, data: { accountId: input.accountId, active: true, activationPending: false } });
   }
@@ -176,11 +194,11 @@ export async function disablePerson(tx: Tx, input: { personId: string; actorId: 
   if (accountIds.length) {
     await tx.account.updateMany({ where: { id: { in: accountIds } }, data: { status: "disabled", sessionVersion: { increment: 1 } } });
     await tx.refreshSession.updateMany({ where: { accountId: { in: accountIds }, revokedAt: null }, data: { revokedAt: now } });
-    await tx.receivableAccessGrant.updateMany({
-      where: { accountId: { in: accountIds }, active: true, revokedAt: null },
-      data: { active: false, revokedAt: now, revokedBy: input.actorId, revokeReason: input.reason, revision: { increment: 1 } }
-    });
   }
+  await tx.receivableAccessGrant.updateMany({
+    where: { personId: input.personId, active: true, revokedAt: null },
+    data: { active: false, revokedAt: now, revokedBy: input.actorId, revokeReason: input.reason, revision: { increment: 1 } }
+  });
   await tx.roleAssignment.updateMany({
     where: { personId: input.personId, OR: [{ active: true }, { activationPending: true }] },
     data: { active: false, activationPending: false, endedAt: now, endedBy: input.actorId, endReason: input.reason }
@@ -197,14 +215,7 @@ export async function disablePerson(tx: Tx, input: { personId: string; actorId: 
 }
 
 export async function reactivatePerson(tx: Tx, input: { personId: string }) {
-  const now = new Date();
-  const person = await tx.person.update({ where: { id: input.personId }, data: { status: "active" } });
-  const account = await tx.account.findUnique({ where: { personId: input.personId } });
-  if (account) {
-    await tx.refreshSession.updateMany({ where: { accountId: account.id, revokedAt: null }, data: { revokedAt: now } });
-    await tx.account.update({ where: { id: account.id }, data: { status: "active", sessionVersion: { increment: 1 } } });
-  }
-  return person;
+  return tx.person.update({ where: { id: input.personId }, data: { status: "active" } });
 }
 
 async function isEmptyAccount(tx: Tx, accountId: string) {

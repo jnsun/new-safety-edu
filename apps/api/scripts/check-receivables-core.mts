@@ -90,10 +90,15 @@ assert.throws(
   /REPORTER_FIELD_NOT_ALLOWED/,
 );
 assert.doesNotThrow(() => assertLedgerPatchAllowed(
-  { canManageAll: false, canCreateLedger: false, canMaintainCollection: true },
+  { canManageAll: false, canCreateLedger: false, canMaintainCollection: true, editableFields: ["projectStatus", "dunningDate", "latestProgress"] },
   { id: "ledger-1" },
   { projectStatus: "完工", dunningDate: "2026-09-16", latestProgress: "已对账" },
 ));
+assert.throws(() => assertLedgerPatchAllowed(
+  { canManageAll: false, canCreateLedger: false, canMaintainCollection: true, editableFields: ["finalAmount"] },
+  { id: "ledger-1" },
+  { finalAmount: "100" },
+), /REPORTER_FIELD_NOT_ALLOWED/);
 
 assert.throws(() => assertTransition("voided", "update"), /VOIDED_FACT_IMMUTABLE/);
 assert.doesNotThrow(() => assertTransition("active", "update"));

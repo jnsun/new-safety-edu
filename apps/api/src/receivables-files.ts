@@ -150,7 +150,7 @@ async function lockAuthority(tx: Tx, principal: Principal) {
 const writeScope = (access: ReceivablesAccess) => access.canManageAll ? {} : { financeDepartmentId: { in: access.writeDepartmentIds } };
 const auditScope = (access: ReceivablesAccess, departmentId: string) => ({ actorRole: access.role, actorScopeType: access.canManageAll ? "receivables" : "receivable_department", actorScopeId: access.canManageAll ? null : departmentId });
 const requireAttachmentUpload = (access: ReceivablesAccess) => {
-  if (!access.canManageAll && (access.role !== "reporter" || !access.canMaintainCollection)) throw ledgerNotFound();
+  if (!access.canManageAll && (access.role !== "reporter" || !access.canUploadAttachments)) throw ledgerNotFound();
 };
 export async function authorizeReceivableAttachmentUpload(principal: Principal, ledgerId: string) {
   const access = await resolveReceivablesAccess(principal);
