@@ -8,18 +8,13 @@ import { normalizePhone } from "../crypto.js";
 import { assertPasswordAllowed, securityHash, smsRateDecision } from "../auth-security.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 import { changeRequestKey } from "../request-policy.js";
+import { deliverCode, isSmsConfigured } from "../sms-delivery.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 export type VerificationPurpose = "wechat_bind" | "wechat_rebind" | "change_phone" | "password_recovery";
 
 const phoneSchema = z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/));
 const digest = (value: string, env: Env) => createHmac("sha256", env.JWT_SECRET).update(value).digest("hex");
-
-async function deliverCode(phone: string, code: string, purpose: VerificationPurpose, env: Env) {
-  if (!env.SMS_SEND_ENDPOINT || !env.SMS_SEND_TOKEN) throw Object.assign(new Error("短信服务尚未配置"), { statusCode: 503, code: "SMS_NOT_CONFIGURED" });
-  const response = await fetch(env.SMS_SEND_ENDPOINT, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${env.SMS_SEND_TOKEN}` }, body: JSON.stringify({ phone, code, purpose }) });
-  if (!response.ok) throw Object.assign(new Error("短信发送暂时失败"), { statusCode: 502, code: "SMS_DELIVERY_FAILED" });
-}
 
 export async function sendPhoneVerificationCode(phone: string, purpose: VerificationPurpose, source: string, env: Env) {
   const phoneHash = digest(phone, env); const sourceHash = securityHash(source, env.JWT_SECRET); const now = Date.now(); const scope = { OR: [{ phoneHash }, { sourceHash }] };
@@ -46,7 +41,7 @@ export async function verifiedPhoneCode(phone: string, code: string, purpose: Ve
 }
 
 export async function registerPhoneAuthRoutes(app: FastifyInstance, deps: { env: Env; authenticate: Guard }) {
-  app.get("/api/auth/capabilities", async () => ({ data: { smsVerification: Boolean(deps.env.SMS_SEND_ENDPOINT && deps.env.SMS_SEND_TOKEN), wechatLogin: Boolean(deps.env.WECHAT_APP_ID && deps.env.WECHAT_APP_SECRET) } }));
+  app.get("/api/auth/capabilities", async () => ({ data: { smsVerification: isSmsConfigured(deps.env), wechatLogin: Boolean(deps.env.WECHAT_APP_ID && deps.env.WECHAT_APP_SECRET) } }));
   app.post("/api/auth/recovery-request", async (request, reply) => {
     const input = z.object({ name: z.string().trim().min(2).max(80), oldPhone: phoneSchema, organizationId: z.string().uuid().optional(), reason: z.string().trim().min(2).max(500) }).parse(request.body); const phoneHash = digest(input.oldPhone, deps.env); const sourceHash = securityHash(request.ip, deps.env.JWT_SECRET);
     const person = await prisma.person.findFirst({ where: { name: input.name, phone: input.oldPhone, ...(input.organizationId ? { organizations: { some: { organizationId: input.organizationId, active: true } } } : {}) }, select: { id: true, account: { select: { id: true } } } });

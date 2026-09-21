@@ -18,6 +18,11 @@ const schema = z.object({
   WECHAT_SUBSCRIBE_FIELD_BODY: z.string().default("thing2"),
   SMS_SEND_ENDPOINT: z.string().url().optional(),
   SMS_SEND_TOKEN: z.string().min(16).optional(),
+  TENCENTCLOUD_SECRET_ID: z.string().min(1).optional(),
+  TENCENTCLOUD_SECRET_KEY: z.string().min(1).optional(),
+  TENCENT_SMS_SDK_APP_ID: z.string().regex(/^\d+$/).optional(),
+  TENCENT_SMS_SIGN_NAME: z.string().min(1).optional(),
+  TENCENT_SMS_TEMPLATE_ID: z.string().regex(/^\d+$/).optional(),
   WECHAT_WEB_APP_ID: z.string().optional(),
   WECHAT_WEB_APP_SECRET: z.string().optional(),
   WECHAT_WEB_REDIRECT_URI: z.string().url().optional()

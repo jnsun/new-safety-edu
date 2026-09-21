@@ -40,6 +40,7 @@
     "check:training-todo-priority": "tsx scripts/check-training-todo-priority.mts",
     "check:exam-public-attempt": "tsx scripts/check-exam-public-attempt.mts",
     "check:auth-security-policy": "tsx scripts/check-auth-security-policy.mts",
+    "check:tencent-sms": "tsx scripts/check-tencent-sms.mts",
     "check:wechat-identity-policy": "tsx scripts/check-wechat-identity-policy.mts",
     "check:wechat-phone": "tsx scripts/check-wechat-phone.mts",
     "check:web-login-access": "tsx scripts/check-web-login-access.mts",
@@ -93,6 +94,7 @@
     "exceljs": "^4.4.0",
     "fastify": "^5.6.1",
     "jose": "^6.1.0",
+    "tencentcloud-sdk-nodejs-sms": "^4.1.306",
     "unzipper": "0.12.5",
     "zod": "^4.1.11"
   },
