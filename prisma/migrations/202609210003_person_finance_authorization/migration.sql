@@ -7,10 +7,10 @@ ALTER TABLE "receivable_access_grants"
   ADD COLUMN "can_upload_attachments" BOOLEAN NOT NULL DEFAULT false,
   ADD COLUMN "editable_fields" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
 
-UPDATE "receivable_access_grants" AS grant
+UPDATE "receivable_access_grants" AS g
 SET "person_id" = account."person_id"
 FROM "accounts" AS account
-WHERE grant."account_id" = account."id";
+WHERE g."account_id" = account."id";
 
 DO $$
 BEGIN
