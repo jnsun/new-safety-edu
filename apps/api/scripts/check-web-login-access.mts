@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { decideWebLoginDestination } from "../src/web-login-access.js";
+import { decideWebLoginDestination, hasSafetyWebRole } from "../src/web-login-access.js";
+
+assert.equal(hasSafetyWebRole([{ role: "field_reporter" }]), true);
+assert.equal(hasSafetyWebRole([{ role: "learner" }]), false);
 
 assert.deepEqual(
   decideWebLoginDestination({ hasManagerRole: true, canEnterReceivables: false }),

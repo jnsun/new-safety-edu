@@ -1,4 +1,27 @@
 export type PlatformConditionalModule = "receivables" | "incident";
+export type ReceivablesPortalMode = "enabled" | "recover" | "confirm" | "hidden";
+export type PlatformLanding =
+  | { kind: "choose" }
+  | { kind: "redirect"; path: "/safety" | "/receivables" | "/receivables/departments" }
+  | { kind: "denied" };
+
+const safetyWebRoles = new Set(["company_admin", "org_leader", "org_admin", "field_reporter", "project_admin"]);
+
+export function canEnterSafetySystem(roles: readonly { role: string }[]): boolean {
+  return roles.some(({ role }) => safetyWebRoles.has(role));
+}
+
+export function resolvePlatformLanding(input: {
+  canEnterSafety: boolean;
+  receivablesMode: ReceivablesPortalMode;
+}): PlatformLanding {
+  const canEnterReceivables = input.receivablesMode !== "hidden";
+  if (input.canEnterSafety && canEnterReceivables) return { kind: "choose" };
+  if (input.canEnterSafety) return { kind: "redirect", path: "/safety" };
+  if (input.receivablesMode === "confirm") return { kind: "redirect", path: "/receivables/departments" };
+  if (canEnterReceivables) return { kind: "redirect", path: "/receivables" };
+  return { kind: "denied" };
+}
 
 export function platformConditionalModule(canEnterReceivables: boolean): PlatformConditionalModule {
   return canEnterReceivables ? "receivables" : "incident";

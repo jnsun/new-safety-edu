@@ -8,7 +8,7 @@ import { audit } from "../audit.js";
 import { setCsrfCookie } from "../csrf.js";
 import { resolveWechatAccount } from "../wechat-identity.js";
 import { resolveReceivablesAccess } from "../receivables-access.js";
-import { decideWebLoginDestination } from "../web-login-access.js";
+import { decideWebLoginDestination, safetyWebRoleNames } from "../web-login-access.js";
 import { buildWechatWebAuthorizeUrl, publicWechatWidgetConfig } from "../wechat-web-login.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -48,7 +48,7 @@ export async function registerWechatWebAuthRoutes(app: FastifyInstance, deps: { 
     if (!["active", "pending"].includes(resolved.account.status)) return reply.redirect("/login?wechat=account_unavailable");
     let destination: "/" | "/receivables" = "/";
     if (resolved.account.personId) {
-      const manager = await prisma.roleAssignment.findFirst({ where: { personId: resolved.account.personId, active: true, role: { in: ["company_admin", "org_leader", "org_admin", "project_admin"] } }, select: { id: true } });
+      const manager = await prisma.roleAssignment.findFirst({ where: { personId: resolved.account.personId, active: true, role: { in: [...safetyWebRoleNames] } }, select: { id: true } });
       const receivables = await resolveReceivablesAccess({ accountId: resolved.account.id });
       const access = decideWebLoginDestination({ hasManagerRole: !!manager, canEnterReceivables: receivables.canEnter });
       if (!access.allowed) return reply.redirect(`/login?wechat=${access.reason}`);

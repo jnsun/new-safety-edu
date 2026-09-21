@@ -50,6 +50,7 @@ import {
 } from "@ant-design/icons";
 import type { MenuProps, UploadProps } from "antd";
 import { api, json } from "./api";
+import { AdminPageHeader } from "./AdminUi";
 import { accountUsernamePattern, accountUsernameRuleMessage } from "./account-form";
 import { CoursewarePage } from "./Day2Pages";
 import { QuestionsPage } from "./questions/QuestionsPage";
@@ -64,7 +65,7 @@ import {
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
 import { receivablesNavigation, receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 import { personMatchesSearch } from "./person-search";
-import { platformConditionalModule } from "./platform-access";
+import { canEnterSafetySystem, resolvePlatformLanding } from "./platform-access";
 import { masterDataSelectedKey, peopleOrganizationNav } from "./people-organization/navigation";
 import { filterPeopleRows, peopleInOrganization, primaryOrganizationName, readPeopleListState, writePeopleListState, type PeopleView } from "./people-organization/people-list";
 import { principalRoleSummary } from "./principal-display";
@@ -460,8 +461,8 @@ function WechatBind() {
     <Alert type="info" showIcon message="手机号只用于微信首次绑定或换绑验证，不作为独立登录方式。" style={{ marginBottom: 16 }} />
     <Form layout="vertical" onFinish={async (values) => {
       try {
-        const result = await api<{ status: string }>("/api/wechat/identity/confirm", json("POST", { ...values, purpose }));
-        if (result.status === "bound") window.location.assign("/");
+        const result = await api<{ status: string; destination?: "/" | "/receivables" }>("/api/wechat/identity/confirm", json("POST", { ...values, purpose }));
+        if (result.status === "bound") window.location.assign(result.destination ?? "/");
         else if (result.status === "bound_no_admin") { message.info("微信已绑定，但该人员没有后台管理权限，请使用小程序"); window.location.assign("/login"); }
         else setSubmitted(true);
       } catch (error) { message.error((error as Error).message); }
@@ -2671,19 +2672,9 @@ const platformModules = [
   },
 ] as const;
 
-function PlatformPortal({ accountId }: { accountId: string }) {
+function PlatformPortal() {
   const navigate = useNavigate();
-  const access = useReceivablesAccess(accountId);
-  const currentAccess = usableReceivablesAccess(access);
-  const portalMode = currentAccess ? receivablesPortalMode(currentAccess) : "hidden";
-  const conditionalModule = platformConditionalModule(portalMode !== "hidden");
-  const modules = [...platformModules, conditionalModule === "receivables" ? {
-      title: portalMode === "recover" ? "应收账款待启用" : "应收账款管理",
-      description: portalMode === "recover" ? "设置财务资产部负责人后完成首次启用" : "合同应收、开票回款与催收台账",
-      path: portalMode === "confirm" ? "/receivables/departments" : "/receivables",
-      icon: <AccountBookOutlined />,
-      tone: "slate",
-    } as const : {
+  const modules = [...platformModules, {
       title: "事故事件管理",
       description: "事故、未遂事件和调查记录",
       path: null,
@@ -2691,8 +2682,10 @@ function PlatformPortal({ accountId }: { accountId: string }) {
       tone: "slate",
     } as const];
   return (
-    <div className="module-grid">
-      {modules.map((item) => (
+    <div className="platform-portal">
+      <AdminPageHeader title="安全生产管理平台" description="选择需要进入的业务模块；入口与数据范围由当前账号的有效权限决定。" />
+      <div className="module-grid">
+        {modules.map((item) => (
         <button
           type="button"
           className={`module-card module-${item.tone}${item.path ? "" : " module-planned"}`}
@@ -2707,10 +2700,54 @@ function PlatformPortal({ accountId }: { accountId: string }) {
           <span className="module-title">{item.title}</span>
           <span className="module-description">{item.description}</span>
           <span className="module-enter">
-            {item.title === "应收账款管理" && portalMode === "confirm" ? "待确认 ›" : item.path ? "进入模块 ›" : "待规划"}
+            {item.path ? "进入模块 ›" : "待规划"}
           </span>
         </button>
-      ))}
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlatformGateway({ principal }: { principal: Principal }) {
+  const navigate = useNavigate();
+  const access = useReceivablesAccess(principal.accountId);
+  const currentAccess = usableReceivablesAccess(access);
+  if (access.isFetching) return <div className="center">正在核对系统权限…</div>;
+  const receivablesMode = currentAccess ? receivablesPortalMode(currentAccess) : "hidden";
+  const landing = resolvePlatformLanding({
+    canEnterSafety: canEnterSafetySystem(principal.roles),
+    receivablesMode,
+  });
+  if (landing.kind === "redirect") return <Navigate to={landing.path} replace />;
+  if (landing.kind === "denied") {
+    return (
+      <div className="system-access-denied">
+        <Card>
+          <Alert type="warning" showIcon message="当前账号没有 Web 系统访问权限" description="普通员工请使用微信小程序；如需后台权限，请联系管理员完成授权。" />
+          <Button block style={{ marginTop: 16 }} onClick={() => navigate("/logout")}>退出登录</Button>
+        </Card>
+      </div>
+    );
+  }
+  const financePath = receivablesMode === "confirm" ? "/receivables/departments" : "/receivables";
+  return (
+    <div className="system-choice-page">
+      <AdminPageHeader title="选择业务系统" description="当前账号同时拥有两个系统的权限，请选择本次要进入的工作空间。" />
+      <div className="system-choice-grid">
+        <button type="button" className="system-choice-card system-choice-safety" onClick={() => navigate("/safety")}>
+          <span className="system-choice-icon"><SafetyCertificateOutlined /></span>
+          <span className="system-choice-title">安全生产管理系统</span>
+          <span className="system-choice-description">培训教育、人员组织、野外项目报送与资质证照</span>
+          <span className="system-choice-enter">进入安全管理 ›</span>
+        </button>
+        <button type="button" className="system-choice-card system-choice-finance" onClick={() => navigate(financePath)}>
+          <span className="system-choice-icon"><AccountBookOutlined /></span>
+          <span className="system-choice-title">财务应收账款系统</span>
+          <span className="system-choice-description">应收台账、开票回款、催收跟踪与财务配置</span>
+          <span className="system-choice-enter">{receivablesMode === "confirm" ? "完成首次启用 ›" : "进入应收管理 ›"}</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -2748,12 +2785,13 @@ function Shell({ principal }: { principal: Principal }) {
   const inMasterData = location.pathname.startsWith("/people") || location.pathname.startsWith("/organization") || location.pathname.startsWith("/projects");
   const companyAdmin = principal.roles.some((role) => role.role === "company_admin");
   const managementOverview = useQuery({ queryKey: ["management-overview", "master-data-nav"], queryFn: () => api<{ pendingRequests: number }>("/api/management/overview"), enabled: inMasterData });
-  const receivablesAccess = useReceivablesAccess(principal.accountId, inReceivables);
+  const receivablesAccess = useReceivablesAccess(principal.accountId);
   const currentReceivablesAccess = usableReceivablesAccess(receivablesAccess);
+  const canEnterSafety = canEnterSafetySystem(principal.roles);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(
     () =>
-      location.pathname === "/" ? "/" : inMasterData ? masterDataSelectedKey(location.pathname) : inReceivables ? location.pathname.replace(/\/$/, "") || "/receivables" : `/${location.pathname.split("/")[1]}`,
+      location.pathname === "/" || location.pathname === "/safety" ? "/" : inMasterData ? masterDataSelectedKey(location.pathname) : inReceivables ? location.pathname.replace(/\/$/, "") || "/receivables" : `/${location.pathname.split("/")[1]}`,
     [inMasterData, inReceivables, location.pathname],
   );
   const sidebarItems = useMemo(
@@ -2761,7 +2799,7 @@ function Shell({ principal }: { principal: Principal }) {
     [companyAdmin, location.pathname, currentReceivablesAccess, managementOverview.data?.pendingRequests],
   );
   const workspaceTitle =
-    location.pathname === "/"
+    location.pathname === "/" || location.pathname === "/safety"
       ? "安全生产管理平台"
       : location.pathname.startsWith("/monthly-reports")
         ? "野外项目报送"
@@ -2772,18 +2810,19 @@ function Shell({ principal }: { principal: Principal }) {
           : inReceivables
             ? "应收账款管理"
             : "培训教育";
+  if (!canEnterSafety && !inReceivables && !["/", "/logout"].includes(location.pathname)) return <Navigate to="/" replace />;
   return (
     <>
       <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}`}>
         <Layout.Sider
           className={inReceivables ? "receivables-sider" : undefined}
-          width={inReceivables ? 200 : 228}
+          width={inReceivables ? 200 : 224}
           breakpoint="lg"
           collapsedWidth="0"
           theme="light"
         >
           <div className={`brand${inReceivables ? " receivables-brand" : ""}`}>
-            {inReceivables ? <div className="brand-copy"><strong>财务应收</strong><small>账款管理</small></div> : <><div className="brand-mark">安</div><div className="brand-copy">物化院<small>{workspaceTitle}</small></div></>}
+            {inReceivables ? <div className="brand-copy"><strong>财务应收</strong><small>账款管理</small></div> : <div className="brand-copy"><strong>物化院 · 安全管理</strong><small>企业管理工作台</small></div>}
           </div>
           <Menu
             mode="inline"
@@ -2821,7 +2860,8 @@ function Shell({ principal }: { principal: Principal }) {
           </Layout.Header>
           <Layout.Content className={`content${inReceivables ? " receivables-content" : ""}`}>
             <Routes>
-              <Route path="/" element={<PlatformPortal accountId={principal.accountId} />} />
+              <Route path="/" element={<PlatformGateway principal={principal} />} />
+              <Route path="/safety" element={<PlatformPortal />} />
               <Route path="/training-dashboard" element={<DashboardPage />} />
               <Route
                 path="/people"

@@ -580,7 +580,7 @@ export function QualificationsPage({
     },
   ];
   return (
-    <>
+    <div className="admin-workspace qualification-ledger-page">
       <Space className="page-title" wrap>
         <Typography.Title level={3}>资质证照台账</Typography.Title>
         {canWrite && (
@@ -1372,7 +1372,7 @@ export function QualificationsPage({
           )}
         </Space>
       </Modal>
-    </>
+    </div>
   );
 }
 
@@ -2121,7 +2121,7 @@ export function MonthlyReportsPage() {
     </Space>
   );
   return (
-    <>
+    <div className="admin-workspace monthly-report-page">
       <Space className="page-title" wrap>
         <Typography.Title level={3}>野外施工项目报送</Typography.Title>
         <Typography.Text type="secondary">
@@ -2509,6 +2509,6 @@ export function MonthlyReportsPage() {
           ]}
         />
       </Modal>
-    </>
+    </div>
   );
 }

@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Table, Tag, Typography } from "antd";
 import { useState } from "react";
 import { api, json } from "../api";
+import { AdminPageHeader } from "../AdminUi";
 
 type Template = { id: string; name: string; type: string };
 type Paper = { id: string; name: string };
@@ -40,9 +41,10 @@ export function TrainingPage() {
   };
   const refresh = () => qc.invalidateQueries({ queryKey: ["training-batches"] });
 
-  return <>
-    <Space className="page-title" wrap><Typography.Title level={3}>培训安排</Typography.Title><Button type="primary" onClick={openCreate}>创建并下发</Button>{companyAdmin && <Button onClick={() => setAutomationOpen(true)}>自动下发配置</Button>}<Button onClick={async () => { const result = await api<{ processed: number }>("/api/training-batches/bootstrap-three-level", { method: "POST" }); message.success(`已处理 ${result.processed} 人`); await refresh(); }}>为当前员工生成三级教育</Button></Space>
-    <Card><Table rowKey="id" loading={batches.isLoading} dataSource={batches.data ?? []} columns={[
+  return <div className="admin-workspace training-schedule-page">
+    <AdminPageHeader title="培训安排" description="按完整组织或完整项目下发培训，已完成的学习、考试和签字记录不会被后续编辑覆盖。" actions={<><Button onClick={async () => { const result = await api<{ processed: number }>("/api/training-batches/bootstrap-three-level", { method: "POST" }); message.success(`已处理 ${result.processed} 人`); await refresh(); }}>生成三级教育</Button>{companyAdmin && <Button onClick={() => setAutomationOpen(true)}>自动下发配置</Button>}<Button type="primary" onClick={openCreate}>创建并下发</Button></>} />
+    {batches.isError && <Alert className="admin-conflict" type="error" showIcon message="培训安排加载失败" description={errorText(batches.error)} action={<Button onClick={() => void batches.refetch()}>重新加载</Button>} />}
+    <Card><Table rowKey="id" loading={batches.isLoading} locale={{ emptyText: "暂无培训安排，点击“创建并下发”开始" }} dataSource={batches.data ?? []} columns={[
       { title: "培训", dataIndex: "name" },
       { title: "类型", dataIndex: "type", render: (value: string) => typeNames[value] ?? value },
       { title: "项目", render: (_: unknown, row: Batch) => row.project?.name ?? "—" },
@@ -56,7 +58,7 @@ export function TrainingPage() {
     <Modal title="编辑培训安排" open={!!editing} footer={null} destroyOnHidden onCancel={() => setEditing(undefined)}>{editing && <Form key={editing.id} layout="vertical" initialValues={{ name: editing.name, dueAt: editing.dueAt ? localDateTimeValue(editing.dueAt) : undefined }} onFinish={async (values) => { try { await api(`/api/training-batches/${editing.id}`, json("PATCH", { name: values.name, dueAt: values.dueAt ? new Date(String(values.dueAt)).toISOString() : null })); message.success("培训安排已更新"); setEditing(undefined); await refresh(); } catch (error) { message.error(errorText(error)); } }}><Alert type="info" showIcon message="为保护已产生的学习和考试记录，下发后只允许修改培训名称和截止时间。" style={{ marginBottom: 16 }} /><Form.Item name="name" label="培训名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="dueAt" label="截止时间"><Input type="datetime-local" /></Form.Item><Button type="primary" htmlType="submit">保存修改</Button></Form>}</Modal>
 
     <Modal title="自动下发默认配置" open={automationOpen} footer={null} onCancel={() => setAutomationOpen(false)}><Table size="small" rowKey="id" pagination={false} dataSource={(automation.data ?? []).filter(({ active }) => active)} columns={[{ title: "类型", dataIndex: "type", render: (value: string) => typeNames[value] ?? value }, { title: "模板", render: (_: unknown, row: AutomationConfig) => row.template.name }, { title: "试卷", render: (_: unknown, row: AutomationConfig) => row.paper.name }]} /><Form form={automationForm} layout="vertical" style={{ marginTop: 16 }} onFinish={async (values) => { await api("/api/training-automation-configs", json("POST", { ...values, scopeType: "company", scopeId: null })); message.success("默认配置已更新"); automationForm.resetFields(); await automation.refetch(); }}><Form.Item name="type" label="自动培训类型" rules={[{ required: true }]}><Select options={types.filter(({ value }) => ["three_level", "project_induction"].includes(value))} /></Form.Item><Form.Item name="templateId" label="模板" rules={[{ required: true }]}><Select options={(templates.data ?? []).filter(({ type }) => ["three_level", "project_induction"].includes(type)).map(({ id, name, type }) => ({ value: id, label: `${typeNames[type]} · ${name}` }))} /></Form.Item><Form.Item name="paperId" label="试卷" rules={[{ required: true }]}><Select options={(papers.data ?? []).map(({ id, name }) => ({ value: id, label: name }))} /></Form.Item><Button type="primary" htmlType="submit">保存并启用</Button></Form></Modal>
-  </>;
+  </div>;
 }
 
 function localDateTimeValue(value: string) {

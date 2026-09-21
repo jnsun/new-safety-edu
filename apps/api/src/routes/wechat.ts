@@ -18,6 +18,8 @@ import { autoDispatchInTransaction } from "./day2.js";
 import { setCsrfCookie } from "../csrf.js";
 import { getWechatPhoneNumber } from "../wechat-api.js";
 import { issueWechatPhoneVerificationToken, verifyWechatPhoneVerificationToken } from "../wechat-phone-verification.js";
+import { decideWebLoginDestination, safetyWebRoleNames } from "../web-login-access.js";
+import { resolveReceivablesAccess } from "../receivables-access.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -170,8 +172,15 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       }, { isolationLevel: "Serializable" });
       if (matched.type === "employee") await prisma.$transaction((tx) => autoDispatchInTransaction(tx, "three_level", matched.id, deps.env));
       const clientKind = request.headers.authorization?.startsWith("Bearer ") ? "miniprogram" as const : "web" as const;
-      if (clientKind === "web" && !await prisma.roleAssignment.findFirst({ where: { personId: matched.id, active: true, role: { in: ["company_admin", "org_leader", "org_admin", "project_admin"] } }, select: { id: true } })) {
-        return { data: { status: "bound_no_admin" } };
+      let destination: "/" | "/receivables" = "/";
+      if (clientKind === "web") {
+        const [safetyRole, receivables] = await Promise.all([
+          prisma.roleAssignment.findFirst({ where: { personId: matched.id, active: true, role: { in: [...safetyWebRoleNames] } }, select: { id: true } }),
+          resolveReceivablesAccess({ accountId }),
+        ]);
+        const access = decideWebLoginDestination({ hasManagerRole: Boolean(safetyRole), canEnterReceivables: receivables.canEnter });
+        if (!access.allowed) return { data: { status: "bound_no_admin" } };
+        destination = access.path;
       }
       const session = await issueSession(accountId, deps.env, { clientKind, loginMethod: "wechat", userAgent: request.headers["user-agent"] });
       if (clientKind === "web") {
@@ -179,7 +188,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
         reply.setCookie("safety_refresh", session.refreshToken, { httpOnly: true, sameSite: "strict", secure: deps.env.NODE_ENV === "production", path: "/api/auth", maxAge: 8 * 60 * 60 });
         setCsrfCookie(reply, deps.env);
       }
-      return { data: { status: "bound", ...session } };
+      return { data: { status: "bound", destination, ...session } };
     }
 
     const requestKey = changeRequestKey("binding", principal.accountId, phone);
