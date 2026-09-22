@@ -203,13 +203,13 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       }, { isolationLevel: "Serializable" });
       if (matched.type === "employee") await prisma.$transaction((tx) => autoDispatchInTransaction(tx, "three_level", matched.id, deps.env));
       const clientKind = request.headers.authorization?.startsWith("Bearer ") ? "miniprogram" as const : "web" as const;
-      let destination: "/" | "/receivables" = "/";
+      let destination: "/" | "/receivables" | "/my-profile" = "/";
       if (clientKind === "web") {
         const [safetyRole, receivables] = await Promise.all([
           prisma.roleAssignment.findFirst({ where: { personId: matched.id, active: true, role: { in: [...safetyWebRoleNames] } }, select: { id: true } }),
           resolveReceivablesAccess({ accountId }),
         ]);
-        const access = decideWebLoginDestination({ hasManagerRole: Boolean(safetyRole), canEnterReceivables: receivables.canEnter });
+        const access = decideWebLoginDestination({ hasManagerRole: Boolean(safetyRole), canEnterReceivables: receivables.canEnter, hasPerson: true });
         if (!access.allowed) return { data: { status: "bound_no_admin" } };
         destination = access.path;
       }

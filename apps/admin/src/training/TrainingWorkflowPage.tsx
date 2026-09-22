@@ -1,10 +1,13 @@
-import { ArrowDownOutlined, ArrowUpOutlined, PlusOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowUpOutlined, CheckCircleOutlined, FileAddOutlined, PlusOutlined, SearchOutlined, UploadOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Checkbox, Descriptions, Divider, Drawer, Form, Input, InputNumber, List, message, Modal, Result, Select, Space, Spin, Steps, Switch, Table, Tag, Typography, Upload } from "antd";
+import { Alert, Button, Card, Checkbox, Descriptions, Divider, Drawer, Empty, Form, Input, InputNumber, List, message, Modal, Result, Select, Space, Spin, Steps, Switch, Table, Tabs, Tag, Typography, Upload } from "antd";
+import type { UploadProps } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBlocker, useNavigate } from "react-router-dom";
 import { api, json } from "../api";
 import { AdminPageHeader } from "../AdminUi";
+import { CoursewareEditor } from "../courseware/CoursewareEditor";
+import { createEmptyCoursewareDocument, type StructuredCoursewareDocument } from "../courseware/types";
 
 type TrainingType = "three_level" | "project_induction" | "routine" | "change_update";
 type ScopeType = "company" | "organization" | "project";
@@ -49,7 +52,6 @@ export function TrainingWorkflowPage() {
   const [selectedVersions, setSelectedVersions] = useState<string[]>([]);
   const [savedTemplateKey, setSavedTemplateKey] = useState<string>();
   const [dirty, setDirty] = useState(false);
-  const [coursePicker, setCoursePicker] = useState(false);
   const [quickCourse, setQuickCourse] = useState(false);
   const [paperBuilder, setPaperBuilder] = useState(false);
   const [coverageOpen, setCoverageOpen] = useState(false);
@@ -132,7 +134,7 @@ export function TrainingWorkflowPage() {
     <Card className="training-workflow-shell"><Steps current={step} items={["基本信息", "学习内容", "考试设置", "保存与预览", "范围并下发"].map((title) => ({ title }))} />
       <Divider />
       {step === 0 && <BasicStep draft={draft} update={updateDraft} changeType={changeType} templates={templates.data ?? []} applyTemplate={applyTemplate} />}
-      {step === 1 && <LearningStep selected={selected} published={published} pickerOpen={coursePicker} setPickerOpen={setCoursePicker} choose={(ids) => { setSelectedVersions(ids); setDirty(true); invalidatePreflight(); }} reorder={reorder} remove={removeVersion} quick={() => setQuickCourse(true)} saveTemplate={saveTemplate} saved={!!draft.templateId && savedTemplateKey === contentKey} />}
+      {step === 1 && <LearningStep selected={selected} published={published} choose={(ids) => { setSelectedVersions(ids); setDirty(true); invalidatePreflight(); }} reorder={reorder} remove={removeVersion} quick={() => setQuickCourse(true)} saveTemplate={saveTemplate} saved={!!draft.templateId && savedTemplateKey === contentKey} />}
       {step === 2 && <ExamStep draft={draft} update={updateDraft} papers={papers.data ?? []} openBuilder={() => setPaperBuilder(true)} />}
       {step === 3 && <PreviewStep draft={draft} selected={selected} paper={papers.data?.find(({ id }) => id === draft.paperId)} />}
       {step === 4 && <ScopeStep draft={draft} update={updateDraft} projects={activeProjects} orgOptions={orgOptions} companyAdmin={companyAdmin} forceProject={projectOnlyManager} preflight={preflight} runPreflight={runPreflight} preflighting={preflighting} openCoverage={() => setCoverageOpen(true)} />}
@@ -140,8 +142,13 @@ export function TrainingWorkflowPage() {
     </Card>
     <QuickCourseModal open={quickCourse} scope={authoringScope} onClose={() => setQuickCourse(false)} onCreated={async (versionId) => { await qc.invalidateQueries({ queryKey: ["coursewares"] }); setSelectedVersions((current) => [...current, versionId]); setQuickCourse(false); setDirty(true); invalidatePreflight(); }} />
     <PaperBuilder open={paperBuilder} scope={authoringScope} onClose={() => setPaperBuilder(false)} banks={banks.data ?? []} onCreated={async (paperId) => { await Promise.all([qc.invalidateQueries({ queryKey: ["exam-papers"] }), qc.invalidateQueries({ queryKey: ["question-banks"] })]); updateDraft({ paperId }); setPaperBuilder(false); }} />
-    <Drawer title="服务端覆盖预检" width={640} open={coverageOpen} onClose={() => setCoverageOpen(false)} extra={preflight?.ready && <Button type="primary" loading={dispatching} onClick={dispatch}>确认下发</Button>}>
-      {!preflight ? <Alert type="info" showIcon message="尚未执行预检" /> : <><Space wrap><Tag color={preflight.ready ? "green" : "red"}>{preflight.ready ? "准备就绪" : "存在阻断"}</Tag><Tag>生成任务 {preflight.coverage.includedCount}</Tag><Tag>排除 {preflight.coverage.excludedCount}</Tag><Tag>去重 {preflight.coverage.deduplicatedCount}</Tag></Space>{preflight.blockers.map((item) => <Alert key={item.code} style={{ marginTop: 12 }} type="error" showIcon message={item.message} />)}<Divider orientation="left">纳入人员</Divider><Table size="small" rowKey="id" pagination={{ pageSize: 8 }} dataSource={preflight.coverage.included} columns={[{ title: "姓名", dataIndex: "name" }, { title: "人员类型", dataIndex: "personType" }]} /><Divider orientation="left">排除明细</Divider><Table size="small" rowKey="id" pagination={{ pageSize: 8 }} dataSource={preflight.coverage.excluded} columns={[{ title: "姓名", dataIndex: "name" }, { title: "原因", dataIndex: "reason" }]} /></>}
+    <Drawer rootClassName="training-preflight-drawer" title="服务端覆盖预检" width={680} open={coverageOpen} onClose={() => setCoverageOpen(false)} extra={preflight?.ready && <Button type="primary" loading={dispatching} onClick={dispatch}>确认下发</Button>}>
+      {!preflight ? <Alert type="info" showIcon message="尚未执行预检" /> : <><div className="training-preflight-summary"><div><Tag color={preflight.ready ? "success" : "error"}>{preflight.ready ? "准备就绪" : "存在阻断"}</Tag><strong>{preflight.ready ? `将生成 ${preflight.coverage.includedCount} 项任务` : `${preflight.blockers.length} 项阻断需要处理`}</strong></div><Space wrap><Tag>排除 {preflight.coverage.excludedCount}</Tag><Tag>去重 {preflight.coverage.deduplicatedCount}</Tag></Space></div><div className="training-readiness-list">{[
+        { label: "课件与发布状态", ready: preflight.coursewares.length > 0 && !preflight.blockers.some(({ code }) => code === "UNPUBLISHED_COURSEWARE"), detail: `${preflight.coursewares.length} 个课件版本` },
+        { label: "考试与题量", ready: !draft.examRequired || (!!preflight.paper && !preflight.blockers.some(({ code }) => code === "INSUFFICIENT_QUESTIONS")), detail: draft.examRequired ? (preflight.paper ? `${preflight.paper.name} · 可用 ${preflight.paper.availableQuestions} 题` : "尚未满足考试条件") : "本次不要求正式考试" },
+        { label: "完整范围与有效人员", ready: preflight.coverage.includedCount > 0 && !preflight.blockers.some(({ code }) => code === "NO_TARGETS"), detail: `纳入 ${preflight.coverage.includedCount}，排除 ${preflight.coverage.excludedCount}` },
+        { label: "服务端范围权限", ready: true, detail: "本次预检已通过服务端授权入口" },
+      ].map((item) => <div className={`training-readiness-row ${item.ready ? "is-ready" : "is-blocked"}`} key={item.label}><CheckCircleOutlined /><span><strong>{item.label}</strong><small>{item.detail}</small></span><Tag color={item.ready ? "success" : "error"}>{item.ready ? "通过" : "阻断"}</Tag></div>)}</div>{preflight.blockers.map((item) => <Alert key={item.code} style={{ marginTop: 12 }} type="error" showIcon message={item.message} />)}<Tabs className="training-coverage-tabs" items={[{ key: "included", label: `纳入人员（${preflight.coverage.includedCount}）`, children: <Table size="small" rowKey="id" pagination={{ pageSize: 8 }} dataSource={preflight.coverage.included} columns={[{ title: "姓名", dataIndex: "name" }, { title: "人员类型", dataIndex: "personType" }]} /> }, { key: "excluded", label: `排除明细（${preflight.coverage.excludedCount}）`, children: <Table size="small" rowKey="id" pagination={{ pageSize: 8 }} dataSource={preflight.coverage.excluded} columns={[{ title: "姓名", dataIndex: "name" }, { title: "原因", dataIndex: "reason" }]} /> }]} /></>}
     </Drawer>
   </div>;
 }
@@ -150,8 +157,40 @@ function BasicStep({ draft, update, changeType, templates, applyTemplate }: { dr
   return <div className="training-step"><Typography.Title level={3}>基本信息</Typography.Title><Alert type="info" showIcon message={mandatoryExam(draft.type) ? "此培训类型必须考试，后续不可关闭考试。" : "此培训类型默认不考试，可在第三步主动开启。"} /><Form layout="vertical" style={{ marginTop: 20 }}><Form.Item required label="培训名称"><Input value={draft.name} maxLength={180} showCount onChange={(event) => update({ name: event.target.value })} /></Form.Item><Form.Item required label="培训类型"><Select value={draft.type} options={Object.entries(typeNames).map(([value, label]) => ({ value, label }))} onChange={changeType} /></Form.Item><Form.Item label="从已有模板开始（可选）"><Select allowClear value={draft.templateId} options={templates.filter(({ type }) => type === draft.type).map(({ id, name }) => ({ value: id, label: name }))} onChange={(value) => value ? applyTemplate(value) : update({ templateId: undefined })} /></Form.Item><Form.Item label="培训说明"><Input.TextArea value={draft.description} rows={4} maxLength={1000} showCount onChange={(event) => update({ description: event.target.value })} /></Form.Item></Form></div>;
 }
 
-function LearningStep({ selected, published, pickerOpen, setPickerOpen, choose, reorder, remove, quick, saveTemplate, saved }: { selected: Array<Version & { courseware: Courseware }>; published: Array<Version & { courseware: Courseware }>; pickerOpen: boolean; setPickerOpen: (value: boolean) => void; choose: (ids: string[]) => void; reorder: (index: number, delta: number) => void; remove: (id: string) => void; quick: () => void; saveTemplate: () => Promise<void>; saved: boolean }) {
-  return <div className="training-step"><div className="training-step-heading"><div><Typography.Title level={3}>学习内容</Typography.Title><Typography.Text type="secondary">选择顺序即学员学习顺序，只允许下发已发布版本。</Typography.Text></div><Space><Button icon={<PlusOutlined />} onClick={quick}>快速新建课件</Button><Button onClick={() => setPickerOpen(true)}>选择课件</Button></Space></div><List bordered locale={{ emptyText: "尚未选择课件" }} dataSource={selected} renderItem={(item, index) => <List.Item actions={[<Button key="up" type="text" disabled={index === 0} icon={<ArrowUpOutlined />} onClick={() => reorder(index, -1)} />, <Button key="down" type="text" disabled={index === selected.length - 1} icon={<ArrowDownOutlined />} onClick={() => reorder(index, 1)} />, <Button key="preview" type="link" onClick={() => Modal.info({ width: 720, title: `${item.courseware.title} v${item.version}`, content: <div dangerouslySetInnerHTML={{ __html: item.richText || "该课件不是富文本类型，请在课件库中预览。" }} /> })}>预览</Button>, <Button key="remove" danger type="link" onClick={() => remove(item.id)}>移除</Button>]}><List.Item.Meta avatar={<div className="training-order">{index + 1}</div>} title={item.courseware.title} description={`${item.courseware.type} · v${item.version} · 已发布`} /></List.Item>} /><Alert style={{ marginTop: 16 }} type={saved ? "success" : "warning"} showIcon message={saved ? "当前课件顺序已真实保存为模板" : "下发前必须将当前有序课件保存为模板；本次考试、范围和截止时间不会写入模板。"} action={!saved && <Button size="small" onClick={() => void saveTemplate().catch((error) => errorText(error) !== "cancelled" && message.error(errorText(error)))}>保存模板</Button>} /><Modal title="选择已发布课件" open={pickerOpen} onCancel={() => setPickerOpen(false)} onOk={() => setPickerOpen(false)} width={760}><Checkbox.Group value={selected.map(({ id }) => id)} onChange={(values) => choose(values as string[])}><Space direction="vertical">{published.map((item) => <Checkbox key={item.id} value={item.id}>{item.courseware.title} v{item.version}</Checkbox>)}</Space></Checkbox.Group></Modal></div>;
+function LearningStep({ selected, published, choose, reorder, remove, quick, saveTemplate, saved }: { selected: Array<Version & { courseware: Courseware }>; published: Array<Version & { courseware: Courseware }>; choose: (ids: string[]) => void; reorder: (index: number, delta: number) => void; remove: (id: string) => void; quick: () => void; saveTemplate: () => Promise<void>; saved: boolean }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerSelection, setPickerSelection] = useState<string[]>([]);
+  const openPicker = () => {
+    setPickerSelection(selected.map(({ id }) => id));
+    setPickerSearch("");
+    setPickerOpen(true);
+  };
+  const closePicker = () => {
+    setPickerOpen(false);
+    setPickerSearch("");
+  };
+  const filtered = published.filter(({ courseware, version }) => `${courseware.title} ${courseware.type} ${version}`.toLowerCase().includes(pickerSearch.trim().toLowerCase()));
+  const totalMinutes = selected.reduce((sum, item) => sum + (item.courseware.type === "structured" ? 15 : 10), 0);
+  return <div className="training-step training-learning-step">
+    <div className="training-step-heading"><div><Typography.Title level={3}>学习内容</Typography.Title><Typography.Text type="secondary">在当前制作上下文选择、制作和排序课件；只有已发布版本可以进入培训。</Typography.Text></div><Space wrap><Button icon={<FileAddOutlined />} onClick={quick}>快速新建课件</Button><Button type="primary" icon={<SearchOutlined />} onClick={openPicker}>从课件库选择</Button></Space></div>
+    <div className="training-learning-workspace">
+      <section className="training-learning-main" aria-label="已选学习内容">
+        <div className="training-section-bar"><div><strong>已选课件</strong><span>{selected.length ? `共 ${selected.length} 项，可调整学习顺序` : "尚未添加学习内容"}</span></div>{selected.length > 0 && <Tag color="blue">仅已发布版本</Tag>}</div>
+        {selected.length ? <List className="training-course-list" dataSource={selected} renderItem={(item, index) => <List.Item actions={[<Button key="up" aria-label={`上移${item.courseware.title}`} type="text" disabled={index === 0} icon={<ArrowUpOutlined />} onClick={() => reorder(index, -1)} />, <Button key="down" aria-label={`下移${item.courseware.title}`} type="text" disabled={index === selected.length - 1} icon={<ArrowDownOutlined />} onClick={() => reorder(index, 1)} />, <Button key="preview" type="link" onClick={() => Modal.info({ width: 720, title: `${item.courseware.title} v${item.version}`, content: item.richText ? <div dangerouslySetInnerHTML={{ __html: item.richText }} /> : <Alert type="info" showIcon message="该类型课件请在课件库使用对应预览器查看。" /> })}>预览</Button>, <Button key="remove" danger type="link" onClick={() => remove(item.id)}>移除</Button>]}><List.Item.Meta avatar={<div className="training-order">{index + 1}</div>} title={<Space wrap><span>{item.courseware.title}</span><Tag color="success">已发布</Tag></Space>} description={`${item.courseware.type === "structured" ? "结构化互动课件" : item.courseware.type === "single_html" ? "单文件 HTML" : "图文课件"} · 版本 ${item.version}`} /></List.Item>} /> : <Empty className="training-learning-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>还没有学习内容<br />可以从课件库选择，或在此新建并发布</span>}><Space><Button onClick={openPicker}>选择课件</Button><Button type="primary" onClick={quick}>新建课件</Button></Space></Empty>}
+        <Alert className="training-template-state" type={saved ? "success" : "warning"} showIcon message={saved ? "当前课件顺序已真实保存为模板" : "下发前必须将当前有序课件保存为模板"} description="模板只保存名称、培训类型和有序已发布课件；本次考试、范围和截止时间仍保留在当前安排中。" action={!saved && <Button size="small" disabled={!selected.length} onClick={() => void saveTemplate().catch((error) => errorText(error) !== "cancelled" && message.error(errorText(error)))}>保存模板</Button>} />
+      </section>
+      <aside className="training-learning-summary" aria-label="学习顺序预览"><span className="training-summary-kicker">学习顺序预览</span><Typography.Title level={4}>{selected.length || 0} 项内容</Typography.Title><Typography.Text type="secondary">预计约 {totalMinutes} 分钟</Typography.Text><ol>{selected.map((item) => <li key={item.id}><span>{item.courseware.title}</span><small>v{item.version}</small></li>)}</ol><Divider /><div className="training-flow-tail"><span>随后</span><strong>考试设置</strong><span>→ 签字{selected.length ? " → 完成" : ""}</span></div></aside>
+    </div>
+    <Drawer rootClassName="training-picker-drawer" title="从课件库选择" width={720} open={pickerOpen} onClose={closePicker} destroyOnHidden extra={<Space><Button onClick={closePicker}>取消</Button><Button type="primary" onClick={() => { choose(pickerSelection); closePicker(); }}>确认选择（{pickerSelection.length}）</Button></Space>}>
+      <Alert type="info" showIcon message="选择在确认后才会回填；直接关闭或取消不会改变当前学习内容。" />
+      <Input allowClear prefix={<SearchOutlined />} value={pickerSearch} onChange={(event) => setPickerSearch(event.target.value)} placeholder="搜索课件名称、类型或版本" className="training-picker-search" />
+      <Checkbox.Group value={pickerSelection} onChange={(values) => setPickerSelection(values as string[])} className="training-picker-options">
+        {filtered.map((item) => <label className={`training-picker-row ${pickerSelection.includes(item.id) ? "is-selected" : ""}`} key={item.id}><Checkbox value={item.id} /><span><strong>{item.courseware.title}</strong><small>{item.courseware.type === "structured" ? "结构化互动课件" : item.courseware.type === "single_html" ? "单文件 HTML" : "图文课件"} · v{item.version}</small></span><Tag color="success">已发布</Tag></label>)}
+      </Checkbox.Group>
+      {!filtered.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的已发布课件" />}
+    </Drawer>
+  </div>;
 }
 
 function ExamStep({ draft, update, papers, openBuilder }: { draft: Draft; update: (patch: Partial<Draft>) => void; papers: Paper[]; openBuilder: () => void }) {
@@ -168,8 +207,33 @@ function ScopeStep({ draft, update, projects, orgOptions, companyAdmin, forcePro
 }
 
 function QuickCourseModal({ open, scope, onClose, onCreated }: { open: boolean; scope: { scopeType: ScopeType; scopeId: string | null }; onClose: () => void; onCreated: (versionId: string) => Promise<void> }) {
-  const [form] = Form.useForm(); const [saving, setSaving] = useState(false);
-  return <Modal title="快速新建并发布课件" open={open} footer={null} destroyOnHidden onCancel={onClose}><Alert type="info" showIcon message="新课件发布后将自动回填到当前学习内容，不会清空已选课件。" /><Form form={form} layout="vertical" style={{ marginTop: 16 }} onFinish={async (values) => { try { setSaving(true); const created = await api<Courseware>("/api/coursewares", json("POST", { title: values.title, type: "rich_text", ...scope, richText: values.richText })); const version = created.versions[0]; if (!version) throw new Error("课件版本创建失败"); await api(`/api/courseware-versions/${version.id}/publish`, { method: "POST" }); message.success("课件已发布并回填"); await onCreated(version.id); form.resetFields(); } catch (error) { message.error(errorText(error)); } finally { setSaving(false); } }}><Form.Item name="title" label="课件名称" rules={[{ required: true, min: 2 }]}><Input /></Form.Item><Form.Item name="richText" label="课件内容" rules={[{ required: true, min: 2 }]}><Input.TextArea rows={10} placeholder="输入培训正文。复杂结构化课件可在课件库继续编辑。" /></Form.Item><Space><Button onClick={onClose}>取消并返回本步骤</Button><Button type="primary" htmlType="submit" loading={saving}>创建、发布并回填</Button></Space></Form></Modal>;
+  const [form] = Form.useForm();
+  const [kind, setKind] = useState<"rich_text" | "single_html" | "structured">("rich_text");
+  const [saving, setSaving] = useState(false);
+  const [fileId, setFileId] = useState<string>();
+  const [uploading, setUploading] = useState(false);
+  const [structured, setStructured] = useState<{ title: string; document: StructuredCoursewareDocument }>();
+  const finish = async (payload: Record<string, unknown>) => {
+    const created = await api<Courseware>("/api/coursewares", json("POST", { ...payload, ...scope }));
+    const version = created.versions[0];
+    if (!version) throw new Error("课件版本创建失败");
+    await api(`/api/courseware-versions/${version.id}/publish`, { method: "POST" });
+    await onCreated(version.id);
+    form.resetFields(); setFileId(undefined); setKind("rich_text"); setStructured(undefined);
+    message.success("课件已发布并回填到当前学习内容");
+  };
+  const requestClose = () => {
+    if (saving || uploading) return message.warning("当前操作尚未完成，请稍候");
+    if (form.isFieldsTouched() || structured) return Modal.confirm({ title: "放弃当前课件草稿？", content: "已选的原学习内容不会变化；本弹窗中尚未发布的内容将丢失。", okText: "放弃", okButtonProps: { danger: true }, cancelText: "继续编辑", onOk: () => { form.resetFields(); setFileId(undefined); setStructured(undefined); setKind("rich_text"); onClose(); } });
+    onClose();
+  };
+  if (structured) return <Drawer rootClassName="training-course-editor-drawer" title="新建结构化课件" width="calc(100vw - 48px)" open={open} onClose={requestClose} destroyOnHidden={false}><Alert type="info" showIcon message="保存内容后系统将创建草稿、发布该版本，并把真实版本回填到当前培训。任一步失败都不会显示成功。" /><CoursewareEditor coursewareTitle={structured.title} initialDocument={structured.document} initiallyDirty onClose={requestClose} onSave={async (document) => { try { setSaving(true); await finish({ title: structured.title, type: "structured", structuredContent: document }); } finally { setSaving(false); } }} /></Drawer>;
+  const upload: NonNullable<UploadProps["customRequest"]> = async ({ file, onSuccess, onError }) => {
+    try { setUploading(true); const body = new FormData(); body.append("file", file as Blob); const result = await api<{ id: string }>("/api/files?kind=courseware", { method: "POST", body }); setFileId(result.id); onSuccess?.(result); }
+    catch (error) { onError?.(error as Error); message.error(`文件上传失败：${errorText(error)}`); }
+    finally { setUploading(false); }
+  };
+  return <Modal rootClassName="training-quick-course-modal" title="在当前培训中新建课件" open={open} footer={null} width={760} destroyOnHidden={false} onCancel={requestClose}><Alert type="info" showIcon message="当前流程：编辑内容 → 创建草稿 → 发布版本 → 回填学习内容" description="不会清空已选课件；只有全部步骤成功后才会显示完成。" /><div className="training-authoring-stages" aria-label="课件创建阶段"><span className="is-current">1 编辑内容</span><span>2 创建草稿</span><span>3 发布版本</span><span>4 回填培训</span></div><Form form={form} layout="vertical" onValuesChange={() => undefined} onFinish={async (values) => { if (kind === "structured") { const document = createEmptyCoursewareDocument(); document.title = values.title; setStructured({ title: values.title, document }); return; } if (kind === "single_html" && !fileId) return message.warning("请先上传 HTML 文件"); try { setSaving(true); await finish({ title: values.title, type: kind, ...(kind === "rich_text" ? { richText: values.richText } : { fileId }) }); } catch (error) { message.error(`课件未发布：${errorText(error)}`); } finally { setSaving(false); } }}><Form.Item name="title" label="课件名称" rules={[{ required: true, min: 2, message: "请输入至少 2 个字的课件名称" }]}><Input maxLength={180} showCount /></Form.Item><Form.Item label="课件类型"><Select value={kind} onChange={(value) => { setKind(value); setFileId(undefined); }} options={[{ value: "rich_text", label: "图文课件" }, { value: "structured", label: "结构化互动课件" }, { value: "single_html", label: "单文件 HTML" }]} /></Form.Item>{kind === "rich_text" && <Form.Item name="richText" label="课件内容" rules={[{ required: true, min: 2 }]}><Input.TextArea rows={10} placeholder="输入培训正文" /></Form.Item>}{kind === "single_html" && <Form.Item label="HTML 文件" required><Upload accept=".html,text/html" maxCount={1} customRequest={upload} onRemove={() => { setFileId(undefined); return true; }}><Button icon={<UploadOutlined />} loading={uploading}>{uploading ? "正在上传" : "选择并上传文件"}</Button></Upload>{fileId && <Typography.Text type="success"><CheckCircleOutlined /> 文件已上传，可创建草稿</Typography.Text>}</Form.Item>}<Space><Button onClick={requestClose}>取消并返回学习内容</Button><Button type="primary" htmlType="submit" loading={saving || uploading}>{kind === "structured" ? "进入内容编辑" : "创建、发布并回填"}</Button></Space></Form></Modal>;
 }
 
 function PaperBuilder({ open, scope, onClose, banks, onCreated }: { open: boolean; scope: { scopeType: ScopeType; scopeId: string | null }; onClose: () => void; banks: Bank[]; onCreated: (id: string) => Promise<void> }) {

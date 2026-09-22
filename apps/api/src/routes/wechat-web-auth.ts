@@ -46,11 +46,11 @@ export async function registerWechatWebAuthRoutes(app: FastifyInstance, deps: { 
     if (!response.ok || !body.openid) return reply.redirect("/login?wechat=exchange_failed");
     const resolved = await prisma.$transaction((tx) => resolveWechatAccount(tx, { appId: deps.env.WECHAT_WEB_APP_ID!, openid: body.openid!, ...(body.unionid ? { unionid: body.unionid } : {}) }), { isolationLevel: "Serializable" });
     if (!["active", "pending"].includes(resolved.account.status)) return reply.redirect("/login?wechat=account_unavailable");
-    let destination: "/" | "/receivables" = "/";
+    let destination: "/" | "/receivables" | "/my-profile" = "/";
     if (resolved.account.personId) {
       const manager = await prisma.roleAssignment.findFirst({ where: { personId: resolved.account.personId, active: true, role: { in: [...safetyWebRoleNames] } }, select: { id: true } });
       const receivables = await resolveReceivablesAccess({ accountId: resolved.account.id });
-      const access = decideWebLoginDestination({ hasManagerRole: !!manager, canEnterReceivables: receivables.canEnter });
+      const access = decideWebLoginDestination({ hasManagerRole: !!manager, canEnterReceivables: receivables.canEnter, hasPerson: true });
       if (!access.allowed) return reply.redirect(`/login?wechat=${access.reason}`);
       destination = access.path;
     }

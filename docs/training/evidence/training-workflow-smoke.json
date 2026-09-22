@@ -1,8 +1,13 @@
 {
-  "generatedAt": "2026-09-21T06:27:18.660Z",
+  "generatedAt": "2026-09-21T10:34:20.574Z",
   "environment": "local isolated PostgreSQL; no remote server",
-  "marker": "training-workflow-b84df126",
+  "marker": "training-workflow-0dccb0a1",
   "checks": [
+    {
+      "check": "课件上传失败",
+      "result": "PASS",
+      "detail": "非 HTML 文件由服务端拒绝并返回 INVALID_MIME，未显示为上传成功"
+    },
     {
       "check": "未发布课件阻断",
       "result": "PASS",
@@ -70,7 +75,7 @@
     }
   ],
   "summary": {
-    "passed": 13,
+    "passed": 14,
     "failed": 0
   }
 }

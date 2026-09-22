@@ -15,6 +15,8 @@ for (const rule of ["三级安全教育和项目入场教育必须考试", "UNPU
 assert.ok(app.includes('path="/training/new"') && app.includes("TrainingWorkflowPage"), "real workflow route missing");
 for (const step of ["基本信息", "学习内容", "考试设置", "保存与预览", "范围并下发"]) assert.ok(workflow.includes(step), `missing wizard step ${step}`);
 for (const behavior of ["快速新建课件", "就地维护题库并新建试卷", "服务端覆盖预检", "确认下发", "离开培训制作", "查看本批次培训进度"]) assert.ok(workflow.includes(behavior), `missing behavior ${behavior}`);
+for (const behavior of ["选择在确认后才会回填", "创建草稿", "发布版本", "回填培训", "training-learning-workspace", "training-readiness-list"]) assert.ok(workflow.includes(behavior), `missing refined workflow behavior ${behavior}`);
+assert.ok(workflow.includes('value: "structured"') && workflow.includes('value: "single_html"'), "in-context authoring must retain structured and HTML courseware capabilities");
 assert.ok(schedule.includes('navigate("/training/new")'), "training schedule entry is not wired");
 assert.ok(dashboard.includes('navigate("/training/new")'), "dashboard entry is not wired");
 assert.ok(courseware.includes('navigate("/training/new")'), "production center entry is not wired");

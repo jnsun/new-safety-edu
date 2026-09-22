@@ -13,6 +13,7 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
   Upload,
@@ -465,7 +466,7 @@ export function ReceivablesLedger({
     setColumnModalOpen(false);
     setDraftPreference(preference);
   };
-  const closeOperation = () => {
+  const resetOperation = () => {
     setOperation(undefined);
     setActionError(undefined);
     setConflict(undefined);
@@ -474,7 +475,7 @@ export function ReceivablesLedger({
     form.resetFields();
   };
   const revokeWorkflow = async () => {
-    closeOperation();
+    resetOperation();
     setSelectedId(null);
     await revokeScope();
   };
@@ -496,7 +497,7 @@ export function ReceivablesLedger({
     }) => ({ result: await api<unknown>(path, init), ledgerId }),
     onSuccess: async ({ ledgerId }) => {
       message.success("操作已保存");
-      closeOperation();
+      resetOperation();
       await invalidateLedger(ledgerId);
     },
     onError: async (error) => {
@@ -524,6 +525,24 @@ export function ReceivablesLedger({
       setActionError(error.message);
     },
   });
+  const closeOperation = () => {
+    if (mutation.isPending) {
+      message.warning("正在提交，请等待服务端返回结果");
+      return;
+    }
+    if (operation && form.isFieldsTouched()) {
+      Modal.confirm({
+        title: "放弃未提交的修改？",
+        content: "当前表单内容尚未保存，关闭后将无法恢复。",
+        okText: "放弃修改",
+        okButtonProps: { danger: true },
+        cancelText: "继续编辑",
+        onOk: resetOperation,
+      });
+      return;
+    }
+    resetOperation();
+  };
   const referenceData = usableReceivablesData(reference);
   const departmentOptions = useMemo(
     () =>
@@ -1362,6 +1381,22 @@ export function ReceivablesLedger({
     );
   };
 
+  const activeFilterLabels = [
+    state.search && `关键词：${state.search}`,
+    state.settlement !== "unsettled" && `结清：${state.settlement === "settled" ? "已结清" : "全部"}`,
+    state.status !== "active" && `记录：${state.status === "voided" ? "已作废" : "全部"}`,
+    state.financeDepartmentId && `部门：${currentLedgers?.facets.departments.find((item) => item.value === state.financeDepartmentId)?.name ?? "已选部门"}`,
+    state.creditorUnit && `单位：${state.creditorUnit}`,
+    state.debtStatus && `债权：${state.debtStatus}`,
+    state.anomaly && `待核对：${anomalyLabels[state.anomaly]}`,
+  ].filter(Boolean) as string[];
+  const resetFilters = () => {
+    setSearch("");
+    setState({ page: 1, pageSize: state.pageSize, status: "active", settlement: "unsettled", financeDepartmentId: undefined, debtStatus: undefined, creditorUnit: undefined, anomaly: undefined, search: undefined, sort: "updatedAt", order: "desc" });
+  };
+  const totals = currentLedgers?.totals;
+  const totalMoney = (value: string | null | undefined) => formatReceivablesMoney(value ?? null, preference.moneyDecimals);
+
   return (
     <div className="receivables-page">
       <ReceivablesPageHeader
@@ -1510,6 +1545,10 @@ export function ReceivablesLedger({
             />
           </Form.Item>
         </Form>
+        <div className="receivables-filter-summary" aria-live="polite">
+          <div><Typography.Text type="secondary">已生效筛选</Typography.Text>{activeFilterLabels.length ? activeFilterLabels.map((label) => <Tag key={label} closable={false}>{label}</Tag>) : <Tag>默认：有效且未结</Tag>}</div>
+          <Button size="small" disabled={!activeFilterLabels.length} onClick={resetFilters}>恢复默认筛选</Button>
+        </div>
       </Card>
       {ledgers.isError && (
         <Alert
@@ -1538,6 +1577,7 @@ export function ReceivablesLedger({
           </Button>
         </div>
       </div>
+      {totals && <section className="receivables-ledger-totals" aria-label="当前筛选范围汇总"><div><span>当前筛选范围</span><strong>{currentLedgers.total} 条合同</strong></div><div><span>应收余额（万元）</span><strong>{totalMoney(totals.balance)}</strong></div><div><span>到账金额（万元）</span><strong>{totalMoney(totals.receivedAmount)}</strong></div><div><span>开票金额（万元）</span><strong>{totalMoney(totals.invoicedAmount)}</strong></div><small>以上为服务端对完整筛选范围的汇总，不是当前页求和。</small></section>}
       <div
         className="receivables-table-region"
         role="region"
@@ -1606,11 +1646,14 @@ export function ReceivablesLedger({
       </Modal>
       <Drawer
         rootClassName="receivables-detail-drawer"
-        title="台账详情"
+        title={currentDetail ? <Space><span>合同详情</span><Typography.Text type="secondary">{currentDetail.ledger.contractNo}</Typography.Text>{!currentDetail.capabilities.canWriteLedger && <Tag>只读</Tag>}</Space> : "合同详情"}
         width={920}
         open={!!selectedId}
         onClose={() => {
-          closeOperation();
+          if (operation) {
+            closeOperation();
+            return;
+          }
           setSelectedId(null);
         }}
         destroyOnHidden
@@ -1795,7 +1838,14 @@ function LedgerDetailView({
           )}
         </Space>
       </div>
-      <section>
+      <Tabs
+        className="receivables-detail-tabs"
+        defaultActiveKey="overview"
+        items={[
+          {
+            key: "overview",
+            label: "合同概览",
+            children: <div className="receivables-detail-panel"><section>
         <Typography.Title level={5}>基本事实</Typography.Title>
         <Descriptions
           bordered
@@ -1950,8 +2000,12 @@ function LedgerDetailView({
             },
           ]}
         />
-      </section>
-      <section>
+      </section></div>,
+          },
+          {
+            key: "invoice",
+            label: `开票（${detail.invoices.length}）`,
+            children: <section>
         <Typography.Title level={5}>开票明细</Typography.Title>
         <Table
           rowKey="id"
@@ -2030,8 +2084,12 @@ function LedgerDetailView({
               : []),
           ]}
         />
-      </section>
-      <section>
+      </section>,
+          },
+          {
+            key: "receipt",
+            label: `回款（${detail.receipts.length}）`,
+            children: <section>
         <Typography.Title level={5}>回款明细</Typography.Title>
         <Table
           rowKey="id"
@@ -2110,8 +2168,12 @@ function LedgerDetailView({
               : []),
           ]}
         />
-      </section>
-      <section>
+      </section>,
+          },
+          {
+            key: "attachment",
+            label: `附件（${detail.attachments.length}）`,
+            children: <section>
         <Typography.Title level={5}>附件</Typography.Title>
         <Table
           rowKey="id"
@@ -2176,8 +2238,12 @@ function LedgerDetailView({
             },
           ]}
         />
-      </section>
-      <section>
+      </section>,
+          },
+          {
+            key: "history",
+            label: `修订历史（${detail.revisions.length}）`,
+            children: <section>
         <Typography.Title level={5}>修订历史</Typography.Title>
         <Table
           rowKey="id"
@@ -2194,7 +2260,10 @@ function LedgerDetailView({
             },
           ]}
         />
-      </section>
+      </section>,
+          },
+        ]}
+      />
     </div>
   );
 }

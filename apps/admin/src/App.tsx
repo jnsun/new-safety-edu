@@ -68,6 +68,7 @@ import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
 import { receivablesNavigation, receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 import { personMatchesSearch } from "./person-search";
 import { canEnterSafetySystem, resolvePlatformLanding } from "./platform-access";
+import { SelfProfilePage } from "./SelfProfilePage";
 import { masterDataSelectedKey, peopleOrganizationNav } from "./people-organization/navigation";
 import { filterPeopleRows, peopleInOrganization, primaryOrganizationName, readPeopleListState, writePeopleListState, type PeopleView } from "./people-organization/people-list";
 import { principalRoleSummary } from "./principal-display";
@@ -497,12 +498,12 @@ function WechatBind() {
   const [identityIncorrect, setIdentityIncorrect] = useState(false);
   const options = useQuery({ queryKey: ["wechat-registration-options"], queryFn: () => api<{ departments: Array<{ id: string; name: string }> }>("/api/wechat/registration-options"), retry: false });
   if (submitted) return <div className="login-shell"><Card className="login-card"><Alert type="success" showIcon message="身份绑定申请已提交" description="手机号已经验证。申请将由所选部门负责人或管理员核对，身份冲突由公司管理员处理。" /><Button block style={{ marginTop: 16 }} href="/login">返回登录</Button></Card></div>;
-  if (noWebAccess) return <div className="login-shell"><Card className="login-card"><Alert type="info" showIcon message="身份已绑定" description="该员工目前没有 Web 管理后台权限。请使用培训小程序，或联系管理员核对授权。" /><Button block style={{ marginTop: 16 }} href="/login">返回登录</Button></Card></div>;
+  if (noWebAccess) return <div className="login-shell"><Card className="login-card"><Alert type="warning" showIcon message="暂时无法打开本人档案" description="请联系管理员核对人员绑定状态。" /><Button block style={{ marginTop: 16 }} href="/login">返回登录</Button></Card></div>;
   async function submitIdentity(values: { name: string; organizationId: string; reason?: string; identityIssue?: "name" | "department" | "phone" | "other" }) {
     if (!verified) return;
     setBusy(true);
     try {
-      const result = await api<{ status: string; destination?: "/" | "/receivables" }>("/api/wechat/identity/confirm", json("POST", { ...values, smsVerificationToken: verified.smsVerificationToken, ...(verified.candidate ? { identityCorrect: !identityIncorrect } : {}) }));
+      const result = await api<{ status: string; destination?: "/" | "/receivables" | "/my-profile" }>("/api/wechat/identity/confirm", json("POST", { ...values, smsVerificationToken: verified.smsVerificationToken, ...(verified.candidate ? { identityCorrect: !identityIncorrect } : {}) }));
       if (result.status === "bound") window.location.assign(result.destination ?? "/");
       else if (result.status === "bound_no_admin") setNoWebAccess(true);
       else setSubmitted(true);
@@ -2766,13 +2767,14 @@ function PlatformGateway({ principal }: { principal: Principal }) {
   const landing = resolvePlatformLanding({
     canEnterSafety: canEnterSafetySystem(principal.roles),
     receivablesMode,
+    canViewSelf: Boolean(principal.personId),
   });
   if (landing.kind === "redirect") return <Navigate to={landing.path} replace />;
   if (landing.kind === "denied") {
     return (
       <div className="system-access-denied">
         <Card>
-          <Alert type="warning" showIcon message="当前账号没有 Web 系统访问权限" description="普通员工请使用微信小程序；如需后台权限，请联系管理员完成授权。" />
+          <Alert type="warning" showIcon message="尚未关联本人档案" description="请联系管理员核对人员绑定状态。" />
           <Button block style={{ marginTop: 16 }} onClick={() => navigate("/logout")}>退出登录</Button>
         </Card>
       </div>
@@ -3073,6 +3075,7 @@ export default function App() {
   if (principal.isError) return <Navigate to="/login" replace />;
   if (principal.data!.mustChangePassword) return <AntApp><RequiredPasswordChange /></AntApp>;
   if (location.pathname === "/") return <AntApp><PlatformGateway principal={principal.data!} /></AntApp>;
+  if (location.pathname === "/my-profile") return principal.data!.personId ? <AntApp><SelfProfilePage displayName={principal.data!.displayName} /></AntApp> : <Navigate to="/" replace />;
   return (
     <AntApp>
       <Shell principal={principal.data!} />

@@ -54,6 +54,32 @@ export async function registerPhoneAuthRoutes(app: FastifyInstance, deps: { env:
     const phone = phoneSchema.parse(z.object({ phone: z.string() }).parse(request.body).phone); await sendPhoneVerificationCode(phone, "change_phone", request.ip, deps.env); return { data: { sent: true, expiresIn: 300 } };
   });
 
+  app.post("/api/me/phone/change-request", { preHandler: deps.authenticate }, async (request, reply) => {
+    const principal = request.principal!;
+    if (!principal.personId) throw Object.assign(new Error("账号尚未绑定人员档案"), { statusCode: 409, code: "PERSON_REQUIRED" });
+    const personId = principal.personId;
+    const input = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/), reason: z.string().trim().min(2).max(500) }).parse(request.body);
+    const person = await prisma.person.findUniqueOrThrow({ where: { id: personId }, select: { phone: true } });
+    if (person.phone === input.phone) throw Object.assign(new Error("新手机号与现有手机号相同"), { statusCode: 409, code: "PHONE_UNCHANGED" });
+    const verification = await verifiedPhoneCode(input.phone, input.code, "change_phone", deps.env);
+    const requestKey = changeRequestKey("profile_change", personId, input.phone);
+    const result = await prisma.$transaction(async (tx) => {
+      const conflict = await tx.account.findFirst({ where: { verifiedPhone: input.phone, id: { not: principal.accountId } }, select: { id: true } });
+      const personConflict = await tx.person.findFirst({ where: { phone: input.phone, id: { not: personId }, status: "active" }, select: { id: true } });
+      if (conflict || personConflict) throw Object.assign(new Error("该手机号已关联其他人员"), { statusCode: 409, code: "PHONE_ALREADY_BOUND" });
+      const claimed = await tx.phoneVerificationCode.updateMany({ where: { id: verification.id, consumedAt: null }, data: { consumedAt: new Date() } });
+      if (claimed.count !== 1) throw Object.assign(new Error("验证码已使用"), { statusCode: 409, code: "SMS_CODE_CONSUMED" });
+      const existing = await tx.changeRequest.findFirst({ where: { type: "profile_change", status: "pending", requestKey }, select: { id: true } });
+      if (existing) return existing;
+      const row = await tx.changeRequest.create({ data: { accountId: principal.accountId, personId, type: "profile_change", requestKey, payload: { phone: input.phone, phoneVerificationId: verification.id, reason: input.reason } } });
+      const reviewers = await tx.roleAssignment.findMany({ where: { role: "company_admin", scopeType: "company", active: true, personId: { not: personId }, person: { status: "active", account: { status: "active" } } }, select: { personId: true } });
+      for (const reviewer of reviewers) if (reviewer.personId) await tx.notification.upsert({ where: { dedupeKey: `phone-change-review:${row.id}:${reviewer.personId}` }, update: {}, create: { personId: reviewer.personId, title: "手机号变更待审核", body: "有一条已完成新手机号短信验证的资料变更申请待处理。", dedupeKey: `phone-change-review:${row.id}:${reviewer.personId}` } });
+      await writeCriticalAudit(tx, { actorId: principal.accountId, action: "person.phone_change_request", objectType: "change_request", objectId: row.id, requestId: row.id, reason: input.reason, metadata: { phoneVerified: true } });
+      return row;
+    });
+    return reply.code(201).send({ data: { id: result.id, status: "pending" } });
+  });
+
   app.post("/api/me/phone/confirm", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!; if (!principal.personId) throw Object.assign(new Error("账号尚未绑定人员档案"), { statusCode: 409, code: "PERSON_REQUIRED" });
     const input = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/) }).parse(request.body); const verification = await verifiedPhoneCode(input.phone, input.code, "change_phone", deps.env);

@@ -9,7 +9,7 @@ import {
   reportStats,
   validateReportFields,
 } from "../project-reporting-core.js";
-import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, nextSubmissionStatus, reportingOrganizationIds } from "../project-reporting-policy.js";
+import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, monthlySubmissionReadiness, nextSubmissionStatus, reportingOrganizationIds, submittedMonthStatuses } from "../project-reporting-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -572,10 +572,12 @@ export async function registerProjectReportingRoutes(
             reason,
           },
         });
-        const updated = await tx.projectMonthlyReport.update({
-          where: { id: reportId },
+        const changed = await tx.projectMonthlyReport.updateMany({
+          where: { id: reportId, status: { in: ["draft", "withdrawn"] }, revision: current.revision },
           data,
         });
+        if (changed.count !== 1) throw Object.assign(new Error("月报已被更新或提交，请刷新后重试"), { statusCode: 409, code: "REPORT_CHANGED" });
+        const updated = await tx.projectMonthlyReport.findUniqueOrThrow({ where: { id: reportId } });
         await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "project_monthly_report.update", objectType: "project_monthly_report", objectId: updated.id, reason, metadata: { beforeRevision: current.revision } });
         return updated;
       });
@@ -617,30 +619,64 @@ export async function registerProjectReportingRoutes(
     },
   );
 
+  app.get(
+    "/api/monthly-reports/submissions/preflight",
+    { preHandler: deps.authenticate },
+    async (request) => {
+      const query = z.object({ organizationId: id, month }).parse(request.query);
+      if (!canSubmitMonthlyFacts(request.principal!) || !reportOrganizationIds(request).includes(query.organizationId))
+        forbidden("只能核对获授权经营实体的月报");
+      const date = reportMonth(query.month);
+      const [year, number] = query.month.split("-").map(Number);
+      const [organization, period, projects, reports, submission] = await Promise.all([
+        prisma.organization.findFirst({ where: { id: query.organizationId, type: "business_entity", reportingEnabled: true }, select: { id: true } }),
+        reportingPeriodFor(query.month),
+        prisma.project.findMany({ where: { responsibleOrganizationId: query.organizationId, status: { in: ["active", "paused"] } }, select: { id: true, name: true, code: true, status: true }, orderBy: { name: "asc" } }),
+        prisma.projectMonthlyReport.findMany({ where: { reportingOrganizationId: query.organizationId, reportMonth: date, status: { not: "voided" } }, select: { id: true, projectId: true, status: true, revision: true, updatedAt: true } }),
+        prisma.departmentMonthStatus.findFirst({ where: { organizationId: query.organizationId, reportingYear: year!, reportingMonth: number!, active: true }, select: { id: true, status: true, reportType: true, returnReason: true } }),
+      ]);
+      const byProject = new Map(reports.map((row) => [row.projectId, row]));
+      const items = projects.map((project) => ({ ...project, report: byProject.get(project.id) ?? null }));
+      const readiness = monthlySubmissionReadiness({ organizationEnabled: !!organization, periodStatus: period?.status ?? "closed", submissionStatus: submission?.status, projects: items.map((item) => ({ reportStatus: item.report?.status })) });
+      const duplicate = items.some((item) => reports.filter((row) => row.projectId === item.id).length > 1);
+      return { data: { organizationId: query.organizationId, month: query.month, periodStatus: period?.status ?? "closed", submission, reportType: projects.length ? "projects" : "no_projects", ...readiness, ready: readiness.ready && !duplicate, reasons: [...readiness.reasons, ...(duplicate ? ["存在重复项目月报，请联系管理员核查"] : [])], items } };
+    },
+  );
+
   app.post(
     "/api/monthly-reports/submissions",
     { preHandler: deps.authenticate },
     async (request) => {
       const body = z.object({ organizationId: id, month, reportType: z.enum(["projects", "no_projects"]), note: z.string().trim().max(1000).optional() }).parse(request.body);
-      if (!reportOrganizationIds(request).includes(body.organizationId)) forbidden("只能提交获授权经营实体的月报");
-      await requireWritablePeriod(body.month);
-      const organization = await prisma.organization.findFirst({ where: { id: body.organizationId, type: "business_entity", reportingEnabled: true } });
-      if (!organization) throw Object.assign(new Error("该经营实体未启用月报"), { statusCode: 409, code: "REPORTING_ENTITY_REQUIRED" });
-      const date = reportMonth(body.month); const [year, number] = body.month.split("-").map(Number);
-      const projects = await prisma.project.findMany({ where: { responsibleOrganizationId: body.organizationId, status: { in: ["active", "paused"] } }, select: { id: true } });
-      const projectIds = projects.map((row) => row.id);
-      const reportCount = projectIds.length ? await prisma.projectMonthlyReport.count({ where: { projectId: { in: projectIds }, reportMonth: date, status: { not: "voided" } } }) : 0;
-      if (body.reportType === "no_projects" && projects.length) throw Object.assign(new Error("本月仍有在建或暂停项目，不能申报无在建项目"), { statusCode: 409, code: "ACTIVE_PROJECTS_EXIST" });
-      if (body.reportType === "projects" && (!projects.length || reportCount !== projects.length)) throw Object.assign(new Error(`应报 ${projects.length} 个项目，已完成 ${reportCount} 个，请全部填写后统一提交`), { statusCode: 409, code: "DEPARTMENT_REPORTS_INCOMPLETE" });
-      const current = await activeSubmission(body.organizationId, body.month);
-      if (current && ["submitted", "confirmed", "locked"].includes(current.status)) {
-        if (current.reportType === body.reportType && current.expectedProjectCount === projects.length && current.completedProjectCount === reportCount) return { data: current };
-        throw Object.assign(new Error("当前部门月报已经提交且配置不同，需管理员退回后再提交"), { statusCode: 409, code: "SUBMISSION_ALREADY_EXISTS" });
-      }
-      if (!submissionEditable(current?.status)) throw Object.assign(new Error("当前部门月报状态不可重复提交"), { statusCode: 409, code: "SUBMISSION_NOT_EDITABLE" });
-      const submittedAt = new Date();
+      if (!canSubmitMonthlyFacts(request.principal!) || !reportOrganizationIds(request).includes(body.organizationId)) forbidden("只能提交获授权经营实体的月报");
+      const date = reportMonth(body.month);
+      const [year, number] = body.month.split("-").map(Number);
       const row = await prisma.$transaction(async (tx) => {
-        if (projectIds.length) await tx.projectMonthlyReport.updateMany({ where: { projectId: { in: projectIds }, reportMonth: date, status: { in: ["draft", "withdrawn"] } }, data: { status: "submitted", submittedBy: request.principal!.accountId, submittedAt } });
+        // Serialize submissions for the same entity and month; a retry must observe the first result.
+        await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${body.organizationId}), hashtext(${body.month}))`;
+        const [period, organization, projects, current] = await Promise.all([
+          tx.reportingPeriod.findUnique({ where: { reportMonth: date } }),
+          tx.organization.findFirst({ where: { id: body.organizationId, type: "business_entity", reportingEnabled: true }, select: { id: true } }),
+          tx.project.findMany({ where: { responsibleOrganizationId: body.organizationId, status: { in: ["active", "paused"] } }, select: { id: true } }),
+          tx.departmentMonthStatus.findFirst({ where: { organizationId: body.organizationId, reportingYear: year!, reportingMonth: number!, active: true } }),
+        ]);
+        if (current && ["submitted", "confirmed", "locked"].includes(current.status)) {
+          if (current.reportType === body.reportType) return current;
+          throw Object.assign(new Error("当前部门月报已经提交且配置不同，需管理员退回后再提交"), { statusCode: 409, code: "SUBMISSION_ALREADY_EXISTS" });
+        }
+        if (!period || !["open", "review"].includes(period.status)) throw Object.assign(new Error("该月份尚未开放或已经锁定"), { statusCode: 409, code: "REPORTING_PERIOD_NOT_WRITABLE" });
+        if (!organization) throw Object.assign(new Error("该经营实体未启用月报"), { statusCode: 409, code: "REPORTING_ENTITY_REQUIRED" });
+        const projectIds = projects.map((project) => project.id);
+        const liveReports = projectIds.length ? await tx.projectMonthlyReport.findMany({ where: { projectId: { in: projectIds }, reportingOrganizationId: body.organizationId, reportMonth: date, status: { in: ["draft", "withdrawn"] } }, select: { projectId: true } }) : [];
+        const reportCount = new Set(liveReports.map((row) => row.projectId)).size;
+        if (body.reportType === "no_projects" && projects.length) throw Object.assign(new Error("本月仍有在建或暂停项目，不能申报无在建项目"), { statusCode: 409, code: "ACTIVE_PROJECTS_EXIST" });
+        if (body.reportType === "projects" && (!projects.length || reportCount !== projects.length || liveReports.length !== projects.length)) throw Object.assign(new Error(`应报 ${projects.length} 个项目，已完成 ${reportCount} 个，请全部填写后统一提交`), { statusCode: 409, code: "DEPARTMENT_REPORTS_INCOMPLETE" });
+        if (!submissionEditable(current?.status)) throw Object.assign(new Error("当前部门月报状态不可重复提交"), { statusCode: 409, code: "SUBMISSION_NOT_EDITABLE" });
+        const submittedAt = new Date();
+        if (projectIds.length) {
+          const changed = await tx.projectMonthlyReport.updateMany({ where: { projectId: { in: projectIds }, reportingOrganizationId: body.organizationId, reportMonth: date, status: { in: ["draft", "withdrawn"] } }, data: { status: "submitted", submittedBy: request.principal!.accountId, submittedAt } });
+          if (changed.count !== projectIds.length) throw Object.assign(new Error("提交期间项目月报已变化，请刷新后重试"), { statusCode: 409, code: "DEPARTMENT_REPORTS_CHANGED" });
+        }
         const data = { reportType: body.reportType, noFieldProjects: body.reportType === "no_projects", status: nextSubmissionStatus((current?.status ?? "draft") as "draft" | "rejected", "submit"), expectedProjectCount: projects.length, completedProjectCount: reportCount, submittedAt, submittedBy: request.principal!.accountId, reviewedAt: null, reviewedBy: null, returnReason: null, note: body.note ?? null } as const;
         const updated = current ? await tx.departmentMonthStatus.update({ where: { id: current.id }, data }) : await tx.departmentMonthStatus.create({ data: { organizationId: body.organizationId, reportingYear: year!, reportingMonth: number!, ...data } });
         await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "department_monthly_submission.submit", objectType: "department_month_status", objectId: updated.id, metadata: { organizationId: body.organizationId, reportMonth: body.month, reportType: body.reportType, projectCount: reportCount } });
@@ -656,16 +692,18 @@ export async function registerProjectReportingRoutes(
     async (request) => {
       requireCompanyAdmin(request);
       const submissionId = id.parse((request.params as { id: string }).id);
-      const body = z.object({ action: z.enum(["confirm", "reject"]), reason: z.string().trim().max(1000).optional() }).superRefine((value, ctx) => { if (value.action === "reject" && (!value.reason || value.reason.length < 2)) ctx.addIssue({ code: "custom", path: ["reason"], message: "退回原因至少填写两个字" }); }).parse(request.body);
-      const current = await prisma.departmentMonthStatus.findUniqueOrThrow({ where: { id: submissionId } });
-      if (!current.active) throw Object.assign(new Error("该部门月报已失效"), { statusCode: 409, code: "SUBMISSION_INACTIVE" });
-      const next = nextSubmissionStatus(current.status, body.action);
-      const date = new Date(Date.UTC(current.reportingYear, current.reportingMonth - 1, 1));
-      const reviewedAt = new Date();
+      const body = z.object({ action: z.literal("reject"), reason: z.string().trim().min(2).max(1000) }).parse(request.body);
       const row = await prisma.$transaction(async (tx) => {
-        const updated = await tx.departmentMonthStatus.update({ where: { id: submissionId }, data: { status: next, reviewedAt, reviewedBy: request.principal!.accountId, returnReason: body.action === "reject" ? (body.reason ?? null) : null, confirmedAt: body.action === "confirm" ? reviewedAt : null, confirmedBy: body.action === "confirm" ? request.principal!.accountId : null } });
-        if (body.action === "reject") await tx.projectMonthlyReport.updateMany({ where: { reportingOrganizationId: current.organizationId, reportMonth: date, status: "submitted" }, data: { status: "draft", withdrawnBy: request.principal!.accountId, withdrawnAt: reviewedAt, withdrawalReason: body.reason ?? null } });
-        await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: `department_monthly_submission.${body.action}`, objectType: "department_month_status", objectId: submissionId, reason: body.reason ?? null });
+        const current = await tx.departmentMonthStatus.findUniqueOrThrow({ where: { id: submissionId } });
+        await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${current.organizationId}), hashtext(${`${current.reportingYear}-${String(current.reportingMonth).padStart(2, "0")}`}))`;
+        if (!current.active) throw Object.assign(new Error("该部门月报已失效"), { statusCode: 409, code: "SUBMISSION_INACTIVE" });
+        const next = nextSubmissionStatus(current.status, "reject");
+        const reviewedAt = new Date();
+        const changed = await tx.departmentMonthStatus.updateMany({ where: { id: submissionId, active: true, status: "submitted" }, data: { status: next, reviewedAt, reviewedBy: request.principal!.accountId, returnReason: body.reason } });
+        if (changed.count !== 1) throw Object.assign(new Error("该批次状态已变化，请刷新后查看"), { statusCode: 409, code: "SUBMISSION_ALREADY_REVIEWED" });
+        const updated = await tx.departmentMonthStatus.findUniqueOrThrow({ where: { id: submissionId } });
+        await tx.projectMonthlyReport.updateMany({ where: { reportingOrganizationId: current.organizationId, reportMonth: new Date(Date.UTC(current.reportingYear, current.reportingMonth - 1, 1)), status: "submitted" }, data: { status: "draft", withdrawnBy: request.principal!.accountId, withdrawnAt: reviewedAt, withdrawalReason: body.reason } });
+        await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "department_monthly_submission.reject", objectType: "department_month_status", objectId: submissionId, reason: body.reason });
         return updated;
       });
       return { data: row };
@@ -688,13 +726,16 @@ export async function registerProjectReportingRoutes(
       const date = reportMonth(value); const current = await reportingPeriodFor(value);
       if (current?.status === "locked" && body.status !== "locked" && (!body.reason || body.reason.length < 2)) throw Object.assign(new Error("重新开放锁定月份必须填写原因"), { statusCode: 400, code: "REOPEN_REASON_REQUIRED" });
       if (body.status === "locked") {
-        const [enabled, confirmed] = await Promise.all([prisma.organization.count({ where: { type: "business_entity", reportingEnabled: true } }), prisma.departmentMonthStatus.count({ where: { reportingYear: date.getUTCFullYear(), reportingMonth: date.getUTCMonth() + 1, active: true, status: "confirmed" } })]);
-        if (enabled !== confirmed) throw Object.assign(new Error(`仍有 ${enabled - confirmed} 个经营实体未确认，不能锁定`), { statusCode: 409, code: "REPORTING_PERIOD_INCOMPLETE" });
+        const [enabled, submitted] = await Promise.all([prisma.organization.count({ where: { type: "business_entity", reportingEnabled: true } }), prisma.departmentMonthStatus.count({ where: { reportingYear: date.getUTCFullYear(), reportingMonth: date.getUTCMonth() + 1, active: true, status: { in: [...submittedMonthStatuses] } } })]);
+        if (enabled !== submitted) throw Object.assign(new Error(`仍有 ${enabled - submitted} 个经营实体未提交，不能锁定`), { statusCode: 409, code: "REPORTING_PERIOD_INCOMPLETE" });
       }
       const row = await prisma.$transaction(async (tx) => {
         const updated = await tx.reportingPeriod.upsert({ where: { reportMonth: date }, create: { reportMonth: date, status: body.status, deadlineAt: body.deadlineAt ? new Date(body.deadlineAt) : null, reopenReason: body.reason ?? null, updatedBy: request.principal!.accountId }, update: { status: body.status, ...(body.deadlineAt !== undefined ? { deadlineAt: body.deadlineAt ? new Date(body.deadlineAt) : null } : {}), reopenReason: body.reason ?? null, updatedBy: request.principal!.accountId } });
-        if (body.status === "locked") await tx.departmentMonthStatus.updateMany({ where: { reportingYear: date.getUTCFullYear(), reportingMonth: date.getUTCMonth() + 1, active: true, status: "confirmed" }, data: { status: "locked", lockedAt: new Date(), lockedBy: request.principal!.accountId } });
-        if (current?.status === "locked" && body.status !== "locked") await tx.departmentMonthStatus.updateMany({ where: { reportingYear: date.getUTCFullYear(), reportingMonth: date.getUTCMonth() + 1, active: true, status: "locked" }, data: { status: "confirmed", lockedAt: null, lockedBy: null } });
+        if (body.status === "locked") await tx.departmentMonthStatus.updateMany({ where: { reportingYear: date.getUTCFullYear(), reportingMonth: date.getUTCMonth() + 1, active: true, status: { in: [...submittedMonthStatuses] } }, data: { status: "locked", lockedAt: new Date(), lockedBy: request.principal!.accountId } });
+        if (current?.status === "locked" && body.status !== "locked") {
+          await tx.departmentMonthStatus.updateMany({ where: { reportingYear: date.getUTCFullYear(), reportingMonth: date.getUTCMonth() + 1, active: true, status: "locked", confirmedAt: { not: null } }, data: { status: "confirmed", lockedAt: null, lockedBy: null } });
+          await tx.departmentMonthStatus.updateMany({ where: { reportingYear: date.getUTCFullYear(), reportingMonth: date.getUTCMonth() + 1, active: true, status: "locked", confirmedAt: null }, data: { status: "submitted", lockedAt: null, lockedBy: null } });
+        }
         await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "reporting_period.update", objectType: "reporting_period", objectId: updated.id, reason: body.reason ?? null, metadata: { month: value, status: body.status } });
         return updated;
       });
@@ -739,54 +780,30 @@ export async function registerProjectReportingRoutes(
           note: z.string().trim().max(1000).optional(),
         })
         .parse(request.body);
-      if (!reportOrganizationIds(request).includes(body.organizationId))
+      if (!canSubmitMonthlyFacts(request.principal!) || !reportOrganizationIds(request).includes(body.organizationId))
         forbidden("只能确认本经营实体");
-      await requireWritablePeriod(body.month);
-      const organization = await prisma.organization.findFirst({
-        where: { id: body.organizationId, type: "business_entity" },
-      });
-      if (!organization)
-        throw Object.assign(new Error("只有经营实体参与月报确认"), {
-          statusCode: 409,
-          code: "REPORTING_ENTITY_REQUIRED",
-        });
+      const date = reportMonth(body.month);
       const [year, number] = body.month.split("-").map(Number);
-      const existing = await prisma.project.count({ where: { responsibleOrganizationId: body.organizationId, status: { in: ["active", "paused"] } } });
-      if (existing)
-        throw Object.assign(new Error("本月仍有在建或暂停项目，不能确认无野外项目"), {
-          statusCode: 409,
-          code: "ACTIVE_PROJECTS_EXIST",
-        });
       const row = await prisma.$transaction(async (tx) => {
-        await tx.departmentMonthStatus.updateMany({
-          where: {
-            organizationId: body.organizationId,
-            reportingYear: year!,
-            reportingMonth: number!,
-            active: true,
-          },
-          data: {
-            active: false,
-            invalidatedAt: new Date(),
-            invalidatedBy: request.principal!.accountId,
-            invalidReason: "重新确认",
-          },
-        });
-        return tx.departmentMonthStatus.create({
-          data: {
-            organizationId: body.organizationId,
-            reportingYear: year!,
-            reportingMonth: number!,
-            noFieldProjects: true,
-            reportType: "no_projects",
-            status: "submitted",
-            expectedProjectCount: 0,
-            completedProjectCount: 0,
-            submittedBy: request.principal!.accountId,
-            submittedAt: new Date(),
-            note: body.note ?? null,
-          },
-        });
+        await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${body.organizationId}), hashtext(${body.month}))`;
+        const [period, organization, projectCount, current] = await Promise.all([
+          tx.reportingPeriod.findUnique({ where: { reportMonth: date } }),
+          tx.organization.findFirst({ where: { id: body.organizationId, type: "business_entity", reportingEnabled: true }, select: { id: true } }),
+          tx.project.count({ where: { responsibleOrganizationId: body.organizationId, status: { in: ["active", "paused"] } } }),
+          tx.departmentMonthStatus.findFirst({ where: { organizationId: body.organizationId, reportingYear: year!, reportingMonth: number!, active: true } }),
+        ]);
+        if (current && ["submitted", "confirmed", "locked"].includes(current.status)) {
+          if (current.reportType === "no_projects") return current;
+          throw Object.assign(new Error("本月已按项目提交月报，不能改报无项目"), { statusCode: 409, code: "SUBMISSION_ALREADY_EXISTS" });
+        }
+        if (!period || !["open", "review"].includes(period.status)) throw Object.assign(new Error("该月份尚未开放或已经锁定"), { statusCode: 409, code: "REPORTING_PERIOD_NOT_WRITABLE" });
+        if (!organization) throw Object.assign(new Error("该经营实体未启用月报"), { statusCode: 409, code: "REPORTING_ENTITY_REQUIRED" });
+        if (projectCount) throw Object.assign(new Error("本月仍有在建或暂停项目，不能确认无野外项目"), { statusCode: 409, code: "ACTIVE_PROJECTS_EXIST" });
+        if (!submissionEditable(current?.status)) throw Object.assign(new Error("当前部门月报状态不可重复提交"), { statusCode: 409, code: "SUBMISSION_NOT_EDITABLE" });
+        const data = { noFieldProjects: true, reportType: "no_projects" as const, status: "submitted" as const, expectedProjectCount: 0, completedProjectCount: 0, submittedBy: request.principal!.accountId, submittedAt: new Date(), note: body.note ?? null, reviewedAt: null, reviewedBy: null, returnReason: null };
+        const updated = current ? await tx.departmentMonthStatus.update({ where: { id: current.id }, data }) : await tx.departmentMonthStatus.create({ data: { organizationId: body.organizationId, reportingYear: year!, reportingMonth: number!, ...data } });
+        await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "department_monthly_submission.submit", objectType: "department_month_status", objectId: updated.id, metadata: { organizationId: body.organizationId, reportMonth: body.month, reportType: "no_projects", projectCount: 0 } });
+        return updated;
       });
       return { data: row };
     },
@@ -985,16 +1002,16 @@ export async function registerProjectReportingRoutes(
           reportingYear: date.getUTCFullYear(),
           reportingMonth: date.getUTCMonth() + 1,
           active: true,
-          status: { in: ["confirmed", "locked"] },
+          status: { in: [...submittedMonthStatuses, "locked"] },
         },
         select: { organizationId: true },
       });
-      const approvedOrganizationIds = submissions.map(({ organizationId }) => organizationId);
+      const submittedOrganizationIds = submissions.map(({ organizationId }) => organizationId);
       const rows = await prisma.projectMonthlyReport.findMany({
         where: {
           reportMonth: date,
           status: "submitted",
-          reportingOrganizationId: { in: approvedOrganizationIds },
+          reportingOrganizationId: { in: submittedOrganizationIds },
         },
         include,
         orderBy: [{ reportingOrganization: { name: "asc" } }, { project: { name: "asc" } }],
@@ -1086,12 +1103,12 @@ export async function registerProjectReportingRoutes(
         orderBy: { sortOrder: "asc" },
       });
       const exportMonth = query.year && query.month ? new Date(Date.UTC(query.year, query.month - 1, 1)) : null;
-      const approvedOrganizationIds = exportMonth ? (await prisma.departmentMonthStatus.findMany({ where: { reportingYear: exportMonth.getUTCFullYear(), reportingMonth: exportMonth.getUTCMonth() + 1, active: true, status: { in: ["confirmed", "locked"] }, reportType: "projects" }, select: { organizationId: true } })).map((row) => row.organizationId) : undefined;
+      const submittedOrganizationIds = exportMonth ? (await prisma.departmentMonthStatus.findMany({ where: { reportingYear: exportMonth.getUTCFullYear(), reportingMonth: exportMonth.getUTCMonth() + 1, active: true, status: { in: [...submittedMonthStatuses, "locked"] }, reportType: "projects" }, select: { organizationId: true } })).map((row) => row.organizationId) : undefined;
       const rows = await prisma.projectMonthlyReport.findMany({
         where: {
           ...visibleWhere(request),
           status: "submitted",
-          ...(approvedOrganizationIds ? { reportingOrganizationId: { in: approvedOrganizationIds } } : {}),
+          ...(submittedOrganizationIds ? { reportingOrganizationId: { in: submittedOrganizationIds } } : {}),
           ...(query.year
             ? {
                 reportMonth: {

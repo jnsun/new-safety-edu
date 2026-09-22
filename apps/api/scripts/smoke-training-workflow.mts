@@ -58,6 +58,12 @@ try {
   await startServer();
   const admin = await login(adminIdentity.username, adminIdentity.password); const learner = await login(learnerIdentity.username, learnerIdentity.password); const orgAdmin = await login(scopedAdmin.username, scopedAdmin.password);
 
+  const invalidUploadForm = new FormData();
+  invalidUploadForm.set("file", new Blob(["not html"], { type: "text/plain" }), "invalid.txt");
+  const invalidUpload = await request(admin, "/api/files?kind=courseware", { method: "POST", body: invalidUploadForm });
+  assert.equal(invalidUpload.response.status, 400); assert.equal(invalidUpload.body.error?.code, "INVALID_MIME");
+  record("课件上传失败", "非 HTML 文件由服务端拒绝并返回 INVALID_MIME，未显示为上传成功");
+
   const course = await request<{ id: string; versions: Array<{ id: string }> }>(admin, "/api/coursewares", json("POST", { title: `${marker}-课件`, type: "rich_text", scopeType: "company", scopeId: null, richText: "隔离项目入场教育内容" })); assert.equal(course.response.status, 201, course.text); const courseId = course.body.data!.id; const versionId = course.body.data!.versions[0]!.id;
   const unpublishedTemplate = await request(admin, "/api/training-templates", json("POST", { name: `${marker}-未发布模板`, type: "project_induction", scopeType: "company", scopeId: null, coursewareVersionIds: [versionId] })); assert.equal(unpublishedTemplate.response.status, 400); record("未发布课件阻断", "模板接口拒绝引用未发布课件");
   assert.equal((await request(admin, `/api/courseware-versions/${versionId}/publish`, { method: "POST" })).response.status, 200);

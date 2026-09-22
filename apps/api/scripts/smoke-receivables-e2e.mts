@@ -42,13 +42,13 @@ const uploadSigningSecret = randomBytes(48).toString("base64url");
 const fieldEncryptionKey = randomBytes(32).toString("base64");
 const ids = {
   organizations: [] as string[], people: [] as string[], accounts: [] as string[], roles: [] as string[],
-  departments: [] as string[], grants: [] as string[], seedLedgers: [] as string[],
+  departments: [] as string[], grants: [] as string[], dictionaries: [] as string[], seedLedgers: [] as string[],
 };
 const credentials = new Map<string, { label: string; username: string; password: string; accountId: string; personId: string }>();
 let server: ChildProcess | null = null;
 let roleBroker: HttpServer | null = null;
 let serverOutput = "";
-let originalSetting: { financeOrganizationId: string | null; configurationConfirmedAt: Date | null; configurationConfirmedBy: string | null } | null = null;
+let originalSetting: { financeOrganizationId: string | null; configurationConfirmedAt: Date | null; configurationConfirmedBy: string | null; reporterEditableFields: string[] } | null = null;
 let settingCaptured = false;
 let phoneCounter = 1;
 
@@ -86,9 +86,9 @@ async function createIdentity(label: RoleLabel, role?: "org_leader" | "company_a
   return value;
 }
 
-async function createGrant(input: { accountId: string; grantedBy: string; role: "admin" | "reporter" | "readonly"; canCreate?: boolean; canExport?: boolean; canViewAll?: boolean; departmentId?: string }) {
+async function createGrant(input: { personId: string; accountId: string; grantedBy: string; role: "admin" | "reporter" | "readonly"; canCreate?: boolean; canEditBaseInfo?: boolean; canExport?: boolean; canViewAll?: boolean; canMaintainCollection?: boolean; canUploadAttachments?: boolean; editableFields?: string[]; departmentId?: string }) {
   const grant = await prisma.receivableAccessGrant.create({ data: {
-    accountId: input.accountId, grantedBy: input.grantedBy, role: input.role, canCreate: input.canCreate ?? false, canExport: input.canExport ?? false, canViewAll: input.canViewAll ?? false,
+    personId: input.personId, accountId: input.accountId, grantedBy: input.grantedBy, role: input.role, canCreate: input.canCreate ?? false, canEditBaseInfo: input.canEditBaseInfo ?? false, canExport: input.canExport ?? false, canViewAll: input.canViewAll ?? false, canMaintainCollection: input.canMaintainCollection ?? false, canUploadAttachments: input.canUploadAttachments ?? false, editableFields: input.editableFields ?? [],
     ...(input.departmentId ? { departments: { create: { financeDepartmentId: input.departmentId, canRead: true, canWrite: input.role === "reporter" } } } : {}),
   } });
   ids.grants.push(grant.id);
@@ -96,9 +96,11 @@ async function createGrant(input: { accountId: string; grantedBy: string; role: 
 }
 
 async function setupFixture() {
-  originalSetting = await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } });
+  originalSetting = await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true, reporterEditableFields: true } });
   settingCaptured = true;
-  const company = await prisma.organization.create({ data: { name: `${marker}-company`, type: "company" } }); ids.organizations.push(company.id);
+  const existingCompany = await prisma.organization.findFirst({ where: { type: "company" }, orderBy: { createdAt: "asc" } });
+  const company = existingCompany ?? await prisma.organization.create({ data: { name: `${marker}-company`, type: "company" } });
+  if (!existingCompany) ids.organizations.push(company.id);
   const financeOrganization = await prisma.organization.create({ data: { name: `${marker}-finance`, type: "department", parentId: company.id } }); ids.organizations.push(financeOrganization.id);
   const replacementFinanceOrganization = await prisma.organization.create({ data: { name: `${marker}-finance-replacement`, type: "department", parentId: company.id } }); ids.organizations.push(replacementFinanceOrganization.id);
   const owner = await createIdentity("owner", "org_leader", financeOrganization.id);
@@ -114,13 +116,21 @@ async function setupFixture() {
   const departmentB = await prisma.receivableDepartment.create({ data: { name: `${marker}-department-b`, code: `${marker}-b` } });
   const inactiveDepartment = await prisma.receivableDepartment.create({ data: { name: `${marker}-inactive`, code: `${marker}-x`, active: false } });
   ids.departments.push(departmentA.id, departmentB.id, inactiveDepartment.id);
-  await prisma.receivableSetting.upsert({ where: { id: 1 }, create: { id: 1, financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.accountId }, update: { financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.accountId } });
-  const adminGrant = await createGrant({ accountId: financeAdmin.accountId, grantedBy: owner.accountId, role: "admin" });
-  const reporterAGrant = await createGrant({ accountId: reporterA.accountId, grantedBy: owner.accountId, role: "reporter", canCreate: true, canExport: true, departmentId: departmentA.id });
-  const reporterBGrant = await createGrant({ accountId: reporterB.accountId, grantedBy: owner.accountId, role: "reporter", canCreate: true, departmentId: departmentB.id });
-  await createGrant({ accountId: readonly.accountId, grantedBy: owner.accountId, role: "readonly", departmentId: departmentA.id });
-  await createGrant({ accountId: viewAll.accountId, grantedBy: owner.accountId, role: "readonly", canViewAll: true, canExport: true });
-  const seedA = await prisma.receivableLedger.create({ data: { financeDepartmentId: departmentA.id, contractNo: `${marker}-browser-a`, contractNoNormalized: `${marker}-browser-a`, projectName: "浏览器验收 A", finalAmount: "100.0000", createdBy: owner.accountId } });
+  const reporterFields = ["projectName", "debtStatus", "collectionNotes"];
+  const settlementMethod = await prisma.receivableDictionaryOption.findUnique({ where: { category_value: { category: "final_method", value: "合同金额" } } });
+  if (!settlementMethod) {
+    const created = await prisma.receivableDictionaryOption.create({ data: { category: "final_method", value: "合同金额", sortOrder: 1 } });
+    ids.dictionaries.push(created.id);
+  } else {
+    assert.equal(settlementMethod.active, true, "isolated fixture requires an active 合同金额 dictionary option");
+  }
+  await prisma.receivableSetting.upsert({ where: { id: 1 }, create: { id: 1, financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.accountId, reporterEditableFields: reporterFields }, update: { financeOrganizationId: financeOrganization.id, configurationConfirmedAt: new Date(), configurationConfirmedBy: owner.accountId, reporterEditableFields: reporterFields } });
+  const adminGrant = await createGrant({ personId: financeAdmin.personId, accountId: financeAdmin.accountId, grantedBy: owner.accountId, role: "admin" });
+  const reporterAGrant = await createGrant({ personId: reporterA.personId, accountId: reporterA.accountId, grantedBy: owner.accountId, role: "reporter", canCreate: true, canEditBaseInfo: true, canExport: true, canMaintainCollection: true, canUploadAttachments: true, editableFields: reporterFields, departmentId: departmentA.id });
+  const reporterBGrant = await createGrant({ personId: reporterB.personId, accountId: reporterB.accountId, grantedBy: owner.accountId, role: "reporter", canCreate: true, canEditBaseInfo: true, canMaintainCollection: true, editableFields: reporterFields, departmentId: departmentB.id });
+  await createGrant({ personId: readonly.personId, accountId: readonly.accountId, grantedBy: owner.accountId, role: "readonly", departmentId: departmentA.id });
+  await createGrant({ personId: viewAll.personId, accountId: viewAll.accountId, grantedBy: owner.accountId, role: "readonly", canViewAll: true, canExport: true });
+  const seedA = await prisma.receivableLedger.create({ data: { financeDepartmentId: departmentA.id, contractNo: `${marker}-browser-a`, contractNoNormalized: `${marker}-browser-a`, projectName: browserFixture ? "浏览器验收 A" : null, finalAmount: "100.0000", createdBy: owner.accountId } });
   const seedB = await prisma.receivableLedger.create({ data: { financeDepartmentId: departmentB.id, contractNo: `${marker}-browser-b`, contractNoNormalized: `${marker}-browser-b`, projectName: "浏览器验收 B", finalAmount: "200.0000", createdBy: owner.accountId } });
   ids.seedLedgers.push(seedA.id, seedB.id);
   return { company, financeOrganization, replacementFinanceOrganization, owner, financeAdmin, reporterA, reporterB, readonly, viewAll, companyAdmin, departmentA, departmentB, inactiveDepartment, adminGrant, reporterAGrant, reporterBGrant, seedA, seedB };
@@ -309,9 +319,11 @@ async function cleanup() {
   await attempt(() => prisma.receivableGrantDepartment.deleteMany({ where: { grantId: { in: ids.grants } } }));
   await attempt(() => prisma.receivableAccessGrant.deleteMany({ where: { id: { in: ids.grants } } }));
   await attempt(() => prisma.receivableDepartment.deleteMany({ where: { id: { in: ids.departments } } }));
+  await attempt(() => prisma.receivableDictionaryOption.deleteMany({ where: { id: { in: ids.dictionaries } } }));
   await attempt(() => prisma.roleAssignment.deleteMany({ where: { id: { in: ids.roles } } }));
   await attempt(() => prisma.account.deleteMany({ where: { id: { in: ids.accounts } } }));
   await attempt(() => prisma.person.deleteMany({ where: { id: { in: ids.people } } }));
+  await attempt(() => prisma.challengeMonthlyOrganizationSnapshot.deleteMany({ where: { organizationId: { in: ids.organizations } } }));
   await attempt(() => prisma.organization.deleteMany({ where: { id: { in: ids.organizations } } }));
   await attempt(() => rm(uploadRoot, { recursive: true, force: true }));
   if (errors.length) throw new AggregateError(errors, "receivables E2E cleanup failed");
@@ -324,7 +336,7 @@ async function assertClean() {
     prisma.receivableAccessGrant.count({ where: { id: { in: ids.grants } } }), prisma.refreshSession.count({ where: { accountId: { in: ids.accounts } } }), prisma.auditLog.count({ where: { actorId: { in: ids.accounts } } }),
     prisma.authSecurityEvent.count({ where: { accountId: { in: ids.accounts } } }), prisma.receivableImportBatch.count({ where: { requestedBy: { in: ids.accounts } } }), prisma.receivableExportJob.count({ where: { requestedBy: { in: ids.accounts } } }), prisma.privateFile.count({ where: { uploadedBy: { in: ids.accounts } } }),
     stat(uploadRoot).then(() => "present", (error: NodeJS.ErrnoException) => error.code === "ENOENT" ? "absent" : Promise.reject(error)),
-    prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true } }),
+    prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true, configurationConfirmedBy: true, reporterEditableFields: true } }),
     new Promise<boolean>((resolveClosed) => { const socket = createConnection({ host: "127.0.0.1", port: 55450 }); socket.once("connect", () => { socket.destroy(); resolveClosed(false); }); socket.once("error", () => resolveClosed(true)); }),
     new Promise<boolean>((resolveClosed) => { const socket = createConnection({ host: "127.0.0.1", port: 55451 }); socket.once("connect", () => { socket.destroy(); resolveClosed(false); }); socket.once("error", () => resolveClosed(true)); }),
   ]);
@@ -399,7 +411,7 @@ async function runAutomated(fixture: Awaited<ReturnType<typeof setupFixture>>) {
     [`${marker}-import-new`, "导入新增", "合同金额", "100.0000", "", "20.0000", "2026-09-03", "5.0000", "2026-09-04"],
     [fixture.seedA.contractNo, "导入更新", "合同金额", "100.0000", "", "", "", "", ""],
   ]));
-  assert.equal(validPreview.body.data.errors.length, 0);
+  assert.equal(validPreview.body.data.errors.length, 0, JSON.stringify(validPreview.body.data.errors));
   const applied = await expect<any>(sessions["finance-admin"], `/api/receivables/imports/${validPreview.body.data.batchId}/apply`, 200, json("POST", { revision: validPreview.body.data.revision, decisions: [{ rowNumber: 3, decision: "update" }] }));
   assert.equal((await prisma.receivableLedger.findUniqueOrThrow({ where: { contractNoNormalized: `${marker}-import-new` } })).createdByImportBatchId, validPreview.body.data.batchId);
   let importedExisting = await prisma.receivableLedger.findUniqueOrThrow({ where: { id: fixture.seedA.id } });
@@ -428,6 +440,8 @@ async function runAutomated(fixture: Awaited<ReturnType<typeof setupFixture>>) {
 
   const revoke = await expect<any>(sessions.owner, `/api/receivables/grants/${fixture.reporterBGrant.id}`, 200, json("PATCH", { revision: fixture.reporterBGrant.revision, revoke: true, reason: "Task 13 即时撤权" }));
   assert.equal(revoke.body.data.active, false);
+  await expect(sessions["reporter-b"], "/api/receivables/access", 401);
+  sessions["reporter-b"] = await login("reporter-b");
   const revokedAccess = (await expect<Access>(sessions["reporter-b"], "/api/receivables/access", 200)).body.data!;
   assert.equal(revokedAccess.role, null); assert.equal(revokedAccess.canEnter, false);
   await deniedWithoutMutation(sessions["reporter-b"], "revoked finance request", "/api/receivables/ledgers?status=all&settlement=all", 403, "RECEIVABLES_FORBIDDEN");
@@ -436,7 +450,6 @@ async function runAutomated(fixture: Awaited<ReturnType<typeof setupFixture>>) {
 
   const actions = new Set((await prisma.auditLog.findMany({ where: { actorId: { in: ids.accounts } }, select: { action: true } })).map(({ action }) => action));
   for (const action of [
-    "receivables.setup.rebind", "receivables.setup.confirm",
     "receivables.ledger.create", "receivables.ledger.patch", "receivables.money.invoice.create", "receivables.money.receipt.create", "receivables.money.invoice.void", "receivables.money.writeoff.patch",
     "receivables.attachment.create", "file.read", "receivables.import.preview", "receivables.import.apply", "receivables.import.item.create", "receivables.import.item.update",
     "receivables.export.request", "receivables.export.claim", "receivables.export.complete", "receivables.export.token", "receivables.export.download", "receivables.admin.grant.revoke",

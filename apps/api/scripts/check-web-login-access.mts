@@ -13,8 +13,9 @@ assert.deepEqual(
   { allowed: true, path: "/receivables" },
 );
 assert.deepEqual(
-  decideWebLoginDestination({ hasManagerRole: false, canEnterReceivables: false }),
-  { allowed: false, reason: "no_web_access" },
+  decideWebLoginDestination({ hasManagerRole: false, canEnterReceivables: false, hasPerson: true }),
+  { allowed: true, path: "/my-profile" },
 );
+assert.deepEqual(decideWebLoginDestination({ hasManagerRole: false, canEnterReceivables: false, hasPerson: false }), { allowed: false, reason: "no_web_access" });
 
 console.log("WEB_LOGIN_ACCESS_OK");

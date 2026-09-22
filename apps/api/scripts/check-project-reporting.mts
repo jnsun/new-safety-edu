@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { reportStats, validateReportFields } from "../src/project-reporting-core.js";
-import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, nextSubmissionStatus } from "../src/project-reporting-policy.js";
+import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, monthlySubmissionReadiness, nextSubmissionStatus, submittedMonthStatuses } from "../src/project-reporting-policy.js";
 
 const fields = [{ fieldKey: "project_manager", label: "项目负责人", required: true, active: true, fieldType: "text" as const, options: [] }, { fieldKey: "custom_level", label: "风险等级", required: true, active: true, fieldType: "select" as const, options: ["低", "中", "高"] }];
 assert.deepEqual(validateReportFields({ project_manager: "匿名负责人", custom_level: "中", safetyHazards: false }, fields), []);
@@ -15,11 +15,19 @@ assert.equal(canSubmitMonthlyFacts(principal("field_reporter", "organization", "
 assert.equal(canGovernMonthlyReporting(principal("company_admin", "company", null)), true);
 assert.equal(canGovernMonthlyReporting(principal("field_reporter", "organization", "org-a", "business_entity")), false);
 assert.deepEqual(inheritedMonthlyDefaults({ overallProgress: "35%", onsiteCount: 8, onsiteVehicles: 2, equipmentModels: "钻机 2 台", monthlyConstructionStatus: "旧施工内容", safetyInspection: true, safetyHazards: true, safetyHazardDetail: "旧隐患" }), { overallProgress: "35%", onsiteCount: 8, onsiteVehicles: 2, equipmentModels: "钻机 2 台" });
+assert.deepEqual(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", projects: [{ reportStatus: "draft" }, {}] }), { expectedCount: 2, completedCount: 1, ready: false, reasons: ["仍有项目未保存可提交的月报草稿"] });
+assert.deepEqual(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", projects: [{ reportStatus: "draft" }, { reportStatus: "withdrawn" }] }), { expectedCount: 2, completedCount: 2, ready: true, reasons: [] });
+assert.equal(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", projects: [] }).ready, true);
+assert.equal(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "locked", projects: [] }).ready, false);
+assert.equal(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", submissionStatus: "submitted", projects: [{ reportStatus: "submitted" }] }).ready, false);
+assert.equal(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", submissionStatus: "submitted", projects: [{ reportStatus: "submitted" }] }).completedCount, 1);
 assert.equal(nextSubmissionStatus("draft", "submit"), "submitted");
 assert.equal(nextSubmissionStatus("rejected", "submit"), "submitted");
-assert.equal(nextSubmissionStatus("submitted", "confirm"), "confirmed");
+assert.throws(() => nextSubmissionStatus("submitted", "confirm" as never), /状态不允许/);
 assert.equal(nextSubmissionStatus("submitted", "reject"), "rejected");
+assert.equal(nextSubmissionStatus("submitted", "lock"), "locked");
 assert.equal(nextSubmissionStatus("confirmed", "lock"), "locked");
-assert.throws(() => nextSubmissionStatus("draft", "confirm"), /状态不允许/);
+assert.throws(() => nextSubmissionStatus("draft", "lock"), /状态不允许/);
+assert.deepEqual(submittedMonthStatuses, ["submitted", "confirmed"]);
 assert.deepEqual(reportStats([{ id: "a" }, { id: "b" }, { id: "c" }], [{ reportingOrganizationId: "a", onsiteCount: 5, onsiteVehicles: 2, safetyHazards: true, safetyInspection: true }], [{ organizationId: "a", status: "submitted", reportType: "projects" }, { organizationId: "b", status: "confirmed", reportType: "no_projects" }]), { departmentTotal: 3, submittedDepartments: 2, noFieldDepartments: 1, missingDepartments: 1, projectCount: 1, onsitePeople: 5, onsiteVehicles: 2, hazardProjects: 1, inspectionRate: 100 });
 console.log("PROJECT_REPORTING_POLICY_OK");

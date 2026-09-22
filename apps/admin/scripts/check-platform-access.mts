@@ -9,6 +9,7 @@ assert.deepEqual(resolvePlatformLanding({ canEnterSafety: true, receivablesMode:
 assert.deepEqual(resolvePlatformLanding({ canEnterSafety: true, receivablesMode: "hidden" }), { kind: "redirect", path: "/safety" });
 assert.deepEqual(resolvePlatformLanding({ canEnterSafety: false, receivablesMode: "enabled" }), { kind: "redirect", path: "/receivables" });
 assert.deepEqual(resolvePlatformLanding({ canEnterSafety: false, receivablesMode: "confirm" }), { kind: "redirect", path: "/receivables/departments" });
-assert.deepEqual(resolvePlatformLanding({ canEnterSafety: false, receivablesMode: "hidden" }), { kind: "denied" });
+assert.deepEqual(resolvePlatformLanding({ canEnterSafety: false, receivablesMode: "hidden", canViewSelf: true }), { kind: "redirect", path: "/my-profile" });
+assert.deepEqual(resolvePlatformLanding({ canEnterSafety: false, receivablesMode: "hidden", canViewSelf: false }), { kind: "denied" });
 
 console.log("PLATFORM_ACCESS_OK");

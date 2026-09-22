@@ -85,6 +85,11 @@ assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\
 assert.match(styles, /\.receivables-page \.ant-table-tbody > tr > td\s*\{[^}]*vertical-align:\s*middle/s, "all receivables tables vertically center their cells");
 assert.match(styles, /\.receivables-ledger-table \.ant-table-tbody > tr > td\s*\{[^}]*padding:\s*3px 6px/s, "ledger rows stay compact when long cells wrap");
 assert.match(ledgerSource, /金额单位：万元/, "ledger states the monetary unit once above the table");
+assert.match(ledgerSource, /完整筛选范围的汇总，不是当前页求和/, "ledger explains that totals come from the full server-filtered scope");
+assert.match(ledgerSource, /receivables-filter-summary/, "active server filters remain visible above the ledger");
+assert.match(ledgerSource, /receivables-detail-tabs/, "ledger details group overview, money, attachments, and history into stable tabs");
+assert.match(ledgerSource, /放弃未提交的修改/, "financial edits warn before discarding an unsaved form");
+assert.match(ledgerSource, /!currentDetail\.capabilities\.canWriteLedger/, "read-only detail state is visible from server capabilities");
 assert.doesNotMatch(ledgerSource, /finalAmount:\s*"[^"]*（万元）"/, "money column headings do not repeat the unit");
 assert.match(ledgerSource, /finalAmount:\s*"决算额"/, "money column headings use compact labels");
 assert.match(transfersSource, /合同金额（万元）/, "data entry states the authoritative unit");

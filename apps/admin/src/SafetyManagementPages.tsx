@@ -8,6 +8,7 @@ import {
   Checkbox,
   Col,
   Descriptions,
+  Drawer,
   Dropdown,
   Form,
   Input,
@@ -17,6 +18,7 @@ import {
   Row,
   Select,
   Space,
+  Steps,
   Statistic,
   Table,
   Tabs,
@@ -26,6 +28,7 @@ import {
 } from "antd";
 import type { UploadFile } from "antd";
 import { api, json } from "./api";
+import "./monthly-reports.css";
 
 type Organization = { id: string; name: string; type: string };
 type Project = {
@@ -1393,6 +1396,7 @@ export function QualificationsPage({
 export function MonthlyReportsPage() {
   const qc = useQueryClient();
   const [form] = Form.useForm();
+  const selectedDraftProjectId = Form.useWatch("projectId", form);
   const [typeForm] = Form.useForm();
   const [fieldForm] = Form.useForm();
   const today = new Date().toISOString().slice(0, 7);
@@ -1405,7 +1409,12 @@ export function MonthlyReportsPage() {
   const [history, setHistory] = useState<MonthlyReport[]>([]);
   const [keyword, setKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [projectFilter, setProjectFilter] = useState<"all" | "todo" | "draft" | "submitted">("all");
   const [noFieldOrg, setNoFieldOrg] = useState<string>();
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [reviewOrganizationId, setReviewOrganizationId] = useState<string>();
+  const [submittingBatch, setSubmittingBatch] = useState(false);
+  const [draftDirty, setDraftDirty] = useState(false);
   const [reportFiles, setReportFiles] = useState<UploadFile[]>([]);
   const capabilities = useQuery({
     queryKey: ["monthly-report-capabilities"],
@@ -1435,6 +1444,10 @@ export function MonthlyReportsPage() {
       api<MonthlyReport[]>(
         `/api/monthly-reports?year=${year}${allMonths ? "" : `&month=${Number(number)}`}${keyword ? `&keyword=${encodeURIComponent(keyword)}` : ""}`,
       ),
+  });
+  const workbenchReports = useQuery({
+    queryKey: ["monthly-reports-workbench", month],
+    queryFn: () => api<MonthlyReport[]>(`/api/monthly-reports?year=${year}&month=${Number(number)}`),
   });
   const completed = useQuery({
     queryKey: ["monthly-reports-completed", year],
@@ -1472,13 +1485,32 @@ export function MonthlyReportsPage() {
         period?: { status: "closed" | "open" | "review" | "locked"; deadlineAt?: string | null } | null;
       }>(`/api/monthly-reports/summary?month=${month}`),
   });
+  const selectedOrganizationId = noFieldOrg ?? capabilities.data?.organizationIds[0];
+  const preflight = useQuery({
+    queryKey: ["monthly-report-preflight", month, selectedOrganizationId],
+    enabled: !!selectedOrganizationId && !!capabilities.data?.canSubmit,
+    queryFn: () => api<{
+      organizationId: string;
+      month: string;
+      periodStatus: string;
+      submission: { id: string; status: string; reportType: string; returnReason?: string | null } | null;
+      reportType: "projects" | "no_projects";
+      expectedCount: number;
+      completedCount: number;
+      ready: boolean;
+      reasons: string[];
+      items: Array<{ id: string; name: string; code: string; status: string; report: { id: string; status: string; revision: number; updatedAt: string } | null }>;
+    }>(`/api/monthly-reports/submissions/preflight?organizationId=${selectedOrganizationId}&month=${month}`),
+  });
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["monthly-reports"] });
     void qc.invalidateQueries({ queryKey: ["monthly-report-summary"] });
     void qc.invalidateQueries({ queryKey: ["monthly-report-projects"] });
+    void qc.invalidateQueries({ queryKey: ["monthly-report-preflight"] });
   };
-  const openForm = (row?: MonthlyReport) => {
+  const openForm = (row?: MonthlyReport, project?: Project) => {
     setEditing(row);
+    setDraftDirty(false);
     setReportFiles([]);
     form.resetFields();
     form.setFieldsValue(
@@ -1489,6 +1521,7 @@ export function MonthlyReportsPage() {
             customData: row.customData,
           }
         : {
+            projectId: project?.id,
             reportMonth: month,
             onsiteCount: 0,
             onsiteVehicles: 0,
@@ -1496,12 +1529,20 @@ export function MonthlyReportsPage() {
             safetyHazards: false,
             safetyInvestment: 0,
             incidentCount: 0,
-            contractAmount: 0,
             projectStatus: "active",
             customData: {},
+            constructionLocation: project?.location ?? undefined,
+            contractAmount: project?.contractAmount ?? 0,
+            projectManager: project?.managerName ?? undefined,
+            contactInfo: project?.managerPhone ?? undefined,
+            ...(project?.previousDefaults ?? {}),
           },
     );
     setOpen(true);
+  };
+  const closeDraftForm = () => {
+    if (!draftDirty) { setOpen(false); return; }
+    Modal.confirm({ title: "放弃尚未保存的项目月报？", content: "本次填写的内容尚未保存为草稿。", okText: "放弃修改", okButtonProps: { danger: true }, cancelText: "继续填写", onOk: () => setOpen(false) });
   };
   const save = useMutation({
     mutationFn: async (values: Record<string, unknown>) => {
@@ -1523,7 +1564,7 @@ export function MonthlyReportsPage() {
         json(
           editing ? "PATCH" : "POST",
           editing
-            ? { ...values, reason: "撤回后更正并重新提交" }
+            ? { ...values, reason: "更新本月项目月报草稿" }
             : { ...values, fileIds },
         ),
       );
@@ -1684,7 +1725,7 @@ export function MonthlyReportsPage() {
   const statCards = [
     ["部门总数", stats?.departmentTotal],
     ["已报送部门", stats?.submittedDepartments],
-    ["已确认无野外", stats?.noFieldDepartments],
+    ["已报送无项目", stats?.noFieldDepartments],
     ["未报送部门", stats?.missingDepartments],
     ["报送项目总数", stats?.projectCount],
     ["现场总人数", stats?.onsitePeople],
@@ -1695,8 +1736,34 @@ export function MonthlyReportsPage() {
   const customFields = (config.data?.fields ?? []).filter(
     (field) => field.active && !field.builtin,
   );
-  const noFieldOrganizationId =
-    noFieldOrg ?? capabilities.data?.organizationIds[0];
+  const noFieldOrganizationId = selectedOrganizationId;
+  const ownDepartment = summary.data?.departments.find((row) => row.id === noFieldOrganizationId);
+  const currentReports = (workbenchReports.data ?? []).filter((row) => row.reportingOrganizationId === noFieldOrganizationId && row.reportMonth.slice(0, 7) === month);
+  const reportByProject = new Map(currentReports.map((row) => [row.projectId, row]));
+  const selectedOrganizationName = (config.data?.organizations ?? []).find((row) => row.id === noFieldOrganizationId)?.name ?? "当前经营实体";
+  const selectedDraftProject = projects.data?.find((row) => row.id === selectedDraftProjectId);
+  const projectItems = preflight.data?.items ?? [];
+  const visibleProjectItems = projectItems.filter((row) => projectFilter === "all" || (projectFilter === "todo" && !row.report) || (projectFilter === "draft" && ["draft", "withdrawn"].includes(row.report?.status ?? "")) || (projectFilter === "submitted" && row.report?.status === "submitted"));
+  const submitBatch = async () => {
+    if (!noFieldOrganizationId || !preflight.data?.ready || submittingBatch) return;
+    setSubmittingBatch(true);
+    try {
+      const latest = await api<typeof preflight.data>(`/api/monthly-reports/submissions/preflight?organizationId=${noFieldOrganizationId}&month=${month}`);
+      if (!latest.ready || latest.reportType !== preflight.data.reportType || latest.expectedCount !== preflight.data.expectedCount || latest.completedCount !== preflight.data.completedCount) {
+        message.error("项目或草稿已变化，请重新核对后提交");
+        await preflight.refetch();
+        return;
+      }
+      await api("/api/monthly-reports/submissions", json("POST", { organizationId: noFieldOrganizationId, month, reportType: latest.reportType }));
+      message.success("整批报送已提交，公司可查看；如有问题会退回修改");
+      setBatchOpen(false);
+      refresh();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSubmittingBatch(false);
+    }
+  };
   const manage = (
     <>
       <Space wrap style={{ marginBottom: 16 }}>
@@ -1727,7 +1794,7 @@ export function MonthlyReportsPage() {
               options={[
                 { value: "closed", label: "未开放" },
                 { value: "open", label: "开放填报" },
-                { value: "review", label: "复核中" },
+                { value: "review", label: "查看与退回" },
                 { value: "locked", label: "已锁定" },
               ]}
               onChange={async (status) => {
@@ -1743,7 +1810,9 @@ export function MonthlyReportsPage() {
           </>
         )}
       </Space>
-      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+      {summary.isError && <Alert style={{ marginBottom: 16 }} type="error" showIcon message="报送汇总加载失败" description={<Button onClick={() => void summary.refetch()}>重新加载</Button>} />}
+      {summary.isLoading && <Typography.Text type="secondary">正在加载本月报送汇总…</Typography.Text>}
+      {summary.data && <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {statCards.map(([label, value]) => (
           <Col xs={12} md={8} lg={6} xl={4} key={String(label)}>
             <Card size="small">
@@ -1751,8 +1820,8 @@ export function MonthlyReportsPage() {
             </Card>
           </Col>
         ))}
-      </Row>
-      <Card title="部门报送状态" size="small" style={{ marginBottom: 16 }}>
+      </Row>}
+      <Card title="经营实体报送情况" size="small" style={{ marginBottom: 16 }}>
         <Space wrap>
           <Button
             size="small"
@@ -1772,9 +1841,9 @@ export function MonthlyReportsPage() {
                 (
                   {
                     draft: "草稿中",
-                    submitted: "待复核",
+                    submitted: "已提交",
                     rejected: "已退回",
-                    confirmed: "已确认",
+                    confirmed: "已确认（历史）",
                     locked: "已锁定",
                     missing: "未报送",
                   } as Record<string, string>
@@ -1783,48 +1852,16 @@ export function MonthlyReportsPage() {
             </Button>
           ))}
         </Space>
-        <div style={{ marginTop: 12 }}>
-          <Space wrap>
-            {(summary.data?.departments ?? [])
-              .filter(
-                (row) => statusFilter === "all" || row.status === statusFilter,
-              )
-              .map((row) => (
-                <Tag
-                  key={row.id}
-                  color={
-                    row.status === "confirmed" || row.status === "locked"
-                      ? "green"
-                      : row.status === "submitted"
-                        ? "blue"
-                        : row.status === "rejected" || row.status === "missing"
-                          ? "red"
-                          : "orange"
-                  }
-                >
-                  {row.name} ·{" "}
-                  {{ draft: "草稿中", submitted: "待复核", rejected: "已退回", confirmed: "已确认", locked: "已锁定", missing: "未报送" }[row.status]}
-                  {row.reportType === "no_projects" ? " · 无在建项目" : ` · ${row.reportCount} 个项目`}
-                  {row.returnReason ? ` · ${row.returnReason}` : ""}
-                  {capabilities.data?.canReview && row.status === "submitted" && row.submissionId && (
-                    <Space size={4} style={{ marginLeft: 8 }}>
-                      <Button size="small" type="link" onClick={async () => {
-                        await api(`/api/monthly-reports/submissions/${row.submissionId}/review`, json("POST", { action: "confirm" }));
-                        message.success("已确认"); refresh();
-                      }}>确认</Button>
-                      <Button size="small" danger type="link" onClick={() => {
-                        let reason = "";
-                        Modal.confirm({ title: `退回 ${row.name} 的月报？`, content: <Input.TextArea rows={3} placeholder="填写退回原因" onChange={(event) => { reason = event.target.value; }} />, onOk: async () => {
-                          await api(`/api/monthly-reports/submissions/${row.submissionId}/review`, json("POST", { action: "reject", reason }));
-                          message.success("已退回"); refresh();
-                        } });
-                      }}>退回</Button>
-                    </Space>
-                  )}
-                </Tag>
-              ))}
-          </Space>
-        </div>
+        <Table style={{ marginTop: 16 }} rowKey="id" size="small" loading={summary.isLoading}
+          dataSource={(summary.data?.departments ?? []).filter((row) => statusFilter === "all" || row.status === statusFilter)}
+          pagination={{ pageSize: 10 }} columns={[
+            { title: "经营实体", dataIndex: "name" },
+            { title: "报送类型", render: (_: unknown, row: NonNullable<typeof summary.data>["departments"][number]) => row.reportType === "no_projects" ? "无项目" : "项目月报" },
+            { title: "项目数", dataIndex: "reportCount" },
+            { title: "状态", render: (_: unknown, row: NonNullable<typeof summary.data>["departments"][number]) => <Tag color={row.status === "submitted" ? "blue" : row.status === "confirmed" || row.status === "locked" ? "green" : row.status === "rejected" ? "red" : "default"}>{{ draft: "草稿中", submitted: "已提交", rejected: "已退回", confirmed: "已确认（历史）", locked: "已锁定", missing: "未报送" }[row.status]}</Tag> },
+            { title: "提交时间", dataIndex: "latestSubmittedAt", render: (value?: string) => value ? value.slice(0, 16).replace("T", " ") : "—" },
+            { title: "操作", render: (_: unknown, row: NonNullable<typeof summary.data>["departments"][number]) => <Button type="link" onClick={() => setReviewOrganizationId(row.id)}>查看</Button> },
+          ]} />
       </Card>
       <Card title={`${month} 报送汇总`}>
         <Table
@@ -1839,113 +1876,62 @@ export function MonthlyReportsPage() {
   );
   const own = (
     <>
-      <Space wrap style={{ marginBottom: 16 }}>
-        <Input
-          type="month"
-          value={month}
-          disabled={allMonths}
-          onChange={(event) => setMonth(event.target.value)}
-          style={{ width: 160 }}
-        />
-        <Checkbox
-          checked={allMonths}
-          onChange={(event) => setAllMonths(event.target.checked)}
-        >
-          查看全年全部月份
-        </Checkbox>
-        <Input.Search
-          placeholder="项目名称、类型或地点"
-          allowClear
-          onSearch={setKeyword}
-          style={{ width: 260 }}
-        />
-        {capabilities.data?.canSubmit && (
-          <Button type="primary" onClick={() => openForm()}>
-            新建项目报送
-          </Button>
+      <Card className="monthly-overview" style={{ marginBottom: 16 }}>
+        <Space wrap size="middle" style={{ width: "100%", justifyContent: "space-between" }}>
+          <Space wrap>
+            <Input type="month" value={month} onChange={(event) => { setMonth(event.target.value); setProjectFilter("all"); setBatchOpen(false); }} style={{ width: 160 }} />
+            <Select value={noFieldOrganizationId} onChange={(value) => { setNoFieldOrg(value); setProjectFilter("all"); setBatchOpen(false); }} style={{ minWidth: 220 }} placeholder="选择经营实体"
+              options={(config.data?.organizations ?? []).filter((org) => capabilities.data?.organizationIds.includes(org.id)).map((org) => ({ value: org.id, label: org.name }))} />
+          </Space>
+          <Tag color={ownDepartment?.status === "submitted" ? "blue" : ownDepartment?.status === "confirmed" || ownDepartment?.status === "locked" ? "green" : ownDepartment?.status === "rejected" ? "red" : "default"}>
+            {{ draft: "草稿中", submitted: "已提交", rejected: "已退回", confirmed: "已确认（历史）", locked: "已锁定", missing: "未报送" }[ownDepartment?.status ?? ((preflight.data?.completedCount ?? 0) > 0 ? "draft" : "missing")]}
+          </Tag>
+        </Space>
+        <Typography.Title level={4} style={{ marginTop: 18 }}>{selectedOrganizationName} · {month} 野外项目月报</Typography.Title>
+        {preflight.isLoading ? <Typography.Text type="secondary">正在核对项目清单…</Typography.Text> : preflight.isError ? <Alert type="error" message="项目清单核对失败" description={<Button onClick={() => void preflight.refetch()}>重试</Button>} /> : (
+          <Space wrap>
+            <Statistic title="应报项目" value={preflight.data?.expectedCount ?? 0} suffix="个" />
+            <Statistic title="已保存草稿" value={preflight.data?.completedCount ?? 0} suffix="个" />
+            <Statistic title="待填写" value={Math.max(0, (preflight.data?.expectedCount ?? 0) - (preflight.data?.completedCount ?? 0))} suffix="个" />
+          </Space>
         )}
-      </Space>
-      {!allMonths && capabilities.data?.canSubmit && noFieldOrganizationId && (
-        <Alert
-          showIcon
-          type={summary.data?.period?.status === "open" || summary.data?.period?.status === "review" ? "info" : "warning"}
-          style={{ marginBottom: 16 }}
-          message={`${month} 部门统一提交`}
-          description={
-            <Space wrap>
-              <Select
-                value={noFieldOrganizationId}
-                onChange={setNoFieldOrg}
-                style={{ width: 200 }}
-                options={(config.data?.organizations ?? [])
-                  .filter((org) =>
-                    capabilities.data?.organizationIds.includes(org.id),
-                  )
-                  .map((org) => ({ value: org.id, label: org.name }))}
-              />
-              <Button
-                type="primary"
-                onClick={() =>
-                  Modal.confirm({
-                    title: `提交 ${month} 全部项目月报？`,
-                    onOk: async () => {
-                      try {
-                        await api(
-                          "/api/monthly-reports/submissions",
-                          json("POST", {
-                            organizationId: noFieldOrganizationId,
-                            month,
-                            reportType: "projects",
-                          }),
-                        );
-                        message.success("已统一提交，等待复核");
-                        refresh();
-                      } catch (error) {
-                        message.error((error as Error).message);
-                      }
-                    },
-                  })
-                }
-              >
-                提交本实体全部项目月报
-              </Button>
-              <Button
-                onClick={() =>
-                  Modal.confirm({
-                    title: `确认 ${month} 无在建或暂停项目？`,
-                    onOk: async () => {
-                      try {
-                        await api(
-                          "/api/monthly-reports/submissions",
-                          json("POST", {
-                          organizationId: noFieldOrganizationId,
-                          month,
-                            reportType: "no_projects",
-                          }),
-                        );
-                        message.success("无项目月报已提交，等待复核");
-                        refresh();
-                      } catch (error) {
-                        message.error((error as Error).message);
-                      }
-                    },
-                  })
-                }
-              >
-                本月无在建项目
-              </Button>
-              <Typography.Text type="secondary">部门统一提交后不能自行撤回；需要修改时由管理员退回。</Typography.Text>
-            </Space>
-          }
-        />
-      )}
-      <Table
-        rowKey="id"
-        dataSource={reports.data ?? []}
-        pagination={false}
-        scroll={{ x: 1400 }}
-        columns={reportColumns}
-      />
+        {ownDepartment?.returnReason && <Alert style={{ marginTop: 16 }} type="warning" showIcon message="公司已退回，请修改后重新整批提交" description={ownDepartment.returnReason} />}
+      </Card>
+      <Card title="项目草稿" extra={<Typography.Text type="secondary">只需更新本月变化；上月现场数据自动带入新草稿</Typography.Text>}>
+        {(projects.isError || workbenchReports.isError) && <Alert style={{ marginBottom: 16 }} type="error" showIcon message="草稿资料加载失败，暂不能编辑" description={<Button onClick={() => { void projects.refetch(); void workbenchReports.refetch(); }}>重新加载</Button>} />}
+        {preflight.data?.expectedCount === 0 && <Alert type="info" style={{ marginBottom: 16 }} message="当前经营实体本月没有在建或暂停项目" description="核实项目范围后，可在下方以“无项目”方式整批提交。" />}
+        <Space wrap style={{ marginBottom: 12 }}>
+          {([
+            ["all", `全部 ${projectItems.length}`],
+            ["todo", `待更新 ${projectItems.filter((row) => !row.report).length}`],
+            ["draft", `草稿 ${projectItems.filter((row) => ["draft", "withdrawn"].includes(row.report?.status ?? "")).length}`],
+            ["submitted", `已提交 ${projectItems.filter((row) => row.report?.status === "submitted").length}`],
+          ] as const).map(([key, label]) => <Button key={key} size="small" type={projectFilter === key ? "primary" : "text"} onClick={() => setProjectFilter(key)}>{label}</Button>)}
+        </Space>
+        <Table rowKey="id" loading={preflight.isLoading} dataSource={visibleProjectItems} pagination={{ pageSize: 10 }}
+          columns={[
+            { title: "项目", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => <><strong>{row.name}</strong><br /><Typography.Text type="secondary">{row.code}</Typography.Text></> },
+            { title: "草稿状态", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => <Tag color={!row.report ? "orange" : row.report.status === "submitted" ? "blue" : "green"}>{!row.report ? "待更新" : row.report.status === "submitted" ? "已提交" : "草稿"}</Tag> },
+            { title: "上月资料", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => Object.keys(projects.data?.find((project) => project.id === row.id)?.previousDefaults ?? {}).length ? "已预填" : "无记录" },
+            { title: "本月更新", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => row.report ? `已保存 · ${row.report.updatedAt.slice(0, 16).replace("T", " ")}` : "尚未保存本月草稿" },
+            { title: "操作", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => {
+              const project = projects.data?.find((item) => item.id === row.id);
+              const report = reportByProject.get(row.id);
+              const writable = ["open", "review"].includes(preflight.data?.periodStatus ?? "") && !["submitted", "confirmed", "locked"].includes(ownDepartment?.status ?? "");
+              return <Space><Button type="link" disabled={!writable || !project || (!!row.report && !report) || (row.report?.status !== undefined && !["draft", "withdrawn"].includes(row.report.status))} onClick={() => openForm(report, project)}>{row.report ? "编辑草稿" : "填写草稿"}</Button>{report && <Button type="link" onClick={() => setDetail(report)}>查看</Button>}</Space>;
+            } },
+          ]} />
+        <Space wrap style={{ marginTop: 16 }}>
+          <Button type="primary" disabled={!preflight.data?.ready} onClick={() => setBatchOpen(true)}>核对并整批提交</Button>
+          <Typography.Text type="secondary">提交后即完成本月报送，公司发现问题时可退回修改。</Typography.Text>
+        </Space>
+        {!!preflight.data?.reasons.length && <Alert style={{ marginTop: 16 }} type="warning" showIcon message="暂不能整批提交" description={preflight.data.reasons.join("；")} />}
+      </Card>
+      <Card title="历史报送记录" style={{ marginTop: 16 }}>
+        <Space wrap style={{ marginBottom: 12 }}><Checkbox checked={allMonths} onChange={(event) => setAllMonths(event.target.checked)}>查看本年度其他月份</Checkbox><Input.Search placeholder="项目名称、类型或地点" allowClear onSearch={setKeyword} style={{ width: 260 }} /></Space>
+        {reports.isError && <Alert style={{ marginBottom: 12 }} type="error" showIcon message="历史报送记录加载失败" description={<Button onClick={() => void reports.refetch()}>重新加载</Button>} />}
+        <Table rowKey="id" loading={reports.isLoading} dataSource={(reports.data ?? []).filter((row) => row.reportingOrganizationId === noFieldOrganizationId)} pagination={{ pageSize: 10 }} scroll={{ x: 1200 }} columns={reportColumns} />
+      </Card>
     </>
   );
   const completedView = (
@@ -2183,12 +2169,14 @@ export function MonthlyReportsPage() {
       </Card>
     </Space>
   );
+  const reviewDepartment = summary.data?.departments.find((row) => row.id === reviewOrganizationId);
+  const reviewReports = (summary.data?.reports ?? []).filter((row) => row.reportingOrganizationId === reviewOrganizationId);
   return (
     <div className="admin-workspace monthly-report-page">
       <Space className="page-title" wrap>
         <Typography.Title level={3}>野外施工项目报送</Typography.Title>
         <Typography.Text type="secondary">
-          项目逐项保存草稿，经营实体核对完整后统一提交，管理员复核确认并锁定月份
+          项目逐项保存草稿，经营实体核对完整后统一提交；公司查看，发现问题时退回
         </Typography.Text>
       </Space>
       <Tabs
@@ -2198,28 +2186,76 @@ export function MonthlyReportsPage() {
         onChange={setView}
         items={[
           ...(capabilities.data?.canSubmit
-            ? [{ key: "mine", label: "我的报送", children: own }]
+            ? [{ key: "mine", label: "经营实体月报", children: own }]
             : []),
-          { key: "manage", label: "报送管理", children: manage },
+          { key: "manage", label: "报送查看", children: manage },
           { key: "completed", label: "完工项目", children: completedView },
           ...(capabilities.data?.canConfigure
             ? [{ key: "config", label: "报送配置", children: configuration }]
             : []),
         ]}
       />
-      <Modal
-        title={editing ? "编辑项目报送" : "新建项目报送"}
+      <Drawer title={`${month} · 整批提交核对`} open={batchOpen} onClose={() => setBatchOpen(false)} width="min(760px, 100vw)"
+        footer={<Space><Button onClick={() => setBatchOpen(false)}>返回草稿</Button><Button type="primary" loading={submittingBatch} disabled={!preflight.data?.ready} onClick={() => Modal.confirm({ title: `确认提交 ${selectedOrganizationName} ${month} 月报？`, content: `本次将整批提交 ${preflight.data?.expectedCount ?? 0} 个项目。提交后公司可查看；如有问题会退回，提交后不能自行修改。`, onOk: submitBatch })}>确认整批提交</Button></Space>}>
+        <Steps size="small" current={1} style={{ marginBottom: 24 }} items={[{ title: "更新项目草稿" }, { title: "经营实体整批提交" }, { title: "公司查看 / 问题退回" }]} />
+        {preflight.isLoading ? <Typography.Text>正在核对服务端数据…</Typography.Text> : preflight.isError ? <Alert type="error" message="核对失败" description={<Button onClick={() => void preflight.refetch()}>重试</Button>} /> : <>
+          <Alert type={preflight.data?.ready ? "success" : "warning"} showIcon message={preflight.data?.ready ? "可以整批提交" : "尚未达到提交条件"} description={preflight.data?.reasons.join("；") || `应报 ${preflight.data?.expectedCount ?? 0} 个项目，已保存 ${preflight.data?.completedCount ?? 0} 个草稿。`} />
+          <Descriptions style={{ marginTop: 20 }} size="small" bordered column={2} items={[
+            { key: "month", label: "报送月份", children: month },
+            { key: "org", label: "经营实体", children: selectedOrganizationName },
+            { key: "expected", label: "应报项目", children: preflight.data?.expectedCount ?? 0 },
+            { key: "completed", label: "已保存草稿", children: preflight.data?.completedCount ?? 0 },
+          ]} />
+          <Table style={{ marginTop: 20 }} size="small" rowKey="id" pagination={false} dataSource={preflight.data?.items ?? []}
+            columns={[{ title: "项目", dataIndex: "name" }, { title: "编号", dataIndex: "code" }, { title: "草稿", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => row.report ? <Tag color="green">v{row.report.revision} 已保存</Tag> : <Tag color="orange">未填写</Tag> }]} />
+          {preflight.data?.reportType === "no_projects" && <Typography.Paragraph style={{ marginTop: 18 }}>服务端核对本实体没有在建或暂停项目，本次将以“无项目”报送。</Typography.Paragraph>}
+        </>}
+      </Drawer>
+      <Drawer title={`${month} · ${reviewDepartment?.name ?? "经营实体"}报送查看`} open={!!reviewOrganizationId} onClose={() => setReviewOrganizationId(undefined)} width="min(860px, 100vw)"
+        footer={capabilities.data?.canReview && reviewDepartment?.status === "submitted" && reviewDepartment.submissionId ? <Space>
+          <Button onClick={() => setReviewOrganizationId(undefined)}>关闭</Button>
+          <Button danger onClick={() => {
+            let reason = "";
+            Modal.confirm({ title: `退回 ${reviewDepartment.name} 的整批月报？`, content: <Input.TextArea rows={3} placeholder="填写退回原因（至少两个字）" onChange={(event) => { reason = event.target.value; }} />, onOk: async () => {
+              if (reason.trim().length < 2) { message.error("请填写至少两个字的退回原因"); throw new Error("退回原因不足"); }
+              try { await api(`/api/monthly-reports/submissions/${reviewDepartment.submissionId}/review`, json("POST", { action: "reject", reason: reason.trim() })); message.success("整批月报已退回"); setReviewOrganizationId(undefined); refresh(); } catch (error) { message.error((error as Error).message); throw error; }
+            } });
+          }}>退回修改</Button>
+        </Space> : null}>
+        {reviewDepartment && <>
+          {reviewDepartment.status === "submitted" && <Alert style={{ marginBottom: 16 }} type="info" showIcon message="已完成报送，无需逐批确认" description="公司可直接查看；发现问题时填写原因并退回。" />}
+          <Descriptions bordered size="small" column={2} items={[
+            { key: "org", label: "经营实体", children: reviewDepartment.name },
+            { key: "status", label: "状态", children: { draft: "草稿中", submitted: "已提交", rejected: "已退回", confirmed: "已确认（历史）", locked: "已锁定", missing: "未报送" }[reviewDepartment.status] },
+            { key: "type", label: "报送类型", children: reviewDepartment.reportType === "no_projects" ? "无在建项目" : "项目月报" },
+            { key: "count", label: "项目数", children: reviewDepartment.reportCount },
+            ...(reviewDepartment.returnReason ? [{ key: "reason", label: "退回原因", children: reviewDepartment.returnReason, span: 2 as const }] : []),
+          ]} />
+          <Table style={{ marginTop: 20 }} size="small" rowKey="id" dataSource={reviewReports} pagination={{ pageSize: 10 }} columns={[
+            { title: "项目", render: (_: unknown, row: MonthlyReport) => <Button type="link" onClick={() => setDetail(row)}>{row.project.name}</Button> },
+            { title: "现场人数", dataIndex: "onsiteCount" }, { title: "车辆", dataIndex: "onsiteVehicles" },
+            { title: "隐患", render: (_: unknown, row: MonthlyReport) => row.safetyHazards ? "有" : "无" },
+            { title: "提交时间", dataIndex: "submittedAt", render: (value?: string) => value ? value.slice(0, 16).replace("T", " ") : "—" },
+          ]} />
+          {reviewDepartment.reportType === "no_projects" && <Alert type="info" message="该经营实体提交了无项目报送" description="仅在服务端核实本月没有在建或暂停项目后允许提交。" />}
+        </>}
+      </Drawer>
+      <Drawer
+        title={editing ? "更新项目草稿" : "填写项目草稿"}
         open={open}
-        footer={null}
-        width={900}
-        onCancel={() => setOpen(false)}
+        width="min(1080px, 100vw)"
+        onClose={closeDraftForm}
         destroyOnClose
       >
         <Form
           form={form}
           layout="vertical"
+          onValuesChange={() => setDraftDirty(true)}
           onFinish={(values) => save.mutate(values)}
         >
+          <Typography.Title level={5}>项目概况</Typography.Title>
+          <Typography.Paragraph type="secondary">项目和报送月份由清单确定，不在月报草稿中修改。</Typography.Paragraph>
+          {!editing && selectedDraftProject && <Alert style={{ marginBottom: 18 }} type="info" showIcon message="已带入项目主档与上月现场数据" description={selectedDraftProject.previousDefaults ? `上月总体进度：${selectedDraftProject.previousDefaults.overallProgress || "未填"}；现场人数：${selectedDraftProject.previousDefaults.onsiteCount ?? "未填"}；车辆：${selectedDraftProject.previousDefaults.onsiteVehicles ?? "未填"}。请核实并填写本月施工情况。` : "该项目暂无可带入的上月现场数据，请填写本月实际情况。"} />}
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item
@@ -2228,7 +2264,7 @@ export function MonthlyReportsPage() {
                 rules={[{ required: true }]}
               >
                 <Select
-                  disabled={!!editing}
+                  disabled
                   showSearch
                   optionFilterProp="label"
                   onChange={(projectId) => {
@@ -2256,7 +2292,7 @@ export function MonthlyReportsPage() {
                 label="报送月份"
                 rules={[{ required: true }]}
               >
-                <Input disabled={!!editing} type="month" />
+                <Input disabled type="month" />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -2307,6 +2343,10 @@ export function MonthlyReportsPage() {
                 <Input />
               </Form.Item>
             </Col>
+          </Row>
+          <Typography.Title level={5}>本月更新</Typography.Title>
+          <Typography.Paragraph type="secondary">上月数据仅供参考；本月施工情况、安全自检和隐患请按实际填写。</Typography.Paragraph>
+          <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="overallProgress" label="项目总体进度">
                 <Input.TextArea rows={3} />
@@ -2425,7 +2465,7 @@ export function MonthlyReportsPage() {
             </Col>
             {!editing && (
               <Col span={24}>
-                <Form.Item label="附件（可选，最多 20 个）">
+                <Form.Item label="补充材料（可选，最多 20 个附件）">
                   <Upload
                     multiple
                     fileList={reportFiles}
@@ -2449,7 +2489,7 @@ export function MonthlyReportsPage() {
             保存项目月报草稿
           </Button>
         </Form>
-      </Modal>
+      </Drawer>
       <Modal
         title="报送详情"
         open={!!detail}

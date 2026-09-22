@@ -35,14 +35,32 @@ export function inheritedMonthlyDefaults(previous?: {
   } : {};
 }
 
+export function monthlySubmissionReadiness(input: {
+  organizationEnabled: boolean;
+  periodStatus: string;
+  submissionStatus?: string | undefined;
+  projects: Array<{ reportStatus?: string | undefined }>;
+}) {
+  const completedCount = input.projects.filter((project) => !!project.reportStatus).length;
+  const submittableCount = input.projects.filter((project) => project.reportStatus === "draft" || project.reportStatus === "withdrawn").length;
+  const reasons = [
+    ...(!input.organizationEnabled ? ["该经营实体未启用月报"] : []),
+    ...(!["open", "review"].includes(input.periodStatus) ? ["该月份尚未开放或已经锁定"] : []),
+    ...(input.submissionStatus && !["draft", "rejected"].includes(input.submissionStatus) ? ["该经营实体本月报送已提交，不能重复提交"] : []),
+    ...(input.projects.length > submittableCount ? ["仍有项目未保存可提交的月报草稿"] : []),
+  ];
+  return { expectedCount: input.projects.length, completedCount, ready: reasons.length === 0, reasons };
+}
+
 export type DepartmentSubmissionStatus = "draft" | "submitted" | "rejected" | "confirmed" | "locked";
-export type DepartmentSubmissionAction = "submit" | "reject" | "confirm" | "lock";
+export type DepartmentSubmissionAction = "submit" | "reject" | "lock";
+export const submittedMonthStatuses = ["submitted", "confirmed"] as const;
 
 export function nextSubmissionStatus(current: DepartmentSubmissionStatus, action: DepartmentSubmissionAction): DepartmentSubmissionStatus {
   const transitions: Partial<Record<DepartmentSubmissionStatus, Partial<Record<DepartmentSubmissionAction, DepartmentSubmissionStatus>>>> = {
     draft: { submit: "submitted" },
     rejected: { submit: "submitted" },
-    submitted: { reject: "rejected", confirm: "confirmed" },
+    submitted: { reject: "rejected", lock: "locked" },
     confirmed: { lock: "locked" },
   };
   const next = transitions[current]?.[action];
