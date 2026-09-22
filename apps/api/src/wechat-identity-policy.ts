@@ -5,7 +5,7 @@ type ScopedPrincipal = {
 export function canReviewWechatIdentityRequest(principal: ScopedPrincipal, organizationId: string, escalatedToCompany: boolean) {
   if (principal.roles.some(({ role }) => role === "company_admin")) return true;
   if (escalatedToCompany) return false;
-  return principal.roles.some(({ role, scopeType, scopeId }) => role === "org_admin" && scopeType === "organization" && scopeId === organizationId);
+  return principal.roles.some(({ role, scopeType, scopeId }) => (role === "org_leader" || role === "org_admin") && scopeType === "organization" && scopeId === organizationId);
 }
 
 export function decideWechatBinding(input: {

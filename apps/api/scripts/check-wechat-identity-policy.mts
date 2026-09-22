@@ -7,7 +7,7 @@ const companyAdmin = { ...orgAdmin, roles: [{ role: "company_admin", scopeType: 
 
 assert.equal(canReviewWechatIdentityRequest(orgAdmin, "org-a", false), true);
 assert.equal(canReviewWechatIdentityRequest(orgAdmin, "org-b", false), false);
-assert.equal(canReviewWechatIdentityRequest(orgLeader, "org-a", false), false);
+assert.equal(canReviewWechatIdentityRequest(orgLeader, "org-a", false), true);
 assert.equal(canReviewWechatIdentityRequest(companyAdmin, "org-a", false), true);
 assert.equal(canReviewWechatIdentityRequest(orgAdmin, "org-a", true), false);
 

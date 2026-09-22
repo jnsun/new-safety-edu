@@ -6,7 +6,7 @@ import { prisma } from "../db.js";
 import { encryptNationalId, normalizePhone } from "../crypto.js";
 import { issueSensitiveToken, issueSession } from "../auth.js";
 import { audit, auditCritical } from "../audit.js";
-import { accessibleOrganizationIds, canAccessOrganization, canAccessPerson, canAccessProject, forbidden, isCompanyAdmin, orgAdminScopeIds, projectScopeIds } from "../access.js";
+import { accessibleOrganizationIds, canAccessOrganization, canAccessPerson, canAccessProject, forbidden, isCompanyAdmin, organizationScopeIds, projectScopeIds } from "../access.js";
 import { activatePendingRoles, bindAccountToPerson, setPrimaryOrganization } from "../identity.js";
 import { assertOwnedFiles } from "../file-association-policy.js";
 import { changeRequestKey, claimPendingRequest } from "../request-policy.js";
@@ -17,7 +17,7 @@ import { sendPhoneVerificationCode, verifiedPhoneCode } from "./phone-auth.js";
 import { autoDispatchInTransaction } from "./day2.js";
 import { setCsrfCookie } from "../csrf.js";
 import { getWechatPhoneNumber } from "../wechat-api.js";
-import { issueWechatPhoneVerificationToken, verifyWechatPhoneVerificationToken } from "../wechat-phone-verification.js";
+import { issueWechatPhoneVerificationToken, verifyWechatPhoneVerificationToken, issueWechatSmsVerificationToken, verifyWechatSmsVerificationToken } from "../wechat-phone-verification.js";
 import { decideWebLoginDestination, safetyWebRoleNames } from "../web-login-access.js";
 import { resolveReceivablesAccess } from "../receivables-access.js";
 import { assertFirstReleaseEmployee, assertFirstReleaseWorkflowAllowed } from "../first-release-policy.js";
@@ -93,6 +93,32 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     return { data: { sent: true, expiresIn: 300, purpose } };
   });
 
+  app.post("/api/wechat/identity/phone-verify", { preHandler: deps.authenticate }, async (request) => {
+    const principal = request.principal!;
+    if (principal.personId) throw Object.assign(new Error("当前微信已绑定人员档案"), { statusCode: 409, code: "WECHAT_ALREADY_BOUND" });
+    const webAppId = deps.env.WECHAT_WEB_APP_ID;
+    if (!webAppId) throw Object.assign(new Error("网站微信登录尚未配置"), { statusCode: 503, code: "WECHAT_WEB_NOT_CONFIGURED" });
+    const input = z.object({ phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/)), code: z.string().regex(/^\d{6}$/), purpose: z.string() }).parse(request.body);
+    const verification = await verifiedPhoneCode(input.phone, input.code, assertWechatVerificationPurpose(input.purpose), deps.env);
+    const binding = await prisma.wechatBinding.findFirst({ where: { accountId: principal.accountId, appId: webAppId, active: true }, select: { id: true } });
+    if (!binding) throw Object.assign(new Error("微信绑定会话已失效，请重新扫码"), { statusCode: 409, code: "WECHAT_BIND_CONTEXT_INVALID" });
+    const matches = await prisma.person.findMany({ where: { phone: input.phone, type: "employee", status: "active" }, take: 3, select: { id: true, name: true, organizations: { where: { active: true, primary: true }, select: { organizationId: true, organization: { select: { name: true, type: true } } } }, account: { select: { id: true, status: true } } } });
+    const matched = matches.length === 1 ? matches[0]! : null;
+    const primary = matched?.organizations[0];
+    const phoneOwner = await prisma.account.findUnique({ where: { verifiedPhone: input.phone }, select: { id: true, personId: true } });
+    const conflict = Boolean(
+      (matched && (!primary || !["business_entity", "department"].includes(primary.organization.type) || (matched.account && !["active", "pending"].includes(matched.account.status))))
+      || (phoneOwner && phoneOwner.id !== principal.accountId && (!matched || phoneOwner.personId !== matched.id))
+    );
+    const consumed = await prisma.phoneVerificationCode.updateMany({ where: { id: verification.id, consumedAt: null }, data: { consumedAt: new Date() } });
+    if (consumed.count !== 1) throw Object.assign(new Error("验证码已使用"), { statusCode: 409, code: "SMS_CODE_CONSUMED" });
+    return { data: {
+      smsVerificationToken: await issueWechatSmsVerificationToken(principal.accountId, input.phone, deps.env),
+      matchStatus: conflict || matches.length > 1 ? "review_required" : matches.length === 0 ? "none" : "matched",
+      ...(matched && primary ? { candidate: { name: matched.name, department: primary.organization.name, organizationId: primary.organizationId, phone: input.phone } } : {}),
+    } };
+  });
+
   app.post("/api/wechat/identity/wechat-phone", { preHandler: deps.authenticate }, async (request) => {
     const principal = request.principal!;
     if (principal.personId) throw Object.assign(new Error("当前微信已绑定人员档案"), { statusCode: 409, code: "WECHAT_ALREADY_BOUND" });
@@ -108,7 +134,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     const matched = matches.length === 1 ? matches[0]! : null;
     const primary = matched?.organizations[0];
     const validPrimary = primary && ["business_entity", "department"].includes(primary.organization.type);
-    const accountConflict = Boolean((phoneOwner && phoneOwner.id !== principal.accountId && phoneOwner.personId !== matched?.id) || (matched?.account && !["active", "pending"].includes(matched.account.status)));
+    const accountConflict = Boolean((phoneOwner && phoneOwner.id !== principal.accountId && (!matched || phoneOwner.personId !== matched.id)) || (matched?.account && !["active", "pending"].includes(matched.account.status)));
     if (matched && validPrimary && !accountConflict) {
       const purpose = matched.account && matched.account.id !== principal.accountId && matched.account.wechatBindings.length ? "wechat_rebind" : "wechat_bind";
       const accountId = await prisma.$transaction(async (tx) => {
@@ -132,15 +158,18 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
 
   app.post("/api/wechat/identity/confirm", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!;
+    if (principal.personId) throw Object.assign(new Error("当前微信已绑定人员档案"), { statusCode: 409, code: "WECHAT_ALREADY_BOUND" });
     const details = { name: z.string().trim().min(2).max(80), organizationId: z.string().uuid(), reason: z.string().trim().max(500).default("") };
     const input = z.union([
       z.object({ ...details, phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^1\d{10}$/)), code: z.string().regex(/^\d{6}$/), purpose: z.string() }),
-      z.object({ ...details, wechatPhoneVerificationToken: z.string().min(1).max(2000) })
+      z.object({ ...details, wechatPhoneVerificationToken: z.string().min(1).max(2000) }),
+      z.object({ ...details, smsVerificationToken: z.string().min(1).max(2000), identityCorrect: z.boolean().optional(), identityIssue: z.enum(["name", "department", "phone", "other"]).optional() })
     ]).parse(request.body);
+    if ("identityCorrect" in input && input.identityCorrect === false && (!input.identityIssue || input.reason.length < 2)) throw Object.assign(new Error("请说明哪项身份信息不正确"), { statusCode: 400, code: "IDENTITY_ISSUE_REQUIRED" });
     const smsPurpose = "purpose" in input ? assertWechatVerificationPurpose(input.purpose) : null;
     const verification = "code" in input ? await verifiedPhoneCode(input.phone, input.code, smsPurpose!, deps.env) : null;
-    const phone = "wechatPhoneVerificationToken" in input ? await verifyWechatPhoneVerificationToken(input.wechatPhoneVerificationToken, principal.accountId, deps.env) : input.phone;
-    const verificationMethod = verification ? "sms" : "wechat";
+    const phone = "wechatPhoneVerificationToken" in input ? await verifyWechatPhoneVerificationToken(input.wechatPhoneVerificationToken, principal.accountId, deps.env) : "smsVerificationToken" in input ? await verifyWechatSmsVerificationToken(input.smsVerificationToken, principal.accountId, deps.env) : input.phone;
+    const verificationMethod = verification || "smsVerificationToken" in input ? "sms" : "wechat";
     const [organization, matches, phoneOwner, activeBinding] = await Promise.all([
       prisma.organization.findFirst({ where: { id: input.organizationId, type: { in: ["business_entity", "department"] } }, select: { id: true, type: true } }),
       prisma.person.findMany({ where: { phone, type: "employee", status: "active" }, take: 3, include: { organizations: { where: { active: true, primary: true }, include: { organization: { select: { type: true } } } }, account: { include: { wechatBindings: { where: { active: true } } } } } }),
@@ -153,10 +182,11 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     const selectedOrganizationMatches = primary?.organizationId === input.organizationId;
     const accountConflict = Boolean((phoneOwner && phoneOwner.id !== principal.accountId && phoneOwner.personId !== matched?.id) || (matched?.account && !["active", "pending"].includes(matched.account.status)));
     const crossEntityConflict = Boolean(primary && primary.organizationId !== input.organizationId && primary.organization.type === "business_entity" && organization.type === "business_entity");
-    const identityConflict = matches.length > 1 || accountConflict;
+    const identityMismatch = ("identityCorrect" in input && input.identityCorrect === false) || (matched && matched.name !== input.name);
+    const identityConflict = matches.length > 1 || accountConflict || Boolean(identityMismatch);
     const purpose = smsPurpose ?? (matched?.account && matched.account.id !== principal.accountId && matched.account.wechatBindings.length ? "wechat_rebind" : "wechat_bind");
     let decision = decideWechatBinding({ activePersonMatches: matches.length, selectedOrganizationMatches, hasIdentityConflict: identityConflict, crossEntityConflict });
-    const reviewers = await prisma.roleAssignment.findMany({ where: { role: "org_admin", scopeType: "organization", scopeId: input.organizationId, active: true, personId: { not: null }, person: { status: "active", account: { status: "active" } } }, select: { personId: true } });
+    const reviewers = await prisma.roleAssignment.findMany({ where: { role: { in: ["org_leader", "org_admin"] }, scopeType: "organization", scopeId: input.organizationId, active: true, personId: { not: null }, person: { status: "active", account: { status: "active" } } }, select: { personId: true } });
     if (!reviewers.length && decision !== "direct") decision = "company_review";
 
     if (decision === "direct" && matched) {
@@ -199,7 +229,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
         if (consumed.count !== 1) throw Object.assign(new Error("验证码已使用"), { statusCode: 409, code: "SMS_CODE_CONSUMED" });
       }
       let change = await tx.changeRequest.findFirst({ where: { type: "binding", status: "pending", requestKey } });
-      if (!change) change = await tx.changeRequest.create({ data: { accountId: principal.accountId, type: "binding", requestKey, payload: { name: input.name, phone, phoneVerified: true, phoneVerifiedAt: new Date().toISOString(), phoneVerificationMethod: verificationMethod, ...(verification ? { phoneVerificationId: verification.id } : {}), organizationId: input.organizationId, reason: input.reason, matchCount: matches.length, matchStatus: matches.length === 0 ? "none" : matches.length === 1 ? selectedOrganizationMatches ? "unique" : "department_mismatch" : "multiple", escalatedToCompany: decision === "company_review", conflictCodes: [...(accountConflict ? ["phone_account_conflict"] : []), ...(crossEntityConflict ? ["cross_entity_conflict"] : []), ...(matches.length > 1 ? ["multiple_person_matches"] : []), ...(!reviewers.length ? ["no_org_admin"] : [])] } } });
+      if (!change) change = await tx.changeRequest.create({ data: { accountId: principal.accountId, type: "binding", requestKey, payload: { name: input.name, phone, phoneVerified: true, phoneVerifiedAt: new Date().toISOString(), phoneVerificationMethod: verificationMethod, ...(verification ? { phoneVerificationId: verification.id } : {}), organizationId: input.organizationId, reason: input.reason, ...("identityIssue" in input && input.identityIssue ? { identityIssue: input.identityIssue } : {}), matchCount: matches.length, matchStatus: matches.length === 0 ? "none" : matches.length === 1 ? selectedOrganizationMatches ? "unique" : "department_mismatch" : "multiple", escalatedToCompany: decision === "company_review", conflictCodes: [...(identityMismatch ? ["identity_information_mismatch"] : []), ...(accountConflict ? ["phone_account_conflict"] : []), ...(crossEntityConflict ? ["cross_entity_conflict"] : []), ...(matches.length > 1 ? ["multiple_person_matches"] : []), ...(!reviewers.length ? ["no_org_reviewer"] : [])] } } });
       const recipientIds = decision === "company_review"
         ? (await tx.roleAssignment.findMany({ where: { role: "company_admin", scopeType: "company", active: true, personId: { not: null }, person: { status: "active", account: { status: "active" } } }, select: { personId: true } })).map(({ personId }) => personId!)
         : reviewers.map(({ personId }) => personId!);
@@ -239,7 +269,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
   });
 
   app.get("/api/binding-requests", { preHandler: [deps.authenticate, deps.requireManager] }, async (request) => {
-    const principal = request.principal!; const orgIds = new Set(await accessibleOrganizationIds(principal)); const identityOrgIds = new Set(orgAdminScopeIds(principal)); const projectIds = new Set(projectScopeIds(principal));
+    const principal = request.principal!; const orgIds = new Set(await accessibleOrganizationIds(principal)); const identityOrgIds = new Set(organizationScopeIds(principal)); const projectIds = new Set(projectScopeIds(principal));
     const candidates = await prisma.changeRequest.findMany({ where: { status: "pending", type: { in: isCompanyAdmin(principal) ? ["binding", "registration", "account_merge", "person_merge"] : ["binding", "registration"] } }, orderBy: { createdAt: "desc" } });
     const seen = new Set<string>(); const uniqueCandidates = candidates.filter((row) => { const key = requestContentKey(row); if (seen.has(key)) return false; seen.add(key); return true; });
     const rows = isCompanyAdmin(principal) ? uniqueCandidates : uniqueCandidates.filter((row) => {
@@ -257,7 +287,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
       const organizationId = typeof value.responsibleOrganizationId === "string" ? value.responsibleOrganizationId : typeof value.organizationId === "string" ? value.organizationId : undefined;
       const targetAccountId = typeof value.targetAccountId === "string" ? value.targetAccountId : undefined;
       const targetPersonId = typeof value.targetPersonId === "string" ? value.targetPersonId : undefined;
-      return { ...row, payload: { ...(typeof value.name === "string" ? { name: value.name } : {}), ...(phone ? { phone } : {}), ...(typeof value.type === "string" ? { type: value.type } : {}), ...(typeof value.reason === "string" ? { reason: value.reason } : {}), ...(organizationId ? { organizationId, organizationName: organizationNames.get(organizationId) } : {}), ...(row.type === "account_merge" ? { sourceAccountLabel: row.accountId ? mergeAccountLabels.get(row.accountId) : undefined, targetAccountLabel: targetAccountId ? mergeAccountLabels.get(targetAccountId) : undefined } : {}), ...(row.type === "person_merge" ? { targetPersonId } : {}), matchCount: value.matchCount, phoneVerified: value.phoneVerified === true, matchStatus: value.matchStatus, conflictCodes: value.conflictCodes, escalatedToCompany: value.escalatedToCompany === true } };
+      return { ...row, payload: { ...(typeof value.name === "string" ? { name: value.name } : {}), ...(phone ? { phone } : {}), ...(typeof value.type === "string" ? { type: value.type } : {}), ...(typeof value.reason === "string" ? { reason: value.reason } : {}), ...(typeof value.identityIssue === "string" ? { identityIssue: value.identityIssue } : {}), ...(organizationId ? { organizationId, organizationName: organizationNames.get(organizationId) } : {}), ...(row.type === "account_merge" ? { sourceAccountLabel: row.accountId ? mergeAccountLabels.get(row.accountId) : undefined, targetAccountLabel: targetAccountId ? mergeAccountLabels.get(targetAccountId) : undefined } : {}), ...(row.type === "person_merge" ? { targetPersonId } : {}), matchCount: value.matchCount, phoneVerified: value.phoneVerified === true, matchStatus: value.matchStatus, conflictCodes: value.conflictCodes, escalatedToCompany: value.escalatedToCompany === true } };
     }) };
   });
 

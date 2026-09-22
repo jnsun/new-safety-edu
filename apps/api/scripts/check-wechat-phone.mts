@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { Env } from "../src/env.js";
 import { getWechatPhoneNumber } from "../src/wechat-api.js";
-import { issueWechatPhoneVerificationToken, verifyWechatPhoneVerificationToken } from "../src/wechat-phone-verification.js";
+import { issueWechatPhoneVerificationToken, verifyWechatPhoneVerificationToken, issueWechatSmsVerificationToken, verifyWechatSmsVerificationToken } from "../src/wechat-phone-verification.js";
 
 const baseEnv = { WECHAT_APP_ID: "wx-test", WECHAT_APP_SECRET: "secret" } as Env;
 const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -28,5 +28,9 @@ await assert.rejects(
   () => verifyWechatPhoneVerificationToken(verificationToken, "00000000-0000-4000-8000-000000000002", tokenEnv),
   (error: unknown) => error instanceof Error && "code" in error && error.code === "WECHAT_PHONE_VERIFICATION_INVALID"
 );
+const smsToken = await issueWechatSmsVerificationToken("00000000-0000-4000-8000-000000000001", "13800138000", tokenEnv);
+assert.equal(await verifyWechatSmsVerificationToken(smsToken, "00000000-0000-4000-8000-000000000001", tokenEnv), "13800138000");
+await assert.rejects(() => verifyWechatPhoneVerificationToken(smsToken, "00000000-0000-4000-8000-000000000001", tokenEnv));
+await assert.rejects(() => verifyWechatSmsVerificationToken(smsToken, "00000000-0000-4000-8000-000000000002", tokenEnv));
 
 console.log("WECHAT_PHONE_OK");

@@ -331,7 +331,9 @@ function WechatQrLogin({ active }: { active: boolean }) {
     queryFn: () => api<{ appId: string; redirectUri: string; state: string }>("/api/auth/wechat-web/widget-config"),
     enabled: active,
     retry: false,
-    staleTime: 0,
+    staleTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   useEffect(() => {
@@ -401,11 +403,13 @@ function LoginModeTabs({ face, onChange }: {
 
 function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const wechatErrorCode = searchParams.get("wechat");
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryPhone, setRecoveryPhone] = useState("");
-  const [loginMode, setLoginMode] = useState<"wechat" | "password">("wechat");
+  const [loginMode, setLoginMode] = useState<"wechat" | "password">(wechatErrorCode ? "password" : "wechat");
   const wechat = useQuery({
     queryKey: ["wechat-web-config"],
     queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config"),
@@ -451,6 +455,7 @@ function Login() {
             <Card className="login-card">
               <LoginModeTabs face="password" onChange={setLoginMode} />
               <section className="login-mode-panel login-password-panel" role="tabpanel" aria-label="账号密码登录">
+                {wechatErrorCode && <Alert style={{ width: "min(300px, 100%)", marginBottom: 16 }} type="warning" showIcon message="微信登录未完成" description={({ no_web_access: "当前微信未获 Web 管理后台权限；普通员工请使用培训小程序。", invalid_state: "登录状态已失效，请重新尝试扫码。", exchange_failed: "微信授权未完成，请重新尝试。", account_unavailable: "关联账号不可用，请联系管理员。", not_configured: "微信网站应用尚未配置。" } as Record<string, string>)[wechatErrorCode] ?? "请联系管理员核对登录配置。"} />}
                 <Form layout="vertical" onFinish={submit}>
                   <Form.Item label="用户名" name="username" rules={[{ required: true }]}>
                     <Input autoComplete="username" />
@@ -486,26 +491,47 @@ function WechatBind() {
   const [sent, setSent] = useState(false);
   const [purpose, setPurpose] = useState("wechat_bind");
   const [submitted, setSubmitted] = useState(() => new URLSearchParams(window.location.search).has("pending"));
+  const [noWebAccess, setNoWebAccess] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [verified, setVerified] = useState<{ smsVerificationToken: string; matchStatus: "matched" | "none" | "review_required"; candidate?: { name: string; department: string; organizationId: string; phone: string } }>();
+  const [identityIncorrect, setIdentityIncorrect] = useState(false);
   const options = useQuery({ queryKey: ["wechat-registration-options"], queryFn: () => api<{ departments: Array<{ id: string; name: string }> }>("/api/wechat/registration-options"), retry: false });
-  if (submitted) return <div className="login-shell"><Card className="login-card"><Alert type="success" showIcon message="身份绑定申请已提交" description="手机号已经验证。申请将由所选部门管理员审核，异常情况由公司管理员处理。" /><Button block style={{ marginTop: 16 }} href="/login">返回登录</Button></Card></div>;
+  if (submitted) return <div className="login-shell"><Card className="login-card"><Alert type="success" showIcon message="身份绑定申请已提交" description="手机号已经验证。申请将由所选部门负责人或管理员核对，身份冲突由公司管理员处理。" /><Button block style={{ marginTop: 16 }} href="/login">返回登录</Button></Card></div>;
+  if (noWebAccess) return <div className="login-shell"><Card className="login-card"><Alert type="info" showIcon message="身份已绑定" description="该员工目前没有 Web 管理后台权限。请使用培训小程序，或联系管理员核对授权。" /><Button block style={{ marginTop: 16 }} href="/login">返回登录</Button></Card></div>;
+  async function submitIdentity(values: { name: string; organizationId: string; reason?: string; identityIssue?: "name" | "department" | "phone" | "other" }) {
+    if (!verified) return;
+    setBusy(true);
+    try {
+      const result = await api<{ status: string; destination?: "/" | "/receivables" }>("/api/wechat/identity/confirm", json("POST", { ...values, smsVerificationToken: verified.smsVerificationToken, ...(verified.candidate ? { identityCorrect: !identityIncorrect } : {}) }));
+      if (result.status === "bound") window.location.assign(result.destination ?? "/");
+      else if (result.status === "bound_no_admin") setNoWebAccess(true);
+      else setSubmitted(true);
+    } catch (error) { message.error((error as Error).message); }
+    finally { setBusy(false); }
+  }
   return <div className="login-shell"><Card className="login-card" title="人员身份确认与微信绑定">
-    <Alert type="info" showIcon message="手机号只用于微信首次绑定或换绑验证，不作为独立登录方式。" style={{ marginBottom: 16 }} />
-    <Form layout="vertical" onFinish={async (values) => {
-      try {
-        const result = await api<{ status: string; destination?: "/" | "/receivables" }>("/api/wechat/identity/confirm", json("POST", { ...values, purpose }));
-        if (result.status === "bound") window.location.assign(result.destination ?? "/");
-        else if (result.status === "bound_no_admin") { message.info("微信已绑定，但该人员没有后台管理权限，请使用小程序"); window.location.assign("/login"); }
-        else setSubmitted(true);
-      } catch (error) { message.error((error as Error).message); }
-    }}>
-      <Form.Item name="phone" label="本人手机号" rules={[{ required: true, pattern: /^1\d{10}$/ }]}><Input inputMode="numeric" maxLength={11} onChange={(event) => setPhone(event.target.value)} /></Form.Item>
-      <Button disabled={!/^1\d{10}$/.test(phone)} onClick={async () => { try { const result = await api<{ purpose: string }>("/api/wechat/identity/phone-code", json("POST", { phone })); setPurpose(result.purpose); setSent(true); message.success("验证码已发送，五分钟内有效"); } catch (error) { message.error((error as Error).message); } }}>发送验证码</Button>
-      <Form.Item name="code" label="6 位短信验证码" rules={[{ required: true, len: 6 }]} style={{ marginTop: 16 }}><Input inputMode="numeric" maxLength={6} disabled={!sent} /></Form.Item>
-      <Form.Item name="name" label="姓名" rules={[{ required: true, min: 2, max: 80 }]}><Input /></Form.Item>
-      <Form.Item name="organizationId" label="所属部门" rules={[{ required: true }]}><Select loading={options.isLoading} options={(options.data?.departments ?? []).map((organization) => ({ value: organization.id, label: organization.name }))} /></Form.Item>
-      <Form.Item name="reason" label="情况说明（选填）"><Input.TextArea maxLength={500} /></Form.Item>
-      <Button block type="primary" htmlType="submit" disabled={!sent}>验证并继续</Button>
-    </Form>
+    {!verified ? <>
+      <Alert type="info" showIcon message="首次登录请先验证本人手机号" description="验证通过后系统会查找正式员工档案；手机号不会作为独立登录方式。" style={{ marginBottom: 16 }} />
+      <Form layout="vertical" onFinish={async ({ code }: { code: string }) => { setBusy(true); try { setVerified(await api("/api/wechat/identity/phone-verify", json("POST", { phone, code, purpose }))); } catch (error) { message.error((error as Error).message); } finally { setBusy(false); } }}>
+        <Form.Item label="本人手机号" required><Input inputMode="numeric" maxLength={11} value={phone} onChange={(event) => { setPhone(event.target.value); setSent(false); }} /></Form.Item>
+        <Button disabled={!/^1\d{10}$/.test(phone)} loading={busy} onClick={async () => { setBusy(true); try { const result = await api<{ purpose: string }>("/api/wechat/identity/phone-code", json("POST", { phone })); setPurpose(result.purpose); setSent(true); message.success("验证码已发送，五分钟内有效"); } catch (error) { message.error((error as Error).message); } finally { setBusy(false); } }}>获取验证码</Button>
+        <Form.Item name="code" label="6 位短信验证码" rules={[{ required: true, pattern: /^\d{6}$/ }]} style={{ marginTop: 16 }}><Input inputMode="numeric" maxLength={6} disabled={!sent} /></Form.Item>
+        <Button block type="primary" htmlType="submit" loading={busy} disabled={!sent}>验证手机号</Button>
+      </Form>
+    </> : verified.matchStatus === "matched" && verified.candidate && !identityIncorrect ? <>
+      <Alert type="success" showIcon message="找到一条正式员工档案" description="请核对以下信息是否确属本人；确认后按已有权限进入系统。" style={{ marginBottom: 16 }} />
+      <Descriptions bordered column={1} items={[{ key: "name", label: "姓名", children: verified.candidate.name }, { key: "department", label: "部门", children: verified.candidate.department }, { key: "phone", label: "手机号", children: verified.candidate.phone }]} />
+      <Space style={{ marginTop: 20 }}><Button type="primary" loading={busy} onClick={() => void submitIdentity({ name: verified.candidate!.name, organizationId: verified.candidate!.organizationId })}>确认是本人</Button><Button onClick={() => setIdentityIncorrect(true)}>身份信息不正确</Button></Space>
+    </> : <>
+      <Alert type={verified.matchStatus === "none" ? "info" : "warning"} showIcon message={verified.matchStatus === "none" ? "未找到对应的正式员工档案" : "档案信息需要人工核对"} description={verified.matchStatus === "none" ? "请填写姓名和部门，提交部门负责人或管理员核对；不会自动创建员工档案。" : "请说明哪项信息不正确，提交公司管理员核对后再绑定。"} style={{ marginBottom: 16 }} />
+      <Form layout="vertical" {...(verified.candidate ? { initialValues: { name: verified.candidate.name, organizationId: verified.candidate.organizationId } } : {})} onFinish={submitIdentity}>
+        <Form.Item name="name" label="本人姓名" rules={[{ required: true, min: 2, max: 80 }]}><Input maxLength={80} /></Form.Item>
+        <Form.Item name="organizationId" label="本人所属部门" rules={[{ required: true }]}><Select loading={options.isLoading} options={(options.data?.departments ?? []).map((organization) => ({ value: organization.id, label: organization.name }))} /></Form.Item>
+        {verified.matchStatus !== "none" && <Form.Item name="identityIssue" label="哪项信息不正确" rules={[{ required: true }]}><Select options={[{ value: "name", label: "姓名" }, { value: "department", label: "部门" }, { value: "phone", label: "手机号对应的档案不是本人" }, { value: "other", label: "其他" }]} /></Form.Item>}
+        <Form.Item name="reason" label="需要核对的问题" rules={verified.matchStatus === "none" ? [] : [{ required: true, min: 2 }]}><Input.TextArea maxLength={500} placeholder="请说明具体情况，供审核人员核对" /></Form.Item>
+        <Space><Button type="primary" htmlType="submit" loading={busy}>提交审核申请</Button>{verified.candidate && <Button onClick={() => setIdentityIncorrect(false)}>返回身份确认</Button>}</Space>
+      </Form>
+    </>}
   </Card></div>;
 }
 
@@ -1124,7 +1150,7 @@ function BindingRequests({ persons }: { persons: Person[] }) {
     <section className="review-detail">
       {!reviewing ? <Alert showIcon type="info" message="从左侧选择一条申请查看详情" /> : <>
         <div className="review-detail-heading"><div><Typography.Title level={4}>{requestLabel(reviewing)}</Typography.Title><Typography.Text type="secondary">{applicantLabel(reviewing)} · {new Date(reviewing.createdAt).toLocaleString()}</Typography.Text></div><Tag color={reviewing.status === "pending" ? "blue" : "default"}>{labels[reviewing.status] ?? reviewing.status}</Tag></div>
-        <Descriptions size="small" column={1} bordered items={[{ key: "name", label: "申请姓名", children: applicantLabel(reviewing) }, { key: "phone", label: "手机号", children: <Space>{String(reviewing.payload.phone ?? "—")}{reviewing.type === "binding" && <Tag color={reviewing.payload.phoneVerified ? "green" : "red"}>{reviewing.payload.phoneVerified ? "已验证" : "未验证"}</Tag>}</Space> }, { key: "org", label: "申请部门", children: String(reviewing.payload.organizationName ?? "—") }, { key: "match", label: "匹配情况", children: String(reviewing.payload.matchStatus ?? "—") }, { key: "conflict", label: "冲突提示", children: Array.isArray(reviewing.payload.conflictCodes) && reviewing.payload.conflictCodes.length ? reviewing.payload.conflictCodes.join("、") : "无" }]} />
+        <Descriptions size="small" column={1} bordered items={[{ key: "name", label: "申请姓名", children: applicantLabel(reviewing) }, { key: "phone", label: "手机号", children: <Space>{String(reviewing.payload.phone ?? "—")}{reviewing.type === "binding" && <Tag color={reviewing.payload.phoneVerified ? "green" : "red"}>{reviewing.payload.phoneVerified ? "已验证" : "未验证"}</Tag>}</Space> }, { key: "org", label: "申请部门", children: String(reviewing.payload.organizationName ?? "—") }, { key: "match", label: "匹配情况", children: String(reviewing.payload.matchStatus ?? "—") }, { key: "issue", label: "申请人指出的问题", children: ({ name: "姓名", department: "部门", phone: "手机号对应的档案不是本人", other: "其他" } as Record<string, string>)[String(reviewing.payload.identityIssue ?? "")] ?? "—" }, { key: "reason", label: "情况说明", children: String(reviewing.payload.reason ?? "—") }, { key: "conflict", label: "冲突提示", children: Array.isArray(reviewing.payload.conflictCodes) && reviewing.payload.conflictCodes.length ? reviewing.payload.conflictCodes.join("、") : "无" }]} />
         {reviewing.type === "binding" ? <Form form={reviewForm} layout="vertical" className="review-action-form" onFinish={async (values) => { try { await api(`/api/identity-binding-requests/${reviewing.id}/review`, json("POST", values)); message.success(values.action === "reject" ? "申请已驳回" : "身份绑定已处理"); setReviewing(undefined); void requests.refetch(); } catch (error) { message.error((error as Error).message); } }}>
           <Form.Item name="action" label="处理方式" rules={[{ required: true }]}><Select options={[{ value: "bind_existing", label: "确认并绑定本部门已有人员" }, { value: "update_phone_and_bind", label: "修正人员手机号后绑定" }, { value: "repair_membership_and_bind", label: "补建本部门归属后绑定" }, { value: "create_employee_and_bind", label: "新建本部门正式员工并绑定" }, { value: "escalate_company", label: "升级给公司管理员处理" }, { value: "reject", label: "驳回申请" }]} /></Form.Item>
           <Form.Item noStyle shouldUpdate={(before, after) => before.action !== after.action}>{({ getFieldValue }) => !["create_employee_and_bind", "escalate_company", "reject"].includes(getFieldValue("action")) && <Form.Item name="personId" label="人员档案" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" placeholder={candidates.length ? "请选择人员" : "暂无可选人员档案"} options={candidates.map((person) => ({ value: person.id, label: `${person.name} · ${person.phone}` }))} /></Form.Item>}</Form.Item>
