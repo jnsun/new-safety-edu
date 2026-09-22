@@ -42,5 +42,6 @@ assert.match(routes, /reportOrganizationIds\(request\)\.includes\(parsed\.organi
 assert.match(routes, /await requireWritablePeriod\(parsed\.reportMonth\)/);
 assert.match(routes, /project\.create_from_monthly_reporting/);
 assert.match(routes, /z\.enum\(projectTypeOptions\)/);
+assert.match(routes, /APPROVED_PROJECT_TYPE_LOCKED/);
 assert.match(routes, /MONTHLY_SUBMISSION_NOT_EDITABLE/);
 console.log("PROJECT_REPORTING_POLICY_OK");

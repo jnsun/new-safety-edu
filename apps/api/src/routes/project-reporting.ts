@@ -22,6 +22,9 @@ const reportMonthLabel = (value: string) => {
   return `${year}年${monthNumber}月`;
 };
 function reportOrganizationIds(request: FastifyRequest) { return reportingOrganizationIds(request.principal!); }
+function isApprovedProjectType(name: string) {
+  return (projectTypeOptions as readonly string[]).includes(name);
+}
 function requireCompanyAdmin(request: FastifyRequest) {
   if (!canGovernMonthlyReporting(request.principal!))
     forbidden("仅公司管理员可以维护报送配置");
@@ -972,7 +975,7 @@ export async function registerProjectReportingRoutes(
       requireCompanyAdmin(request);
       const body = z
         .object({
-          name: z.string().trim().min(1).max(160),
+          name: z.enum(projectTypeOptions),
           sortOrder: z.coerce.number().int().min(0).default(0),
         })
         .parse(request.body);
@@ -988,17 +991,24 @@ export async function registerProjectReportingRoutes(
       requireCompanyAdmin(request);
       const body = z
         .object({
-          name: z.string().trim().min(1).max(160).optional(),
+          name: z.enum(projectTypeOptions).optional(),
           sortOrder: z.coerce.number().int().min(0).optional(),
           active: z.boolean().optional(),
         })
         .parse(request.body);
+      const typeId = id.parse((request.params as { id: string }).id);
+      const current = await prisma.reportProjectType.findUniqueOrThrow({
+        where: { id: typeId },
+        select: { name: true },
+      });
+      if (isApprovedProjectType(current.name) && (body.active === false || (body.name && body.name !== current.name)))
+        throw Object.assign(new Error("标准项目类型不能停用或改名"), { statusCode: 409, code: "APPROVED_PROJECT_TYPE_LOCKED" });
       const data = Object.fromEntries(
         Object.entries(body).filter(([, value]) => value !== undefined),
       ) as Prisma.ReportProjectTypeUpdateInput;
       return {
         data: await prisma.reportProjectType.update({
-          where: { id: id.parse((request.params as { id: string }).id) },
+          where: { id: typeId },
           data,
         }),
       };
@@ -1010,6 +1020,12 @@ export async function registerProjectReportingRoutes(
     async (request, reply) => {
       requireCompanyAdmin(request);
       const typeId = id.parse((request.params as { id: string }).id);
+      const current = await prisma.reportProjectType.findUniqueOrThrow({
+        where: { id: typeId },
+        select: { name: true },
+      });
+      if (isApprovedProjectType(current.name))
+        throw Object.assign(new Error("标准项目类型不能删除"), { statusCode: 409, code: "APPROVED_PROJECT_TYPE_LOCKED" });
       if (
         await prisma.projectMonthlyReport.count({
           where: { projectTypeId: typeId },
