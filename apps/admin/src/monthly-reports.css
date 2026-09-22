@@ -31,7 +31,8 @@
 .monthly-report-page .monthly-list-card .ant-card-head { border-bottom: 1px solid var(--monthly-line); }
 .monthly-report-page .monthly-status-tabs { margin: 0 0 16px; border-bottom: 1px solid var(--monthly-line); width: 100%; }
 .monthly-report-page .monthly-status-tabs .ant-btn { border-radius: 0; padding: 0 16px; min-height: 40px; }
-.monthly-report-page .monthly-status-tabs .ant-btn-primary { background: transparent; color: var(--monthly-blue); box-shadow: inset 0 -2px var(--monthly-blue); }
+.app-shell.monthly-report-shell .monthly-report-page .monthly-status-tabs .ant-btn-primary,
+.app-shell.monthly-report-shell .monthly-report-page .monthly-status-tabs .ant-btn-primary:hover { background: transparent !important; color: var(--monthly-blue); box-shadow: inset 0 -2px var(--monthly-blue); }
 .monthly-report-page .monthly-list-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; }
 .monthly-report-page .monthly-history-card { margin-top: 20px; }
 .monthly-report-page .monthly-manage-actions { display: flex; justify-content: flex-end; gap: 8px; margin: -56px 0 18px; }
@@ -39,7 +40,8 @@
 .monthly-report-page .monthly-manage-stats .ant-card { min-height: 86px; }
 .monthly-report-page .monthly-manage-tabs { display: flex; gap: 12px; border-bottom: 1px solid var(--monthly-line); margin-bottom: 20px; }
 .monthly-report-page .monthly-manage-tabs .ant-btn { border-radius: 0; min-height: 40px; }
-.monthly-report-page .monthly-manage-tabs .ant-btn-primary { background: transparent; color: var(--monthly-blue); box-shadow: inset 0 -2px var(--monthly-blue); }
+.app-shell.monthly-report-shell .monthly-report-page .monthly-manage-tabs .ant-btn-primary,
+.app-shell.monthly-report-shell .monthly-report-page .monthly-manage-tabs .ant-btn-primary:hover { background: transparent !important; color: var(--monthly-blue); box-shadow: inset 0 -2px var(--monthly-blue); }
 .monthly-report-page .monthly-manage-filter { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .monthly-report-page .monthly-manage-filter label { display: grid; gap: 7px; flex: 1 1 155px; font-size: 13px; }
 .monthly-report-page .monthly-manage-table .ant-card-body { padding: 0; }
