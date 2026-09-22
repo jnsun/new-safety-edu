@@ -17,6 +17,10 @@ assert.ok(page.includes('view === "mine" ? !!capabilities.data?.canSubmit'), "en
 assert.ok(page.includes('/api/monthly-reports/submissions/preflight?organizationId='), "server preflight missing");
 assert.ok(page.includes('latest.expectedCount !== preflight.data.expectedCount'), "changed project set must invalidate batch confirmation");
 assert.ok(page.includes('setNoProjectDialog(!noFieldOrganizationId ? "select"'), "no-project scope selection missing");
+assert.ok(page.includes('hasSingleReportingOrganization'), "single-entity reporter context missing");
+assert.ok(page.includes('报送经营实体'), "single-entity reporter must see a fixed organization");
+assert.ok(page.includes('projectTypeId: project?.projectType'), "new project type must carry into the monthly draft");
+assert.ok(page.includes('placeholder="请选择项目类型"'), "new project type must use configured options");
 assert.ok(page.includes('disabled={!preflight.data?.ready}'), "blocked batch must not submit");
 assert.ok(page.includes('setBatchResult(result)'), "success state must use server result");
 assert.ok(page.includes('readSnapshotField(previousSnapshot'), "history revision comparison missing");

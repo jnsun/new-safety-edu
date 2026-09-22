@@ -1566,6 +1566,9 @@ export function MonthlyReportsPage() {
             customData: {},
             constructionLocation: project?.location ?? undefined,
             contractAmount: project?.contractAmount ?? 0,
+            projectTypeId: project?.projectType
+              ? config.data?.types.find((type) => type.active && type.name === project.projectType)?.id
+              : undefined,
             projectManager: project?.managerName ?? undefined,
             contactInfo: project?.managerPhone ?? undefined,
             ...(project?.previousDefaults ?? {}),
@@ -1788,6 +1791,13 @@ export function MonthlyReportsPage() {
   const projectItems = preflight.data?.items ?? [];
   const visibleProjectItems = projectItems.filter((row) => projectFilter === "all" || (projectFilter === "todo" && !row.report && !voidedByProject.has(row.id)) || (projectFilter === "draft" && ["draft", "withdrawn"].includes(row.report?.status ?? "")) || (projectFilter === "submitted" && row.report?.status === "submitted") || (projectFilter === "voided" && !row.report && voidedByProject.has(row.id)));
   const availableOrganizations = (config.data?.organizations ?? []).filter((org) => capabilities.data?.organizationIds.includes(org.id));
+  const hasSingleReportingOrganization = availableOrganizations.length === 1;
+  const singleReportingOrganizationId = hasSingleReportingOrganization ? availableOrganizations[0]!.id : undefined;
+  useEffect(() => {
+    if (!capabilities.data?.canSubmit || !singleReportingOrganizationId) return;
+    const organizationId = singleReportingOrganizationId;
+    setNoFieldOrg((current) => (current === organizationId ? current : organizationId));
+  }, [capabilities.data?.canSubmit, singleReportingOrganizationId]);
   const chooseNoProject = () => {
     setNoProjectDialog(!noFieldOrganizationId ? "select" : preflight.isError || !preflight.data?.ready || preflight.data.expectedCount !== 0 ? "blocked" : "confirm");
   };
@@ -1860,7 +1870,7 @@ export function MonthlyReportsPage() {
       <section className="monthly-filter-card">
         <div className="monthly-filter-fields">
           <label>报送月份<Input type="month" value={month} onChange={(event) => { setMonth(event.target.value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} /></label>
-          <label>经营实体<Select value={noFieldOrganizationId} onChange={(value) => { setNoFieldOrg(value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} placeholder="请选择经营实体" options={availableOrganizations.map((org) => ({ value: org.id, label: org.name }))} /></label>
+          {hasSingleReportingOrganization ? <label>报送经营实体<Input value={selectedOrganizationName} disabled /></label> : <label>经营实体<Select value={noFieldOrganizationId} onChange={(value) => { setNoFieldOrg(value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} placeholder="请选择经营实体" options={availableOrganizations.map((org) => ({ value: org.id, label: org.name }))} /></label>}
         </div>
         <Space wrap>
           <Button
@@ -2175,7 +2185,15 @@ export function MonthlyReportsPage() {
             <Input maxLength={50} placeholder="例如：TEST-202609-001" />
           </Form.Item>
           <Form.Item label="项目类型" name="projectType">
-            <Input maxLength={120} placeholder="例如：地球物理勘查" />
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="请选择项目类型"
+              options={(config.data?.types ?? [])
+                .filter((type) => type.active)
+                .map((type) => ({ value: type.name, label: type.name }))}
+            />
           </Form.Item>
           <Form.Item label="施工地点" name="location">
             <Input maxLength={300} placeholder="填写主要施工地点" />
