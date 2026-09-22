@@ -27,6 +27,7 @@
 .monthly-report-page .monthly-filter-fields label { display: grid; gap: 8px; color: var(--monthly-muted); font-size: 14px; min-width: 180px; }
 .monthly-report-page .monthly-filter-fields label:nth-child(2) { min-width: 280px; }
 .monthly-report-page .monthly-deadline-alert { margin-bottom: 20px; }
+.monthly-report-page .ant-btn-primary { background: var(--monthly-blue); }
 .monthly-report-page .monthly-list-card .ant-card-head { border-bottom: 1px solid var(--monthly-line); }
 .monthly-report-page .monthly-status-tabs { margin: 0 0 16px; border-bottom: 1px solid var(--monthly-line); width: 100%; }
 .monthly-report-page .monthly-status-tabs .ant-btn { border-radius: 0; padding: 0 16px; min-height: 40px; }
@@ -62,7 +63,6 @@
 .monthly-report-page .ant-typography-secondary { color: var(--monthly-muted); }
 .monthly-report-page .ant-table-wrapper { max-width: 100%; }
 .monthly-report-page .ant-table-thead > tr > th { background: #f8fafd; color: var(--monthly-muted); }
-.monthly-report-page .ant-btn-primary { background: var(--monthly-blue); }
 .monthly-report-page .ant-tabs-ink-bar { background: var(--monthly-blue); }
 
 @media (max-width: 900px) {
