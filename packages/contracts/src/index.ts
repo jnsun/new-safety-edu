@@ -7,6 +7,26 @@ export const personTypes = ["employee", "contractor", "temporary_individual"] as
 export const personStatuses = ["pending", "active", "disabled", "merged"] as const;
 export const projectStatuses = ["active", "paused", "ended"] as const;
 export const organizationTypes = ["company", "business_entity", "department", "contractor"] as const;
+// Project masters and monthly reporting use the same approved taxonomy. Keep
+// this list in the shared contract so neither client can invent a new type.
+export const projectTypeOptions = [
+  "测绘地理信息",
+  "钻探",
+  "物化探",
+  "水工环",
+  "矿产探勘",
+  "土地整治",
+  "矿山修复",
+  "生态保护修复",
+  "煤矿防治",
+  "污水治理",
+  "井下施工",
+  "环境监测",
+  "生态评估",
+  "桩基工程",
+  "基础施工",
+  "其他",
+] as const;
 
 export const loginSchema = z.object({ username: z.string().trim().min(3).max(80), password: z.string().min(8).max(200) });
 export const organizationCreateSchema = z.object({
@@ -18,7 +38,7 @@ export const projectCreateSchema = z.object({
   name: z.string().trim().min(2).max(160),
   code: z.string().trim().min(2).max(50),
   responsibleOrganizationId: z.string().uuid(),
-  projectType: z.string().trim().max(120).optional(),
+  projectType: z.enum(projectTypeOptions).optional(),
   location: z.string().trim().max(300).optional(),
   contractAmount: z.coerce.number().min(0).optional(),
   plannedStartAt: z.string().date().optional(),

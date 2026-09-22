@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import ExcelJS from "exceljs";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { projectTypeOptions } from "@safety/contracts";
 import { prisma } from "../db.js";
 import { forbidden, isCompanyAdmin, projectScopeIds } from "../access.js";
 import {
@@ -125,7 +126,7 @@ const monthlyProjectCreateInput = z.object({
   reportMonth: month,
   name: z.string().trim().min(1).max(160),
   code: z.string().trim().min(1).max(50),
-  projectType: z.string().trim().max(120).optional(),
+  projectType: z.enum(projectTypeOptions).optional(),
   location: z.string().trim().max(300).optional(),
   contractAmount: z.coerce.number().min(0).optional(),
   plannedStartAt: z.string().date().optional(),

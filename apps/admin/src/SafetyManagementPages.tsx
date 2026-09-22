@@ -28,6 +28,7 @@ import {
   Upload,
 } from "antd";
 import type { UploadFile } from "antd";
+import { projectTypeOptions } from "@safety/contracts";
 import { api, json } from "./api";
 import "./monthly-reports.css";
 
@@ -2190,9 +2191,7 @@ export function MonthlyReportsPage() {
               showSearch
               optionFilterProp="label"
               placeholder="请选择项目类型"
-              options={(config.data?.types ?? [])
-                .filter((type) => type.active)
-                .map((type) => ({ value: type.name, label: type.name }))}
+              options={projectTypeOptions.map((type) => ({ value: type, label: type }))}
             />
           </Form.Item>
           <Form.Item label="施工地点" name="location">

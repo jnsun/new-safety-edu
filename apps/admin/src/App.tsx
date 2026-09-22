@@ -10,6 +10,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { projectTypeOptions } from "@safety/contracts";
 import {
   Alert,
   App as AntApp,
@@ -2514,7 +2515,7 @@ function OrganizationProjects({ principal, view = "organizations" }: { principal
             <Input />
           </Form.Item>
           <Form.Item name="projectType" label="项目类型">
-            <Input />
+            <Select allowClear placeholder="请选择项目类型" options={projectTypeOptions.map((type) => ({ value: type, label: type }))} />
           </Form.Item>
           <Form.Item name="location" label="施工地点">
             <Input />

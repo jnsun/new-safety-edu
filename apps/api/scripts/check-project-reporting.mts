@@ -41,5 +41,6 @@ assert.match(routes, /app\.post\(\s*"\/api\/monthly-reports\/projects"/);
 assert.match(routes, /reportOrganizationIds\(request\)\.includes\(parsed\.organizationId\)/);
 assert.match(routes, /await requireWritablePeriod\(parsed\.reportMonth\)/);
 assert.match(routes, /project\.create_from_monthly_reporting/);
+assert.match(routes, /z\.enum\(projectTypeOptions\)/);
 assert.match(routes, /MONTHLY_SUBMISSION_NOT_EDITABLE/);
 console.log("PROJECT_REPORTING_POLICY_OK");
