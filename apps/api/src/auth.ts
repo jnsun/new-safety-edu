@@ -84,7 +84,7 @@ export function authHandlers(env: Env) {
       if (sessionId && !await prisma.refreshSession.findFirst({ where: { id: sessionId, accountId: account.id, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } })) throw unauthorized();
       const path = request.url.split("?", 1)[0];
       if (account.status === "pending") {
-        const pendingAllowed = ["/api/auth/me", "/api/auth/logout", "/api/auth/logout-all", "/api/wechat/registration-options", "/api/wechat/identity/phone-code", "/api/wechat/identity/wechat-phone", "/api/wechat/identity/confirm", "/api/wechat/registration-requests", "/api/me/change-requests"];
+        const pendingAllowed = ["/api/auth/me", "/api/auth/logout", "/api/auth/logout-all", "/api/wechat/registration-options", "/api/wechat/identity/phone-code", "/api/wechat/identity/phone-verify", "/api/wechat/identity/wechat-phone", "/api/wechat/identity/confirm", "/api/wechat/registration-requests", "/api/me/change-requests"];
         if (!pendingAllowed.includes(path ?? "") && !/^\/api\/me\/change-requests\/[0-9a-f-]+\/withdraw$/i.test(path ?? "") && path !== "/api/files") {
           throw Object.assign(new Error("账号身份尚待绑定或审核"), { statusCode: 403, code: "ACCOUNT_PENDING" });
         }

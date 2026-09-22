@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { assertWechatVerificationPurpose, canReviewWechatIdentityRequest, decideWechatBinding } from "../src/wechat-identity-policy.js";
 
 const orgAdmin = { accountId: "a", personId: "p", mustChangePassword: false, sessionId: null, roles: [{ role: "org_admin", scopeType: "organization", scopeId: "org-a" }] } as const;
@@ -20,5 +21,9 @@ assert.equal(decideWechatBinding({ activePersonMatches: 1, selectedOrganizationM
 assert.equal(assertWechatVerificationPurpose("wechat_bind"), "wechat_bind");
 assert.equal(assertWechatVerificationPurpose("wechat_rebind"), "wechat_rebind");
 assert.throws(() => assertWechatVerificationPurpose("login"), (error: unknown) => error instanceof Error && "code" in error && error.code === "INVALID_SMS_PURPOSE");
+
+const auth = readFileSync(new URL("../src/auth.ts", import.meta.url), "utf8");
+const pendingAllowed = auth.match(/const pendingAllowed = \[([^\]]+)\]/)?.[1] ?? "";
+assert.match(pendingAllowed, /"\/api\/wechat\/identity\/phone-verify"/, "待绑定账号必须能够验证首次绑定短信验证码");
 
 console.log("WECHAT_IDENTITY_POLICY_OK");
