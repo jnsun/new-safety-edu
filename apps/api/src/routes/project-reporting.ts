@@ -9,7 +9,7 @@ import {
   reportStats,
   validateReportFields,
 } from "../project-reporting-core.js";
-import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, monthlySubmissionReadiness, nextSubmissionStatus, reportingOrganizationIds, submittedMonthStatuses } from "../project-reporting-policy.js";
+import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, monthlyReminderDedupeKey, monthlyReminderEligible, monthlySubmissionReadiness, nextSubmissionStatus, reportingOrganizationIds, submittedMonthStatuses } from "../project-reporting-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -381,7 +381,7 @@ export async function registerProjectReportingRoutes(
       const projectId = id.parse((request.params as { id: string }).id);
       const rows = await prisma.projectMonthlyReport.findMany({
         where: { ...visibleWhere(request), projectId },
-        include,
+        include: { ...include, revisions: { orderBy: { revision: "desc" } } },
         orderBy: { reportMonth: "asc" },
       });
       return { data: rows };
@@ -615,6 +615,31 @@ export async function registerProjectReportingRoutes(
         where: { reportingYear: year!, reportingMonth: number!, active: true, ...(isCompanyAdmin(request.principal!) ? {} : { organizationId: { in: reportOrganizationIds(request) } }) },
         include: { organization: { select: { id: true, name: true } } },
         orderBy: { organization: { name: "asc" } },
+      }) };
+    },
+  );
+
+  app.post(
+    "/api/monthly-reports/submissions/remind",
+    { preHandler: deps.authenticate },
+    async (request) => {
+      requireCompanyAdmin(request);
+      const body = z.object({ organizationId: id, month }).parse(request.body);
+      const [year, number] = body.month.split("-").map(Number);
+      return { data: await prisma.$transaction(async (tx) => {
+        const [organization, submission, recipients] = await Promise.all([
+          tx.organization.findFirst({ where: { id: body.organizationId, type: "business_entity", reportingEnabled: true }, select: { name: true } }),
+          tx.departmentMonthStatus.findFirst({ where: { organizationId: body.organizationId, reportingYear: year!, reportingMonth: number!, active: true }, select: { status: true } }),
+          tx.roleAssignment.findMany({ where: { active: true, role: { in: ["org_leader", "org_admin"] }, scopeType: "organization", scopeId: body.organizationId, personId: { not: null }, person: { status: "active", account: { status: "active" } } }, select: { personId: true } }),
+        ]);
+        if (!organization) throw Object.assign(new Error("经营实体未启用报送"), { statusCode: 404 });
+        if (!monthlyReminderEligible(submission?.status)) throw Object.assign(new Error("本月已提交，无需提醒"), { statusCode: 409 });
+        const personIds = [...new Set(recipients.map((row) => row.personId).filter((personId): personId is string => !!personId))];
+        if (!personIds.length) throw Object.assign(new Error("该实体没有可接收提醒的在职负责人"), { statusCode: 409 });
+        const now = Date.now();
+        const result = await tx.notification.createMany({ data: personIds.map((personId) => ({ personId, title: "野外项目月报提醒", body: `${organization.name} ${body.month} 月报尚未完成整批提交，请核对项目草稿后报送。`, dedupeKey: monthlyReminderDedupeKey(body.organizationId, body.month, personId, now) })), skipDuplicates: true });
+        await writeCriticalAudit(tx, { actorId: request.principal!.accountId, action: "monthly_report.remind", objectType: "organization", objectId: body.organizationId, metadata: { month: body.month, recipientCount: personIds.length, created: result.count } });
+        return { requested: personIds.length, created: result.count, channel: "in_app" as const };
       }) };
     },
   );
@@ -1096,6 +1121,8 @@ export async function registerProjectReportingRoutes(
           year: z.coerce.number().int().optional(),
           month: z.coerce.number().int().min(1).max(12).optional(),
           completed: z.enum(["true", "false"]).optional(),
+          organizationId: id.optional(),
+          projectTypeId: id.optional(),
         })
         .parse(request.query);
       const fields = await prisma.reportField.findMany({
@@ -1108,7 +1135,8 @@ export async function registerProjectReportingRoutes(
         where: {
           ...visibleWhere(request),
           status: "submitted",
-          ...(submittedOrganizationIds ? { reportingOrganizationId: { in: submittedOrganizationIds } } : {}),
+          ...(query.projectTypeId ? { projectTypeId: query.projectTypeId } : {}),
+          ...(submittedOrganizationIds ? { reportingOrganizationId: { in: query.organizationId ? submittedOrganizationIds.filter((organizationId) => organizationId === query.organizationId) : submittedOrganizationIds } } : query.organizationId ? { reportingOrganizationId: query.organizationId } : {}),
           ...(query.year
             ? {
                 reportMonth: {

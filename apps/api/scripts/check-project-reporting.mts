@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { reportStats, validateReportFields } from "../src/project-reporting-core.js";
-import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, monthlySubmissionReadiness, nextSubmissionStatus, submittedMonthStatuses } from "../src/project-reporting-policy.js";
+import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, monthlyReminderDedupeKey, monthlyReminderEligible, monthlySubmissionReadiness, nextSubmissionStatus, submittedMonthStatuses } from "../src/project-reporting-policy.js";
 
 const fields = [{ fieldKey: "project_manager", label: "项目负责人", required: true, active: true, fieldType: "text" as const, options: [] }, { fieldKey: "custom_level", label: "风险等级", required: true, active: true, fieldType: "select" as const, options: ["低", "中", "高"] }];
 assert.deepEqual(validateReportFields({ project_manager: "匿名负责人", custom_level: "中", safetyHazards: false }, fields), []);
@@ -29,5 +29,10 @@ assert.equal(nextSubmissionStatus("submitted", "lock"), "locked");
 assert.equal(nextSubmissionStatus("confirmed", "lock"), "locked");
 assert.throws(() => nextSubmissionStatus("draft", "lock"), /状态不允许/);
 assert.deepEqual(submittedMonthStatuses, ["submitted", "confirmed"]);
+assert.equal(monthlyReminderEligible("draft"), true);
+assert.equal(monthlyReminderEligible("rejected"), true);
+for (const status of ["submitted", "confirmed", "locked"]) assert.equal(monthlyReminderEligible(status), false);
+assert.equal(monthlyReminderDedupeKey("org", "2026-09", "person", 120_000), monthlyReminderDedupeKey("org", "2026-09", "person", 599_999));
+assert.notEqual(monthlyReminderDedupeKey("org", "2026-09", "person", 599_999), monthlyReminderDedupeKey("org", "2026-09", "person", 600_000));
 assert.deepEqual(reportStats([{ id: "a" }, { id: "b" }, { id: "c" }], [{ reportingOrganizationId: "a", onsiteCount: 5, onsiteVehicles: 2, safetyHazards: true, safetyInspection: true }], [{ organizationId: "a", status: "submitted", reportType: "projects" }, { organizationId: "b", status: "confirmed", reportType: "no_projects" }]), { departmentTotal: 3, submittedDepartments: 2, noFieldDepartments: 1, missingDepartments: 1, projectCount: 1, onsitePeople: 5, onsiteVehicles: 2, hazardProjects: 1, inspectionRate: 100 });
 console.log("PROJECT_REPORTING_POLICY_OK");

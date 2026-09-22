@@ -278,6 +278,12 @@ const moduleMenuItems = (pathname: string, receivablesAccess?: ReceivablesAccess
             key: "/monthly-reports",
             label: "野外项目报送",
             icon: <CalendarOutlined />,
+            children: [
+              { key: "/monthly-reports/mine", label: "经营实体月报" },
+              ...(companyAdmin ? [{ key: "/monthly-reports/manage", label: "月报复核" }] : []),
+              { key: "/monthly-reports/completed", label: "完工项目" },
+              ...(companyAdmin ? [{ key: "/monthly-reports/config", label: "报送配置" }] : []),
+            ],
           },
         ]
       : pathname.startsWith("/qualifications")
@@ -2863,7 +2869,7 @@ function Shell({ principal }: { principal: Principal }) {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(
     () =>
-      location.pathname === "/" || location.pathname === "/safety" ? "/" : inMasterData ? masterDataSelectedKey(location.pathname) : inReceivables ? location.pathname.replace(/\/$/, "") || "/receivables" : `/${location.pathname.split("/")[1]}`,
+      location.pathname === "/" || location.pathname === "/safety" ? "/" : inMasterData ? masterDataSelectedKey(location.pathname) : inReceivables ? location.pathname.replace(/\/$/, "") || "/receivables" : location.pathname.startsWith("/monthly-reports") ? (location.pathname === "/monthly-reports" ? "/monthly-reports/mine" : location.pathname) : `/${location.pathname.split("/")[1]}`,
     [inMasterData, inReceivables, location.pathname],
   );
   const sidebarItems = useMemo(
@@ -2874,7 +2880,7 @@ function Shell({ principal }: { principal: Principal }) {
     location.pathname === "/" || location.pathname === "/safety"
       ? "安全生产管理平台"
       : location.pathname.startsWith("/monthly-reports")
-        ? "野外项目报送"
+        ? `野外项目月报 / ${{ mine: "经营实体月报", manage: "月报复核", completed: "完工项目", config: "报送配置" }[location.pathname.split("/")[2] as "mine" | "manage" | "completed" | "config"] ?? "经营实体月报"}`
         : location.pathname.startsWith("/qualifications")
           ? "资质证照管理"
           : inMasterData
@@ -2885,7 +2891,7 @@ function Shell({ principal }: { principal: Principal }) {
   if (!canEnterSafety && !inReceivables && !["/", "/logout"].includes(location.pathname)) return <Navigate to="/" replace />;
   return (
     <>
-      <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}`}>
+      <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}${location.pathname.startsWith("/monthly-reports") ? " monthly-report-shell" : ""}`}>
         <Layout.Sider
           className={inReceivables ? "receivables-sider" : undefined}
           width={inReceivables ? 200 : 224}
@@ -2899,6 +2905,7 @@ function Shell({ principal }: { principal: Principal }) {
           <Menu
             mode="inline"
             selectedKeys={[selected]}
+            defaultOpenKeys={location.pathname.startsWith("/monthly-reports") ? ["/monthly-reports"] : []}
             items={sidebarItems}
             onClick={({ key }) => navigate(key)}
           />
@@ -2954,7 +2961,7 @@ function Shell({ principal }: { principal: Principal }) {
               <Route path="/training/new" element={<TrainingWorkflowPage />} />
               <Route path="/records" element={<RecordsPage />} />
               <Route path="/reports" element={<ReportsPage />} />
-              <Route path="/monthly-reports" element={<MonthlyReportsPage />} />
+              <Route path="/monthly-reports/*" element={<MonthlyReportsPage />} />
               <Route
                 path="/qualifications"
                 element={

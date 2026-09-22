@@ -56,6 +56,14 @@ export type DepartmentSubmissionStatus = "draft" | "submitted" | "rejected" | "c
 export type DepartmentSubmissionAction = "submit" | "reject" | "lock";
 export const submittedMonthStatuses = ["submitted", "confirmed"] as const;
 
+export function monthlyReminderEligible(status?: string) {
+  return !status || !["submitted", "confirmed", "locked"].includes(status);
+}
+
+export function monthlyReminderDedupeKey(organizationId: string, month: string, personId: string, at: number) {
+  return `monthly-manual:${organizationId}:${month}:${Math.floor(at / 600_000)}:${personId}`;
+}
+
 export function nextSubmissionStatus(current: DepartmentSubmissionStatus, action: DepartmentSubmissionAction): DepartmentSubmissionStatus {
   const transitions: Partial<Record<DepartmentSubmissionStatus, Partial<Record<DepartmentSubmissionAction, DepartmentSubmissionStatus>>>> = {
     draft: { submit: "submitted" },
