@@ -116,6 +116,23 @@ const inputFields = z.object({
     .default({}),
 });
 const input = inputFields;
+// This is deliberately narrower than the general project-master endpoint.  A
+// field reporter may create a formal project only while preparing the current
+// entity's open monthly report; it does not grant access to the organisation
+// and project administration screens.
+const monthlyProjectCreateInput = z.object({
+  organizationId: id,
+  reportMonth: month,
+  name: z.string().trim().min(1).max(160),
+  code: z.string().trim().min(1).max(50),
+  projectType: z.string().trim().max(120).optional(),
+  location: z.string().trim().max(300).optional(),
+  contractAmount: z.coerce.number().min(0).optional(),
+  plannedStartAt: z.string().date().optional(),
+  plannedEndAt: z.string().date().optional(),
+  managerName: z.string().trim().max(80).optional(),
+  managerPhone: z.string().trim().max(20).optional(),
+});
 const fieldInput = z
   .object({
     label: z.string().trim().min(1).max(120),
@@ -224,6 +241,82 @@ export async function registerProjectReportingRoutes(
           orderBy: { name: "asc" },
         }).then((rows) => rows.map((row) => ({ ...row, previousDefaults: inheritedMonthlyDefaults("monthlyReports" in row ? row.monthlyReports[0] : null), monthlyReports: undefined }))),
       };
+    },
+  );
+  app.post(
+    "/api/monthly-reports/projects",
+    { preHandler: deps.authenticate },
+    async (request, reply) => {
+      if (!canSubmitMonthlyFacts(request.principal!))
+        forbidden("仅具有野外项目报送权限的人员可以从月报中新建项目");
+      const parsed = monthlyProjectCreateInput.parse(request.body);
+      if (!reportOrganizationIds(request).includes(parsed.organizationId))
+        forbidden("只能为本人负责填报的经营实体新建项目");
+
+      await requireWritablePeriod(parsed.reportMonth);
+      const submission = await activeSubmission(parsed.organizationId, parsed.reportMonth);
+      if (!submissionEditable(submission?.status))
+        throw Object.assign(new Error("该经营实体本月已提交或锁定，不能新增报送项目"), {
+          statusCode: 409,
+          code: "MONTHLY_SUBMISSION_NOT_EDITABLE",
+        });
+
+      const organization = await prisma.organization.findUnique({
+        where: { id: parsed.organizationId },
+        select: { id: true, name: true, type: true },
+      });
+      if (!organization || organization.type !== "business_entity")
+        throw Object.assign(new Error("项目必须归属经营实体"), {
+          statusCode: 409,
+          code: "PROJECT_REQUIRES_BUSINESS_ENTITY",
+        });
+
+      try {
+        const project = await prisma.$transaction(async (tx) => {
+          // User-confirmed rule: a report-originated project is a formal
+          // project master immediately.  There is no pending-review state.
+          const created = await tx.project.create({
+            data: {
+              name: parsed.name,
+              code: parsed.code,
+              responsibleOrganizationId: organization.id,
+              projectType: parsed.projectType ?? null,
+              location: parsed.location ?? null,
+              contractAmount: parsed.contractAmount ?? null,
+              plannedStartAt: parsed.plannedStartAt
+                ? new Date(`${parsed.plannedStartAt}T00:00:00.000Z`)
+                : null,
+              plannedEndAt: parsed.plannedEndAt
+                ? new Date(`${parsed.plannedEndAt}T00:00:00.000Z`)
+                : null,
+              managerName: parsed.managerName ?? null,
+              managerPhone: parsed.managerPhone ?? null,
+            },
+            include: { responsibleOrganization: { select: { id: true, name: true } } },
+          });
+          await writeCriticalAudit(tx, {
+            actorId: request.principal!.accountId,
+            action: "project.create_from_monthly_reporting",
+            objectType: "project",
+            objectId: created.id,
+            metadata: {
+              organizationId: organization.id,
+              reportMonth: parsed.reportMonth,
+              source: "monthly_reporting",
+            },
+          });
+          return created;
+        });
+        return reply.code(201).send({ data: project });
+      } catch (error: unknown) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          throw Object.assign(new Error("项目编号已存在，请使用未占用的项目编号"), {
+            statusCode: 409,
+            code: "PROJECT_CODE_EXISTS",
+          });
+        }
+        throw error;
+      }
     },
   );
   app.get(

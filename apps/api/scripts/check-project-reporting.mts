@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { reportStats, validateReportFields } from "../src/project-reporting-core.js";
 import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, monthlyReminderDedupeKey, monthlyReminderEligible, monthlySubmissionReadiness, nextSubmissionStatus, submittedMonthStatuses } from "../src/project-reporting-policy.js";
 
@@ -35,4 +36,10 @@ for (const status of ["submitted", "confirmed", "locked"]) assert.equal(monthlyR
 assert.equal(monthlyReminderDedupeKey("org", "2026-09", "person", 120_000), monthlyReminderDedupeKey("org", "2026-09", "person", 599_999));
 assert.notEqual(monthlyReminderDedupeKey("org", "2026-09", "person", 599_999), monthlyReminderDedupeKey("org", "2026-09", "person", 600_000));
 assert.deepEqual(reportStats([{ id: "a" }, { id: "b" }, { id: "c" }], [{ reportingOrganizationId: "a", onsiteCount: 5, onsiteVehicles: 2, safetyHazards: true, safetyInspection: true }], [{ organizationId: "a", status: "submitted", reportType: "projects" }, { organizationId: "b", status: "confirmed", reportType: "no_projects" }]), { departmentTotal: 3, submittedDepartments: 2, noFieldDepartments: 1, missingDepartments: 1, projectCount: 1, onsitePeople: 5, onsiteVehicles: 2, hazardProjects: 1, inspectionRate: 100 });
+const routes = await readFile(new URL("../src/routes/project-reporting.ts", import.meta.url), "utf8");
+assert.match(routes, /app\.post\(\s*"\/api\/monthly-reports\/projects"/);
+assert.match(routes, /reportOrganizationIds\(request\)\.includes\(parsed\.organizationId\)/);
+assert.match(routes, /await requireWritablePeriod\(parsed\.reportMonth\)/);
+assert.match(routes, /project\.create_from_monthly_reporting/);
+assert.match(routes, /MONTHLY_SUBMISSION_NOT_EDITABLE/);
 console.log("PROJECT_REPORTING_POLICY_OK");

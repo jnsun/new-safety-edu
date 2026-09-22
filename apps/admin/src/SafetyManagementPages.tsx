@@ -1402,6 +1402,7 @@ export function MonthlyReportsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [form] = Form.useForm();
+  const [newProjectForm] = Form.useForm();
   const selectedDraftProjectId = Form.useWatch("projectId", form);
   const [typeForm] = Form.useForm();
   const [typeEditForm] = Form.useForm();
@@ -1413,6 +1414,7 @@ export function MonthlyReportsPage() {
   const view = location.pathname.split("/")[2] || "mine";
   const setView = (next: string) => navigate(`/monthly-reports/${next}`);
   const [open, setOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [editing, setEditing] = useState<MonthlyReport>();
   const [detail, setDetail] = useState<MonthlyReport>();
   const [history, setHistory] = useState<MonthlyReport[]>([]);
@@ -1605,6 +1607,27 @@ export function MonthlyReportsPage() {
       setOpen(false);
       setEditing(undefined);
       refresh();
+    },
+    onError: (error) => message.error(error.message),
+  });
+  const createProjectFromMonthly = useMutation({
+    mutationFn: async (values: Record<string, unknown>) => {
+      if (!noFieldOrganizationId) throw new Error("请先选择报送主体");
+      return api<Project>(
+        "/api/monthly-reports/projects",
+        json("POST", {
+          ...values,
+          organizationId: noFieldOrganizationId,
+          reportMonth: month,
+        }),
+      );
+    },
+    onSuccess: (project) => {
+      setNewProjectOpen(false);
+      newProjectForm.resetFields();
+      message.success("项目已作为正式项目主档建立，请继续填写本月月报草稿");
+      refresh();
+      openForm(undefined, project);
     },
     onError: (error) => message.error(error.message),
   });
@@ -1839,7 +1862,21 @@ export function MonthlyReportsPage() {
           <label>报送月份<Input type="month" value={month} onChange={(event) => { setMonth(event.target.value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} /></label>
           <label>经营实体<Select value={noFieldOrganizationId} onChange={(value) => { setNoFieldOrg(value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} placeholder="请选择经营实体" options={availableOrganizations.map((org) => ({ value: org.id, label: org.name }))} /></label>
         </div>
-        <Space wrap><Button onClick={chooseNoProject}>本月无野外项目</Button><Button type="primary" onClick={() => setBatchOpen(true)} disabled={!noFieldOrganizationId}>核对整批提交</Button></Space>
+        <Space wrap>
+          <Button
+            type="primary"
+            disabled={!noFieldOrganizationId}
+            onClick={() => {
+              newProjectForm.resetFields();
+              newProjectForm.setFieldsValue({ contractAmount: 0 });
+              setNewProjectOpen(true);
+            }}
+          >
+            新增报送项目
+          </Button>
+          <Button onClick={chooseNoProject}>本月无野外项目</Button>
+          <Button type="primary" onClick={() => setBatchOpen(true)} disabled={!noFieldOrganizationId}>核对整批提交</Button>
+        </Space>
       </section>
       {summary.data?.period?.deadlineAt && <Alert className="monthly-deadline-alert" showIcon type="info" message={`本月报送截止：${summary.data.period.deadlineAt.slice(0, 10)}`} description={`${noFieldOrganizationId && preflight.data ? `还需处理 ${Math.max(0, preflight.data.expectedCount - preflight.data.completedCount)} 个项目。` : "选择经营实体后显示待处理数量。"} 已提交的月报需按授权流程修订，不会直接覆盖历史。`} />}
       {ownDepartment?.returnReason && <Alert className="monthly-deadline-alert" type="warning" showIcon message="公司已退回，请修改后重新整批提交" description={ownDepartment.returnReason} />}
@@ -1848,7 +1885,7 @@ export function MonthlyReportsPage() {
         {noFieldOrganizationId && preflight.isLoading && <Typography.Text type="secondary">正在核对项目清单…</Typography.Text>}
         {preflight.isError && <Alert style={{ marginBottom: 16 }} type="error" showIcon message="项目清单核对失败" description={<Button onClick={() => void preflight.refetch()}>重试</Button>} />}
         {(projects.isError || workbenchReports.isError) && <Alert style={{ marginBottom: 16 }} type="error" showIcon message="草稿资料加载失败，暂不能编辑" description={<Button onClick={() => { void projects.refetch(); void workbenchReports.refetch(); }}>重新加载</Button>} />}
-        {preflight.data?.expectedCount === 0 && <Alert type="info" style={{ marginBottom: 16 }} message="当前经营实体本月没有在建或暂停项目" description="请核实范围后，通过“本月无野外项目”确认；正式结果以服务端核对为准。" />}
+        {preflight.data?.expectedCount === 0 && <Alert type="info" style={{ marginBottom: 16 }} message="当前经营实体本月没有在建或暂停项目" description="如有新增野外项目，请先点击“新增报送项目”建立正式项目主档，再填写本月月报；确认确无项目时，才使用“本月无野外项目”。" />}
         <Space wrap className="monthly-status-tabs">
           {([
             ["all", `全部 ${projectItems.length}`],
@@ -2121,6 +2158,44 @@ export function MonthlyReportsPage() {
       {batchResult && <Card className="monthly-result-card"><Typography.Title level={4}>报送成功</Typography.Title><Typography.Paragraph>经营实体：{selectedOrganizationName} · 月份：{month}</Typography.Paragraph><Descriptions column={1} items={[{ key: "batch", label: "服务端批次编号", children: batchResult.id }, { key: "status", label: "当前状态", children: batchResult.status === "submitted" ? "已提交，公司可直接查看" : batchResult.status }, { key: "type", label: "报送类型", children: batchResult.reportType === "no_projects" ? "无项目报送" : "项目整批报送" }]} /><Button type="primary" onClick={() => setBatchResult(undefined)}>返回月报工作台</Button></Card>}
       <Modal title={noProjectDialog === "select" ? "选择经营实体" : noProjectDialog === "blocked" ? "暂不能进行无项目报送" : "确认本月无野外项目"} open={!!noProjectDialog} onCancel={() => setNoProjectDialog(null)} onOk={confirmNoProjectDialog} okText={noProjectDialog === "confirm" ? "确认并提交" : noProjectDialog === "select" ? "继续核对" : "知道了"} confirmLoading={submittingBatch}>
         {noProjectDialog === "select" ? <><p>先选择本次报送的经营实体，系统将核对该月项目范围。</p><Select style={{ width: "100%" }} placeholder="请选择经营实体" value={noFieldOrganizationId} onChange={setNoFieldOrg} options={availableOrganizations.map((org) => ({ value: org.id, label: org.name }))} /></> : noProjectDialog === "blocked" ? <Alert type="warning" showIcon message="服务端核对未通过" description={preflight.isError ? "核对请求失败，请重试。" : preflight.data?.expectedCount ? `该实体本月有 ${preflight.data.expectedCount} 个应报项目，不能按无项目报送。` : preflight.data?.reasons.join("；") || "请先核对月份和报送范围。"} /> : <p>服务端确认 {selectedOrganizationName} 在 {month} 没有应报项目。提交后将生成该月的无项目报送记录，请核实后确认。</p>}
+      </Modal>
+      <Modal title="新增报送项目" open={newProjectOpen} onCancel={() => setNewProjectOpen(false)} footer={null} destroyOnClose>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="项目会立即建立为正式项目主档"
+          description={`归属 ${selectedOrganizationName}，无需审核。建立后继续填写 ${month} 的项目月报草稿。`}
+        />
+        <Form form={newProjectForm} layout="vertical" onFinish={(values) => createProjectFromMonthly.mutate(values)}>
+          <Form.Item label="项目名称" name="name" rules={[{ required: true, message: "请填写项目名称" }]}>
+            <Input maxLength={160} placeholder="例如：某区域地球物理勘查项目" />
+          </Form.Item>
+          <Form.Item label="项目编号" name="code" rules={[{ required: true, message: "请填写项目编号" }]} extra="项目编号创建后用于主档和月报关联，不能与已有项目重复。">
+            <Input maxLength={50} placeholder="例如：TEST-202609-001" />
+          </Form.Item>
+          <Form.Item label="项目类型" name="projectType">
+            <Input maxLength={120} placeholder="例如：地球物理勘查" />
+          </Form.Item>
+          <Form.Item label="施工地点" name="location">
+            <Input maxLength={300} placeholder="填写主要施工地点" />
+          </Form.Item>
+          <Form.Item label="合同金额（元）" name="contractAmount">
+            <InputNumber min={0} precision={2} style={{ width: "100%" }} />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}><Form.Item label="计划开始日期" name="plannedStartAt"><Input type="date" /></Form.Item></Col>
+            <Col span={12}><Form.Item label="计划结束日期" name="plannedEndAt"><Input type="date" /></Form.Item></Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}><Form.Item label="项目负责人" name="managerName"><Input maxLength={80} /></Form.Item></Col>
+            <Col span={12}><Form.Item label="联系电话" name="managerPhone"><Input maxLength={20} /></Form.Item></Col>
+          </Row>
+          <Space style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Button onClick={() => setNewProjectOpen(false)}>取消</Button>
+            <Button type="primary" htmlType="submit" loading={createProjectFromMonthly.isPending}>建立项目并填写月报</Button>
+          </Space>
+        </Form>
       </Modal>
       <Drawer title="编辑自定义字段" open={!!editingField} onClose={() => setEditingField(undefined)} width={520} destroyOnClose>
         {editingField && <Form form={fieldEditForm} layout="vertical" onFinish={async (values) => {
