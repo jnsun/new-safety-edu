@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img">
+<title>手提式灭火器配图示意</title>
+<desc>浅蓝底色上居中一只蓝色手提式灭火器，带提把、压把、软管与喷嘴，底部为地面色带。画面无文字、无人物、无刻度与数字。</desc>
+<rect width="1600" height="900" fill="#F1F6FC"/>
+<circle cx="1250" cy="250" r="220" fill="#E7F0FA"/>
+<circle cx="330" cy="620" r="150" fill="#E7F0FA"/>
+<rect x="180" y="700" width="1240" height="54" rx="27" fill="#DCE8F6"/>
+<g transform="translate(84.65,-154) scale(0.95)">
+<defs>
+<clipPath id="fireBodyClip">
+<path d="M662 356 C660 382 637 393 621 407 C606 421 600 434 600 456 L600 880 Q700 940 800 880 L800 456 C800 434 794 421 779 407 C763 393 740 382 738 356 Z"/>
+</clipPath>
+</defs>
+<path d="M586 883 Q700 937 814 883 L814 903 Q700 957 586 903 Z" fill="#0560BC"/>
+<path d="M662 356 C660 382 637 393 621 407 C606 421 600 434 600 456 L600 880 Q700 940 800 880 L800 456 C800 434 794 421 779 407 C763 393 740 382 738 356 Z" fill="#087BE8"/>
+<g clip-path="url(#fireBodyClip)">
+<rect x="768" y="340" width="34" height="560" fill="#0560BC"/>
+</g>
+<rect x="622" y="600" width="144" height="120" rx="10" fill="#D3E6FB"/>
+<path d="M662 322 L738 322 L738 356 Q700 377 662 356 Z" fill="#0560BC"/>
+<ellipse cx="700" cy="322" rx="38" ry="11" fill="#087BE8"/>
+<rect x="656" y="294" width="12" height="32" rx="4" fill="#0560BC"/>
+<rect x="732" y="294" width="12" height="32" rx="4" fill="#0560BC"/>
+<path d="M664 298 C664 238 736 238 736 298" fill="none" stroke="#0560BC" stroke-width="18" stroke-linecap="round"/>
+<path d="M740 316 L796 302" fill="none" stroke="#0560BC" stroke-width="13" stroke-linecap="round"/>
+<path d="M746 350 C824 342 890 392 898 468 L900 556" fill="none" stroke="#0560BC" stroke-width="14" stroke-linecap="round"/>
+<path d="M880 552 L920 552 L912 616 L888 616 Z" fill="#0560BC"/>
+</g>
+</svg>

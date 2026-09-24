@@ -8,7 +8,7 @@ import { verifySensitiveToken, type Principal } from "../auth.js";
 import { prisma } from "../db.js";
 import type { Env } from "../env.js";
 import { decryptNationalId } from "../crypto.js";
-import { grantRole, mergeAccounts, reactivatePerson, setPrimaryOrganization } from "../identity.js";
+import { activatePendingRoles, grantRole, mergeAccounts, reactivatePerson, setPrimaryOrganization } from "../identity.js";
 import { autoDispatchInTransaction, freezePaper } from "./day2.js";
 import { mergePersons } from "../person-merge.js";
 import { changeRequestKey, claimPendingRequest } from "../request-policy.js";
@@ -370,8 +370,28 @@ export async function registerDay4Routes(app: FastifyInstance, deps: Deps) {
     });
     return { data: { status: "rejected" } };
   });
-  app.post("/api/management/requests/:id/approve", manager, async (request) => { const principal = principalOf(request); const { id } = idParam.parse(request.params); const { note } = z.object({ note: z.string().trim().max(500).default("") }).parse(request.body); const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden(); if (row.status !== "pending" || !["profile_change", "binding_change", "department_transfer", "account_merge", "person_merge", "project_exit", "cross_entity_project_admin", "person_reactivation", "identity_correction", "contractor_unit_change", "responsible_entity_change", "account_recovery"].includes(row.type)) throw Object.assign(new Error("该申请请使用对应的专用审核操作"), { statusCode: 409, code: "SPECIAL_APPROVAL_REQUIRED" }); const payload = row.payload as Record<string, unknown>;
+  app.post("/api/management/requests/:id/approve", manager, async (request) => { const principal = principalOf(request); const { id } = idParam.parse(request.params); const { note } = z.object({ note: z.string().trim().max(500).default("") }).parse(request.body); const row = (await visibleRequests(principal)).find((item) => item.id === id); if (!row) forbidden(); if (row.status !== "pending" || !["profile_change", "binding_change", "department_transfer", "account_merge", "person_merge", "project_exit", "cross_entity_project_admin", "person_reactivation", "identity_correction", "contractor_unit_change", "responsible_entity_change", "account_recovery", "account_opening"].includes(row.type)) throw Object.assign(new Error("该申请请使用对应的专用审核操作"), { statusCode: 409, code: "SPECIAL_APPROVAL_REQUIRED" }); const payload = row.payload as Record<string, unknown>;
     assertFirstReleaseWorkflowAllowed(row.type);
+    if (row.type === "account_opening") {
+      if (!isCompanyAdmin(principal)) forbidden("仅公司管理员可以批准账号开通");
+      if (!row.accountId || !row.personId) throw Object.assign(new Error("账号开通申请缺少账号或人员档案关联"), { statusCode: 409, code: "ACCOUNT_OPENING_INVALID" });
+      const [account, person] = await Promise.all([
+        prisma.account.findUnique({ where: { id: row.accountId }, select: { id: true, personId: true, status: true } }),
+        prisma.person.findUnique({ where: { id: row.personId }, select: { status: true } }),
+      ]);
+      if (!account || account.personId !== row.personId || !person || person.status !== "active")
+        throw Object.assign(new Error("账号与正常人员档案不匹配，不能开通"), { statusCode: 409, code: "ACCOUNT_OPENING_TARGET_INVALID" });
+      if (account.status !== "pending")
+        throw Object.assign(new Error("账号状态已变化，请刷新账号信息后处理"), { statusCode: 409, code: "ACCOUNT_NOT_PENDING" });
+      await prisma.$transaction(async (tx) => {
+        await claimPendingRequest(tx, id, { status: "approved", reviewedBy: principal.accountId, reviewNote: note });
+        const activated = await tx.account.updateMany({ where: { id: account.id, personId: row.personId!, status: "pending" }, data: { status: "active" } });
+        if (activated.count !== 1) throw Object.assign(new Error("账号状态已变化，请刷新账号信息后处理"), { statusCode: 409, code: "ACCOUNT_NOT_PENDING" });
+        await activatePendingRoles(tx, { personId: row.personId!, accountId: account.id, actorId: principal.accountId });
+        await writeCriticalAudit(tx, { actorId: principal.accountId, action: "account.opening_approve", objectType: "account", objectId: account.id, requestId: id, reason: note || "公司管理员批准账号开通", metadata: { personId: row.personId } });
+      });
+      return { data: { status: "approved" } };
+    }
     if (row.type === "profile_change" && row.accountId === principal.accountId) forbidden("不能审核本人资料变更申请");
     if (row.type === "profile_change" && typeof payload.phone === "string" && !isCompanyAdmin(principal)) forbidden("仅公司管理员可以审核手机号变更");
     if (row.type === "binding_change") throw Object.assign(new Error("旧微信换绑申请不能直接批准，请申请人使用新微信完成手机号验证"), { statusCode: 409, code: "WECHAT_REBIND_VERIFICATION_REQUIRED" });

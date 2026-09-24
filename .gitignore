@@ -18,3 +18,8 @@ apps/miniprogram/project.private.config.json
 apps/miniprogram/miniprogram_npm/
 .artifact-work/
 .worktrees/
+.chrometmp/
+/.codex-deploy/
+/.workbuddy/
+/var/training-workflow-pg/
+/new-safety-edu-*-deploy.tar

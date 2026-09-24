@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>消防专题培训 · 微信小程序培训界面示意图</title>
+<style>
+:root{
+  --action:#087BE8;--action-strong:#0867C6;--action-soft:#E9F3FF;
+  --ink:#15181C;--ink-soft:#35404D;--muted:#5B6572;
+  --line:#E4E7EB;--line-strong:#CDD3DA;
+  --success:#217348;--success-soft:#EAF5EF;
+  --warning:#9A5B10;--canvas:#F4F5F7;--surface:#fff;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:34px 24px 60px;background:var(--canvas);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6}
+.wrap{max-width:1500px;margin:0 auto}
+.page-head{margin-bottom:30px}
+.page-head h1{font-size:23px;font-weight:600;margin:0 0 10px;letter-spacing:-.3px}
+.page-head p{margin:0;color:var(--muted);font-size:13px;max-width:1100px}
+.band{display:flex;align-items:center;gap:14px;margin:44px 0 18px}
+.band h2{font-size:17px;font-weight:600;margin:0;white-space:nowrap}
+.band i{flex:1;height:1px;background:var(--line-strong)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(392px,1fr));gap:26px}
+figure{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px 18px 14px}
+figcaption{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:600;margin-bottom:14px}
+figcaption em{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--action-soft);color:var(--action);
+  font-size:12px;font-weight:600;font-style:normal;display:inline-flex;align-items:center;justify-content:center}
+figcaption span{padding:2px 8px;border-radius:999px;background:var(--action-soft);color:var(--action);font-size:12px;font-weight:500}
+.note{margin:14px 0 0;color:var(--muted);font-size:12.5px;line-height:1.65}
+.note b{font-weight:600;color:var(--ink)}
+.plate{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--canvas);font-weight:600;color:var(--ink-soft)}
+td.mono,code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--ink-soft)}
+.legend ul{margin:0;padding-left:20px;color:var(--ink-soft);font-size:13.5px}
+.legend li{margin-bottom:7px}
+.legend b{font-weight:600;color:var(--ink)}
+
+/* ===== 小程序外壳 ===== */
+.ph{width:360px;height:800px;margin:0 auto;background:var(--canvas);border-radius:26px;border:1px solid var(--line-strong);
+  overflow:hidden;display:flex;flex-direction:column;color:var(--ink)}
+.sb{height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;font-size:11.5px;font-weight:500;flex:0 0 26px}
+.nb{height:44px;position:relative;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:500;flex:0 0 44px}
+.back{position:absolute;left:12px;font-size:16px}
+.cap{position:absolute;right:10px;top:8px;width:86px;height:28px;border:1px solid var(--line-strong);border-radius:999px;
+  display:flex;align-items:center;justify-content:center;gap:7px}
+.dots{display:flex;gap:3px}
+.dots i{display:block;width:3px;height:3px;border-radius:50%;background:var(--ink)}
+.div{display:block;width:1px;height:16px;background:var(--line-strong)}
+.ring{display:block;width:13px;height:13px;border:1.5px solid var(--ink);border-radius:50%}
+.sig{display:block;width:12px;height:9px;background:var(--ink);border-radius:2px}
+.bat{display:block;width:17px;height:9px;border:1px solid var(--ink);border-radius:2px}
+.bd{flex:1;overflow:hidden;padding:0 15px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:17px;padding:15px;margin-bottom:14px}
+.mt{font-size:13px;color:var(--muted);line-height:1.5;display:flex;align-items:center;gap:5px}
+.hd{font-size:15.5px;font-weight:500}
+.pill{padding:4px 9px;border-radius:999px;background:var(--action-soft);color:var(--action);font-size:11.5px;font-weight:500}
+.pill-w{padding:4px 9px;border-radius:999px;background:rgba(255,255,255,.18);color:#fff;font-size:11.5px;font-weight:500}
+.pg{height:6px;background:#E6EAF0;border-radius:999px;overflow:hidden}
+.pg i{display:block;height:100%;background:var(--action);border-radius:999px}
+.btn{display:flex;align-items:center;justify-content:center;height:46px;border-radius:11px;font-size:14.5px;font-weight:500}
+.btn-p{background:var(--action);color:#fff}
+.btn-s{background:var(--surface);color:var(--action);border:1px solid var(--line-strong)}
+.fct{display:flex;justify-content:space-between;gap:12px;font-size:13.5px;line-height:1.5}
+.fct span:first-child{color:var(--muted);flex:0 0 auto}
+.mk{width:20px;height:20px;flex:0 0 20px;border-radius:50%;background:#E6EAF0;color:var(--muted);font-size:11.5px;
+  display:flex;align-items:center;justify-content:center}
+.opt{display:flex;align-items:center;gap:9px;min-height:50px;padding:0 12px;margin-top:9px;border:1.5px solid #D8DEE6;
+  border-radius:12px;background:var(--surface);font-size:14.5px;line-height:1.45}
+.opt-on{color:var(--action-strong);background:var(--action-soft);border-color:var(--action)}
+.omk{flex:0 0 auto;color:var(--action);font-size:13px;font-weight:500}
+.fb{padding:13px;margin-top:11px;border:1px solid var(--success);border-radius:9px;background:var(--success-soft)}
+.fb-t{font-size:15px;font-weight:500;color:var(--ink)}
+.fb-c{margin-top:6px;font-size:14px;line-height:1.65;color:var(--ink-soft)}
+.fb-n{margin-top:6px;font-size:12.5px;color:var(--muted)}
+.dock{padding:10px 12px;margin-bottom:11px;background:rgba(255,255,255,.97);border:1px solid #B9DCFF;border-radius:11px}
+.kicker{color:var(--action);font-size:13px;font-weight:500}
+.nav{display:flex;gap:9px;padding:10px 15px;background:rgba(255,255,255,.97);flex:0 0 auto}
+.nav>div{flex:1;min-height:46px;display:flex;align-items:center;justify-content:center;border-radius:11px;font-size:14.5px;font-weight:500}
+.nav-dis{color:var(--muted);background:#F8FAFC;border:1px solid var(--line)}
+.tb{height:56px;background:var(--surface);border-top:1px solid var(--line);display:flex;align-items:center;font-size:11.5px;flex:0 0 56px}
+.ti{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--muted)}
+.ti i{display:block;width:18px;height:18px;border:1.5px solid var(--muted);border-radius:5px}
+.ti.on{color:var(--action);font-weight:500}
+.ti.on i{background:var(--action);border-color:var(--action)}
+.ti.round i{border-radius:50%}
+.ti.wide i{width:19px;height:16px}
+.blk{border-radius:17px;border:1px solid var(--line);background:var(--surface);padding:15px;overflow:hidden}
+.blk-t{font-size:17px;font-weight:500;line-height:1.4;margin-top:6px}
+.blk-b{margin-top:9px;font-size:14.5px;line-height:1.85;color:var(--ink-soft)}
+.shot{margin:12px -15px -15px;border-radius:0 0 16px 16px;overflow:hidden;line-height:0;background:#F1F6FC}
+.shot svg{display:block;width:330px;height:186px}
+.chev{flex:0 0 auto;display:block}
+.avatar{width:40px;height:40px;border-radius:50%;background:var(--action-soft);flex:0 0 40px;display:flex;align-items:center;justify-content:center}
+.samples{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px}
+.samples figure{padding:14px}
+.samples .shot-lg{border-radius:12px;overflow:hidden;line-height:0;border:1px solid var(--line)}
+.samples .shot-lg svg{display:block;width:100%;height:auto}
+.samples figcaption{margin-bottom:10px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="page-head">
+  <h1>《消防专题培训》微信小程序培训界面示意图</h1>
+  <p>依据现有小程序真实代码还原（app.wxss 色值 + pages/todo、pages/task、pages/courseware、components/courseware-blocks 的版面与图标位置），仅作内容制作与试点沟通参考，不代表已完成真机验收。配图均为示意稿，设备状态、器材外观与现场场景仍须人工复核。</p>
+</div>
+
+<div class="band"><h2>一、小程序界面（5 张）</h2><i></i></div>
+
+<main class="grid">
+
+<figure>
+  <figcaption><em>1</em>待办页<span>pages/todo</span></figcaption>
+  <div class="ph">
+    <div class="sb"><span>9:41</span><span style="display:flex;align-items:center;gap:5px"><i class="sig"></i><i class="bat"></i></span></div>
+    <div class="nb">安全培训<span class="cap"><span class="dots"><i></i><i></i><i></i></span><i class="div"></i><i class="ring"></i></span></div>
+    <div class="bd">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+        <div><div style="font-size:18px;font-weight:500;line-height:1.3">早上好，卫红学</div>
+        <div class="mt" style="font-size:12.5px;margin-top:2px">今天也要平安工作</div></div>
+        <div class="avatar"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="4" fill="#087BE8"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z" fill="#087BE8"/></svg></div>
+      </div>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:11px">
+        <span style="font-size:21px;font-weight:500;letter-spacing:-.5px">我的待办</span>
+        <span style="color:var(--action);font-size:13px;font-weight:500">3 项未完成</span>
+      </div>
+      <div class="hd" style="margin-bottom:8px">现在先做</div>
+      <div style="padding:13px;background:var(--action);border-radius:17px;color:#fff;margin-bottom:16px">
+        <span style="display:inline-flex;height:21px;padding:0 8px;align-items:center;background:rgba(0,52,112,.28);border-radius:5px;font-size:11px;font-weight:500;color:#DFF1FF">现在先做</span>
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-top:7px">
+          <span style="flex:1;font-size:18px;line-height:1.3;font-weight:500">消防专题培训试点</span>
+          <span class="pill-w" style="flex:0 0 auto">待学习</span>
+        </div>
+        <div style="margin-top:5px;font-size:13px;color:rgba(255,255,255,.82)">日常/年度培训</div>
+        <div style="margin-top:4px;font-size:13px;color:rgba(255,255,255,.82)">截止时间：2026-10-15</div>
+        <div style="height:6px;background:rgba(255,255,255,.28);border-radius:999px;margin:10px 0 6px"></div>
+        <div style="font-size:13px">学习进度 0/1</div>
+        <div style="display:flex;align-items:center;gap:8px;height:36px;padding:0 11px;margin-top:10px;background:rgba(255,255,255,.92);border-radius:9px;color:#07549D;font-size:13px;font-weight:500">
+          <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2" fill="none" stroke="#07549D" stroke-width="2"/><rect x="9" y="1.5" width="6" height="4.5" rx="1.2" fill="#07549D"/><path d="M8.5 11h7M8.5 15h7" stroke="#07549D" stroke-width="2" stroke-linecap="round"/></svg>
+          下一步：学习《消防专题培训》
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px;height:42px;margin-top:10px;background:#fff;border-radius:11px;color:var(--action);font-size:15px;font-weight:500">
+          继续完成<svg class="chev" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#087BE8" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><span class="hd">其余任务</span><span class="mt">2 项</span></div>
+      <div class="card" style="padding:0;overflow:hidden;margin-bottom:0">
+        <div style="padding:11px 14px;border-bottom:1px solid var(--line)">
+          <div style="display:flex;align-items:flex-start;gap:10px"><span style="flex:1;font-size:14px;font-weight:500;line-height:1.4">秋季地质勘查安全专题培训试点</span><span class="pill">待学习</span></div>
+          <div class="mt" style="margin-top:4px">日常/年度培训 · 截止 2026-10-15</div>
+          <div style="height:4px;background:#E6EAF0;border-radius:999px;margin-top:7px"></div>
+          <div style="margin-top:6px;color:var(--action);font-size:13px;font-weight:500;display:flex;align-items:center;gap:4px">下一步：学习《秋季地质勘查安全专题培训》<svg class="chev" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#087BE8" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        </div>
+        <div style="padding:11px 14px">
+          <div style="display:flex;align-items:flex-start;gap:10px"><span style="flex:1;font-size:14px;font-weight:500;line-height:1.4">新员工三级安全教育</span><span class="pill">待考试</span></div>
+          <div class="mt" style="margin-top:4px">三级安全教育 · 截止 2026-10-08</div>
+          <div style="height:4px;background:#E6EAF0;border-radius:999px;margin-top:7px"><i style="display:block;width:60%;height:100%;background:var(--action);border-radius:999px"></i></div>
+          <div style="margin-top:6px;color:var(--action);font-size:13px;font-weight:500;display:flex;align-items:center;gap:4px">下一步：参加正式考试<svg class="chev" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#087BE8" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        </div>
+      </div>
+    </div>
+    <div class="tb">
+      <div class="ti on"><i></i>待办</div><div class="ti"><i></i>记录</div>
+      <div class="ti round"><i></i>闯关</div><div class="ti wide"><i></i>消息</div><div class="ti round"><i></i>我的</div>
+    </div>
+  </div>
+  <p class="note">下发后出现在底部"待办"。<b>routine 任务不会出现三级教育优先横幅</b>，也不会被计入三级安全教育。</p>
+</figure>
+
+<figure>
+  <figcaption><em>2</em>任务详情页<span>pages/task</span></figcaption>
+  <div class="ph">
+    <div class="sb"><span>9:41</span><span style="display:flex;align-items:center;gap:5px"><i class="sig"></i><i class="bat"></i></span></div>
+    <div class="nb"><span class="back">‹</span>任务详情<span class="cap"><span class="dots"><i></i><i></i><i></i></span><i class="div"></i><i class="ring"></i></span></div>
+    <div class="bd">
+      <div class="card">
+        <div style="display:flex;align-items:flex-start;gap:10px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:18px;font-weight:500;line-height:1.3">消防专题培训试点</div>
+            <div class="mt" style="margin-top:5px">日常/年度培训</div>
+          </div><span class="pill">待学习</span>
+        </div>
+        <div style="display:grid;gap:7px;margin-top:13px">
+          <div class="fct"><span>适用范围</span><span>工程物探事业部</span></div>
+          <div class="fct"><span>截止时间</span><span>2026-10-15 09:00</span></div>
+          <div class="fct"><span>整体进度</span><span>0/1 项已学</span></div>
+        </div>
+        <div class="pg" style="margin-top:12px"><i style="width:0"></i></div>
+        <div style="margin-top:14px;padding-top:13px;border-top:1px solid var(--line)">
+          <div class="mt">当前下一步</div>
+          <div style="margin-top:5px;font-size:14px">学习《消防专题培训》并确认至末尾</div>
+          <div class="btn btn-p" style="margin-top:12px">开始学习</div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+          <span class="hd">任务阶段</span><span class="mt" style="font-size:12px">依次完成学习、考试、签字和完成确认</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px;font-size:14px"><span class="mk" style="background:var(--action);color:#fff">1</span><span style="flex:1">学习</span><span style="color:var(--action);font-size:12.5px;font-weight:500">进行中</span></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:11px;font-size:14px"><span class="mk">2</span><span style="flex:1">考试</span><span class="mt" style="font-size:12.5px">无需考试</span></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:11px;font-size:14px"><span class="mk">3</span><span style="flex:1">签字</span><span class="mt" style="font-size:12.5px">未开始</span></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:11px;font-size:14px"><span class="mk">4</span><span style="flex:1">完成</span><span class="mt" style="font-size:12.5px">未完成</span></div>
+      </div>
+      <div class="card" style="margin-bottom:0">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+          <span class="hd">必学课件</span><span class="mt" style="font-size:12px">已完成 0/1 项</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:12px">
+          <div style="width:28px;height:28px;flex:0 0 28px;border-radius:9px;background:var(--action-soft);color:var(--action);font-size:12px;font-weight:500;display:flex;align-items:center;justify-content:center">01</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14.5px;font-weight:500;line-height:1.35">消防专题培训</div>
+            <div class="mt" style="font-size:12px;margin-top:2px">v1 · HTML</div>
+          </div>
+          <div style="flex:0 0 auto;text-align:right">
+            <div style="color:var(--warning);font-size:12.5px">未完成</div>
+            <div style="color:var(--action);font-size:13px;font-weight:500;margin-top:3px;display:flex;align-items:center;gap:3px;justify-content:flex-end">去学习<svg class="chev" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="#087BE8" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="note">文档 11.2 已记录的缺陷：结构化课件的列表标签会显示成 <b>v1 · HTML</b>，不影响点开后的结构化渲染，但别拿这个标签验收。</p>
+</figure>
+
+<figure>
+  <figcaption><em>3</em>知识卡图文页<span>block: knowledge</span></figcaption>
+  <div class="ph">
+    <div class="sb"><span>9:41</span><span style="display:flex;align-items:center;gap:5px"><i class="sig"></i><i class="bat"></i></span></div>
+    <div class="nb"><span class="back">‹</span>课件学习<span class="cap"><span class="dots"><i></i><i></i><i></i></span><i class="div"></i><i class="ring"></i></span></div>
+    <div class="bd">
+      <div style="padding:4px 0 12px">
+        <div style="font-size:19px;font-weight:500;line-height:1.3;letter-spacing:-.3px">消防专题培训</div>
+        <div class="mt" style="margin-top:8px">互动图文课件 · 预计 8 分钟</div>
+      </div>
+      <div class="dock">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span style="font-size:14px;font-weight:500">学习进度</span>
+          <span style="color:var(--action);font-size:13.5px;font-weight:500">第 1 / 9 项 · 11%</span>
+        </div>
+        <div class="mt" style="font-size:12.5px;margin-top:3px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">单元 1 火灾初期判断与处置</div>
+        <div class="pg" style="margin-top:7px"><i style="width:11%"></i></div>
+      </div>
+      <div style="padding:5px 2px 11px">
+        <div class="kicker">单元 1</div>
+        <div style="font-size:19px;font-weight:500;line-height:1.25;margin-top:4px">火灾初期判断与处置</div>
+        <div class="mt" style="margin-top:4px">预计 3 分钟</div>
+      </div>
+      <div class="blk">
+        <div class="kicker">知识要点</div>
+        <div class="blk-t">初期火灾的三个判断点</div>
+        <div class="blk-b">起火后最初几分钟是判断与处置的关键窗口。先看火焰高度与蔓延速度，再闻气味、听声响，判断燃烧物性质；能站在安全位置观察、且确有把握控制时，才考虑使用就近的灭火器处置。</div>
+        <div class="shot">
+          <svg viewBox="0 0 1600 900" width="330" height="186" role="img" aria-label="手提式灭火器配图">
+            <defs><clipPath id="fbcPhone"><path d="M662 356 C660 382 637 393 621 407 C606 421 600 434 600 456 L600 880 Q700 940 800 880 L800 456 C800 434 794 421 779 407 C763 393 740 382 738 356 Z"/></clipPath></defs>
+            <rect width="1600" height="900" fill="#F1F6FC"/>
+            <circle cx="1250" cy="250" r="220" fill="#E7F0FA"/>
+            <circle cx="330" cy="620" r="150" fill="#E7F0FA"/>
+            <rect x="180" y="700" width="1240" height="54" rx="27" fill="#DCE8F6"/>
+            <g transform="translate(84.65,-154) scale(0.95)">
+              <path d="M586 883 Q700 937 814 883 L814 903 Q700 957 586 903 Z" fill="#0560BC"/>
+              <path d="M662 356 C660 382 637 393 621 407 C606 421 600 434 600 456 L600 880 Q700 940 800 880 L800 456 C800 434 794 421 779 407 C763 393 740 382 738 356 Z" fill="#087BE8"/>
+              <g clip-path="url(#fbcPhone)"><rect x="768" y="340" width="34" height="560" fill="#0560BC"/></g>
+              <rect x="622" y="600" width="144" height="120" rx="10" fill="#D3E6FB"/>
+              <path d="M662 322 L738 322 L738 356 Q700 377 662 356 Z" fill="#0560BC"/>
+              <ellipse cx="700" cy="322" rx="38" ry="11" fill="#087BE8"/>
+              <rect x="656" y="294" width="12" height="32" rx="4" fill="#0560BC"/>
+              <rect x="732" y="294" width="12" height="32" rx="4" fill="#0560BC"/>
+              <path d="M664 298 C664 238 736 238 736 298" fill="none" stroke="#0560BC" stroke-width="18" stroke-linecap="round"/>
+              <path d="M740 316 L796 302" fill="none" stroke="#0560BC" stroke-width="13" stroke-linecap="round"/>
+              <path d="M746 350 C824 342 890 392 898 468 L900 556" fill="none" stroke="#0560BC" stroke-width="14" stroke-linecap="round"/>
+              <path d="M880 552 L920 552 L912 616 L888 616 Z" fill="#0560BC"/>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="nav"><div class="nav-dis">上一项</div><div style="color:#fff;background:var(--action)">继续下一项</div></div>
+  </div>
+  <p class="note">一个 knowledge 块 = 一段纯文本 + 最多一张图，图片按宽度等比完整显示、不裁切。正文建议 80–220 字，长了就拆成多张知识卡。</p>
+</figure>
+
+<figure>
+  <figcaption><em>4</em>随堂题页<span>block: checkpoint</span></figcaption>
+  <div class="ph">
+    <div class="sb"><span>9:41</span><span style="display:flex;align-items:center;gap:5px"><i class="sig"></i><i class="bat"></i></span></div>
+    <div class="nb"><span class="back">‹</span>课件学习<span class="cap"><span class="dots"><i></i><i></i><i></i></span><i class="div"></i><i class="ring"></i></span></div>
+    <div class="bd">
+      <div style="padding:4px 0 10px">
+        <div style="font-size:19px;font-weight:500;line-height:1.3;letter-spacing:-.3px">消防专题培训</div>
+        <div class="mt" style="margin-top:6px">互动图文课件 · 预计 8 分钟</div>
+      </div>
+      <div class="dock">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span style="font-size:14px;font-weight:500">学习进度</span>
+          <span style="color:var(--action);font-size:13.5px;font-weight:500">第 5 / 9 项 · 56%</span>
+        </div>
+        <div class="mt" style="font-size:12.5px;margin-top:3px">单元 2 用电与电气火灾</div>
+        <div class="pg" style="margin-top:7px"><i style="width:56%"></i></div>
+      </div>
+      <div class="blk">
+        <div class="kicker">随堂练习 · 单选</div>
+        <div style="font-size:15.5px;font-weight:500;line-height:1.45;margin-top:6px">发现办公区插座冒烟并有焦糊味，下列做法最先应该做的是？</div>
+        <div class="opt"><span class="omk">选择</span><span style="flex:1;min-width:0">立即用清水泼灭刚出现的火星</span></div>
+        <div class="opt opt-on"><span class="omk">已选择</span><span style="flex:1;min-width:0">先断开回路电源，再判断</span></div>
+        <div class="opt"><span class="omk">选择</span><span style="flex:1;min-width:0">先拍照发给同事确认后处理</span></div>
+        <div class="btn btn-s" style="margin-top:12px">查看答案与解释</div>
+        <div class="fb">
+          <div class="fb-t">回答正确</div>
+          <div class="fb-c">电气起火应先切断对应回路电源再处置，避免带电灭火带来触电与复燃风险。</div>
+          <div class="fb-n">本题只用于帮助理解，不计入正式考试成绩。</div>
+        </div>
+      </div>
+    </div>
+    <div class="nav"><div class="btn-s" style="flex:1">上一项</div><div style="color:#fff;background:var(--action)">继续下一项</div></div>
+  </div>
+  <p class="note">反馈文案固定为"回答正确 / 回答不正确"，不可自定义；答对答错显示同一段解析；提交任意答案即可继续，不计正式考试成绩。</p>
+</figure>
+
+<figure>
+  <figcaption><em>5</em>情境选择页<span>block: scenario</span></figcaption>
+  <div class="ph">
+    <div class="sb"><span>9:41</span><span style="display:flex;align-items:center;gap:5px"><i class="sig"></i><i class="bat"></i></span></div>
+    <div class="nb"><span class="back">‹</span>课件学习<span class="cap"><span class="dots"><i></i><i></i><i></i></span><i class="div"></i><i class="ring"></i></span></div>
+    <div class="bd">
+      <div style="padding:4px 0 10px">
+        <div style="font-size:19px;font-weight:500;line-height:1.3;letter-spacing:-.3px">消防专题培训</div>
+        <div class="mt" style="margin-top:6px">互动图文课件 · 预计 8 分钟</div>
+      </div>
+      <div class="dock">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span style="font-size:14px;font-weight:500">学习进度</span>
+          <span style="color:var(--action);font-size:13.5px;font-weight:500">第 8 / 9 项 · 89%</span>
+        </div>
+        <div class="mt" style="font-size:12.5px;margin-top:3px">单元 3 报警与疏散</div>
+        <div class="pg" style="margin-top:7px"><i style="width:89%"></i></div>
+      </div>
+      <div class="blk">
+        <div class="kicker">情境选择</div>
+        <div style="font-size:15.5px;font-weight:500;line-height:1.45;margin-top:6px">夜间值班时发现库房通道有明火，火势约半米高、尚未见浓烟蔓延。你最先做什么？</div>
+        <div class="opt opt-on"><span class="omk">已选择</span><span style="flex:1;min-width:0">先取就近灭火器尝试扑灭</span></div>
+        <div class="opt"><span class="omk">选择</span><span style="flex:1;min-width:0">先逐间叫醒人员再回来处理</span></div>
+        <div class="opt"><span class="omk">选择</span><span style="flex:1;min-width:0">先报告负责人等待进一步指示</span></div>
+        <div class="fb">
+          <div class="fb-t">选择后的影响</div>
+          <div class="fb-c">此时火势尚小、通道可退，用灭火器有较高把握控制；但必须先确认身后有可撤退路线。</div>
+          <div class="fb-t" style="margin-top:11px">判断依据</div>
+          <div class="fb-c">初期火灾可控且退路明确时优先就近扑救，同时任何阶段都不放弃撤离准备。</div>
+        </div>
+      </div>
+    </div>
+    <div class="nav"><div class="btn-s" style="flex:1">上一项</div><div style="color:#fff;background:var(--action)">继续下一项</div></div>
+  </div>
+  <p class="note">情境选择<b>没有正确答案字段</b>，系统不判对错；每个选项都必须写清 consequence（影响）与 basis（依据），否则块不完整。</p>
+</figure>
+
+</main>
+
+<div class="band"><h2>二、可复用配图示意（不是界面的一部分）</h2><i></i></div>
+
+<div class="samples">
+  <figure>
+    <figcaption>FIRE-IMG-001 · 开篇主视觉</figcaption>
+    <div class="shot-lg">
+      <svg viewBox="0 0 1600 900" role="img" aria-label="手提式灭火器配图">
+        <defs><clipPath id="fbcSample"><path d="M662 356 C660 382 637 393 621 407 C606 421 600 434 600 456 L600 880 Q700 940 800 880 L800 456 C800 434 794 421 779 407 C763 393 740 382 738 356 Z"/></clipPath></defs>
+        <rect width="1600" height="900" fill="#F1F6FC"/>
+        <circle cx="1250" cy="250" r="220" fill="#E7F0FA"/>
+        <circle cx="330" cy="620" r="150" fill="#E7F0FA"/>
+        <rect x="180" y="700" width="1240" height="54" rx="27" fill="#DCE8F6"/>
+        <g transform="translate(84.65,-154) scale(0.95)">
+          <path d="M586 883 Q700 937 814 883 L814 903 Q700 957 586 903 Z" fill="#0560BC"/>
+          <path d="M662 356 C660 382 637 393 621 407 C606 421 600 434 600 456 L600 880 Q700 940 800 880 L800 456 C800 434 794 421 779 407 C763 393 740 382 738 356 Z" fill="#087BE8"/>
+          <g clip-path="url(#fbcSample)"><rect x="768" y="340" width="34" height="560" fill="#0560BC"/></g>
+          <rect x="622" y="600" width="144" height="120" rx="10" fill="#D3E6FB"/>
+          <path d="M662 322 L738 322 L738 356 Q700 377 662 356 Z" fill="#0560BC"/>
+          <ellipse cx="700" cy="322" rx="38" ry="11" fill="#087BE8"/>
+          <rect x="656" y="294" width="12" height="32" rx="4" fill="#0560BC"/>
+          <rect x="732" y="294" width="12" height="32" rx="4" fill="#0560BC"/>
+          <path d="M664 298 C664 238 736 238 736 298" fill="none" stroke="#0560BC" stroke-width="18" stroke-linecap="round"/>
+          <path d="M740 316 L796 302" fill="none" stroke="#0560BC" stroke-width="13" stroke-linecap="round"/>
+          <path d="M746 350 C824 342 890 392 898 468 L900 556" fill="none" stroke="#0560BC" stroke-width="14" stroke-linecap="round"/>
+          <path d="M880 552 L920 552 L912 616 L888 616 Z" fill="#0560BC"/>
+        </g>
+      </svg>
+    </div>
+    <p class="note">绑定到第一个 knowledge 块（FIRE-B001）。无文字、无人物、无刻度数字、无渐变、无高光。四边留白实测 L11.2% R11.3% T8.6% B16.2%，主体占高 75.1%。</p>
+  </figure>
+  <figure>
+    <figcaption>FIRE-IMG-002 · 门前堆放物品遮挡出口</figcaption>
+    <div class="shot-lg">
+      <svg viewBox="0 0 1600 900" role="img" aria-label="门前堆放纸箱的配图">
+        <rect width="1600" height="900" fill="#F1F6FC"/>
+        <rect x="200" y="690" width="1200" height="54" rx="27" fill="#DCE8F6"/>
+        <rect x="650" y="140" width="300" height="550" rx="16" fill="#C7D9EC"/>
+        <rect x="672" y="162" width="256" height="506" rx="10" fill="#EAF2FB"/>
+        <rect x="656" y="250" width="20" height="46" rx="6" fill="#B9CFE6"/>
+        <rect x="656" y="566" width="20" height="46" rx="6" fill="#B9CFE6"/>
+        <rect x="898" y="420" width="16" height="52" rx="8" fill="#A9BED6"/>
+        <rect x="560" y="560" width="200" height="130" rx="10" fill="#DCC8AC"/>
+        <rect x="650" y="440" width="200" height="124" rx="10" fill="#E2D0B6"/>
+        <g transform="rotate(-6 820 633)"><rect x="730" y="576" width="180" height="114" rx="10" fill="#CFB896"/></g>
+        <g transform="rotate(5 905 522)"><rect x="830" y="470" width="150" height="104" rx="10" fill="#D6C1A3"/></g>
+        <g transform="rotate(-3 705 672)"><rect x="600" y="640" width="210" height="64" rx="10" fill="#D2BC9E"/></g>
+      </svg>
+    </div>
+    <p class="note">用于"疏散通道与出口不得堆放物品"。画面本身<b>不画任何对错标识</b>（不画绿勾、红圈、叉号、警示三角），判断由课件正文承担。四边留白实测 L12.5% R12.6% T15.6% B17.3%，主体占高 67.0%。</p>
+  </figure>
+</div>
+
+<div class="band"><h2>三、素材核对表（草稿，审核状态留空）</h2><i></i></div>
+
+<div class="plate">
+  <table>
+    <thead>
+      <tr><th style="width:14%">素材编号</th><th style="width:13%">所属课程 / 绑定块</th><th>用途与画面内容</th><th style="width:23%">建议文件名</th><th style="width:7%">比例</th><th style="width:10%">推荐像素</th><th style="width:15%">需人工复核</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="mono">FIRE-IMG-001</td><td>消防 / FIRE-B001</td>
+        <td>开篇主视觉：手提式灭火器（提把、压把、软管与喷嘴）。无文字、无人物、无刻度数字</td>
+        <td class="mono">assets/fire/FIRE-IMG-001-opening.webp</td><td>16:9</td><td>1600×900</td><td>灭火器外观与部件形态是否符合本单位实际配置</td>
+      </tr>
+      <tr>
+        <td class="mono">FIRE-IMG-002</td><td>消防 / FIRE-B00x</td>
+        <td>门前堆放纸箱遮挡出口；低饱和浅棕纸箱、叠压斜放，不画任何对错标识</td>
+        <td class="mono">assets/fire/FIRE-IMG-002-exit-blocked.webp</td><td>16:9</td><td>1600×900</td><td>该画面须与正文表述配套；门与出口形式是否符合现场实际</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">落地时按文档 7.3 转 WebP（矢量直出的扁平插画用无损档更划算），并只把被 <code>assets</code> 引用的文件放进导入包。SVG 源文件与 PNG 放在同目录，便于改色改位。</p>
+</div>
+
+<div class="band"><h2>四、内容制作方需要记住的 6 条</h2><i></i></div>
+
+<div class="plate legend">
+  <ul>
+    <li><b>一个块一屏。</b>小程序一次只显示一个内容块，没有"长页面"，所以正文要短、图要少而准。</li>
+    <li><b>只有 knowledge 能配图</b>，且最多一张；do_dont / steps / checkpoint / scenario / summary 没有图片字段。这也是上面 5 张里只有第 3 张能出现插图的原因。</li>
+    <li><b>没有封面、没有图片说明、没有提示框</b>字段。开篇主视觉就是第一个 knowledge 块的配图。</li>
+    <li><b>固定文案不可改：</b>"继续下一项"／"本人确认已阅读至末尾"／"回答正确"／"回答不正确"。</li>
+    <li><b>完成链路：</b>逐项确认 → 末项确认 → 完成本次学习 → 本人签字（不可关闭）→ 记录显示"日常/年度"。</li>
+    <li><b>规模建议：</b>3–4 单元、8–14 块、2–4 个互动块、8–15 分钟。</li>
+  </ul>
+  <p class="note" style="margin-top:14px">说明：示意图中蓝色主任务卡在实际小程序里为蓝色渐变，此处按浅色风格平色呈现；字号与间距按 360/750 等比还原。配图为示意稿，不是终稿。</p>
+</div>
+
+</div>
+</body>
+</html>

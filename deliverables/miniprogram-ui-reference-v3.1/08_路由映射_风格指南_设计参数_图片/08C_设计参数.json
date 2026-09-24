@@ -1,0 +1,90 @@
+{
+  "version": "3.1",
+  "theme": "light-only",
+  "viewport": {
+    "referenceWidth": 390,
+    "referenceHeight": 844,
+    "unit": "px/rpx adaptive"
+  },
+  "colors": {
+    "primary": "#245D47",
+    "primaryStrong": "#174533",
+    "primarySoft": "#EEF5F1",
+    "background": "#F6F8F7",
+    "surface": "#FFFFFF",
+    "text": "#102A24",
+    "textSecondary": "#526760",
+    "border": "#DDE7E2",
+    "info": "#2F6FED",
+    "success": "#25845F",
+    "warning": "#B07D2B",
+    "danger": "#C83D3D",
+    "points": "#B07D2B"
+  },
+  "typography": {
+    "fontFamily": "system-ui, PingFang SC, Microsoft YaHei, sans-serif",
+    "pageTitle": {
+      "size": 24,
+      "lineHeight": 32,
+      "weight": 700
+    },
+    "sectionTitle": {
+      "size": 20,
+      "lineHeight": 28,
+      "weight": 700
+    },
+    "body": {
+      "size": 16,
+      "lineHeight": 24,
+      "weight": 400
+    },
+    "secondary": {
+      "size": 14,
+      "lineHeight": 21,
+      "weight": 400
+    },
+    "caption": {
+      "size": 12,
+      "lineHeight": 18,
+      "weight": 500
+    }
+  },
+  "spacing": {
+    "base": 8,
+    "pageX": 16,
+    "sectionY": 24,
+    "cardPadding": 16,
+    "compactGap": 8,
+    "normalGap": 12,
+    "largeGap": 20
+  },
+  "radius": {
+    "card": 16,
+    "control": 12,
+    "small": 8,
+    "pill": 999
+  },
+  "control": {
+    "minTouch": 44,
+    "buttonHeight": 48,
+    "inputHeight": 48,
+    "optionMinHeight": 52,
+    "tabBarHeight": 56
+  },
+  "elevation": {
+    "card": "0 8px 24px rgba(25, 66, 52, 0.08)",
+    "floating": "0 12px 32px rgba(25, 66, 52, 0.14)"
+  },
+  "animation": {
+    "fast": 160,
+    "normal": 240,
+    "easing": "cubic-bezier(0.16, 1, 0.3, 1)",
+    "reduceMotion": true
+  },
+  "rules": {
+    "darkTheme": false,
+    "onePrimaryActionPerView": true,
+    "noAdmissionConclusion": true,
+    "noEmojiIcons": true
+  }
+}

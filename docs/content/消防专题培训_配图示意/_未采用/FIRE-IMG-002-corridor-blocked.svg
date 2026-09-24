@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img">
+<title>疏散通道与出口前堆物的配图示意</title>
+<desc>浅蓝正视图：通道尽端有一扇关闭的浅色门，通道中央与门前散乱堆放着几个纸箱，箱体相互叠压斜放，未靠墙整齐码放。画面无文字、无人物、无任何对错标识。</desc>
+<rect width="1600" height="900" fill="#F1F6FC"/>
+<rect x="200" y="120" width="1200" height="44" rx="22" fill="#D6E4F4"/>
+<rect x="200" y="164" width="88" height="516" fill="#DDE9F7"/>
+<rect x="1312" y="164" width="88" height="516" fill="#DDE9F7"/>
+<rect x="200" y="680" width="1200" height="54" rx="27" fill="#DCE8F6"/>
+<rect x="664" y="330" width="272" height="350" rx="14" fill="#C7D9EC"/>
+<rect x="678" y="344" width="244" height="336" rx="8" fill="#EAF2FB"/>
+<rect x="890" y="496" width="14" height="36" rx="7" fill="#A9BED6"/>
+<rect x="470" y="560" width="170" height="120" rx="10" fill="#DCC8AC"/>
+<g transform="rotate(-6 687 626)"><rect x="612" y="572" width="150" height="108" rx="10" fill="#CFB896"/></g>
+<g transform="rotate(-3 615 666)"><rect x="520" y="628" width="190" height="76" rx="10" fill="#D2BC9E"/></g>
+<rect x="700" y="470" width="176" height="126" rx="10" fill="#E2D0B6"/>
+<g transform="rotate(5 908 536)"><rect x="838" y="486" width="140" height="100" rx="10" fill="#D6C1A3"/></g>
+</svg>

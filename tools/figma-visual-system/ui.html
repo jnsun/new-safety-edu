@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --brand-ink: #04302A; --brand: #12A17D; --brand-text: #0A7A5F; --brand-soft: #E4F4EF;
+    --accent: #C9F16B; --ink: #0F1A16; --muted: #61736B; --line: #E1E8E4;
+    --canvas: #F3F6F3; --surface: #FFFFFF;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--canvas); color: var(--ink);
+    font: 12px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  h1 { margin: 0 0 2px; font-size: 15px; font-weight: 600; letter-spacing: -.2px; }
+  .sub { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+  .group { margin-bottom: 12px; }
+  .group-label { margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .6px; }
+  button {
+    display: block; width: 100%; margin-bottom: 6px; padding: 10px 14px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+    color: var(--ink); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer;
+    transition: background .12s ease, border-color .12s ease;
+  }
+  button:hover { border-color: var(--brand); background: var(--brand-soft); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--brand-ink); font-size: 13px; padding: 12px 14px; }
+  button.primary:hover { background: #B4E247; border-color: #B4E247; }
+  button.ghost { background: transparent; color: var(--brand-text); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 6px; }
+  .row button { margin-bottom: 6px; }
+  #log {
+    height: 132px; margin-top: 10px; padding: 10px; overflow-y: auto;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+    font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; color: #33443D;
+  }
+  #log .ok { color: var(--brand-text); font-weight: 600; }
+  #log .err { color: #B8321F; font-weight: 600; }
+  .hint { margin-top: 10px; padding: 10px; border-radius: 8px; background: var(--brand-soft); color: var(--brand-text); font-size: 10.5px; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <h1>安全培训平台 · 视觉规范</h1>
+  <p class="sub">把整套视觉规范画到当前 Figma 页面。重跑会自动清理上一轮产物，可以反复调。</p>
+
+  <div class="group">
+    <div class="group-label">推荐</div>
+    <button class="primary" data-scope="all">① 绘制全套（24 个画板）</button>
+  </div>
+
+  <div class="group">
+    <div class="group-label">分区重绘</div>
+    <button data-scope="base">规范基础 + 品牌（色彩 / 字阶 / 形状 / 图表 / Logo）</button>
+    <button data-scope="components">组件库（按钮 / 卡片 / 任务行 / 表单）</button>
+    <button data-scope="miniprogram">小程序 8 个关键页</button>
+    <button data-scope="web">Web 后台 6 个关键页</button>
+  </div>
+
+  <div class="group">
+    <div class="group-label">维护</div>
+    <button class="ghost" id="clear">清空本插件的全部产物</button>
+  </div>
+
+  <div id="log">就绪。首次绘制约需 5–15 秒。</div>
+
+  <div class="hint">画布会被滚动到新产物位置。色彩 / 字阶画板在左侧，组件在其右，小程序与后台页面在下方区域。</div>
+
+<script>
+  const logEl = document.getElementById('log');
+  const buttons = Array.from(document.querySelectorAll('button[data-scope]'));
+
+  function log(text, cls) {
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function clearLog() { logEl.innerHTML = ''; }
+  function setBusy(busy) { buttons.forEach((b) => { b.disabled = busy; }); }
+
+  buttons.forEach((b) => {
+    b.addEventListener('click', () => {
+      clearLog();
+      setBusy(true);
+      log('开始绘制…');
+      parent.postMessage({ pluginMessage: { type: 'build', scope: b.dataset.scope } }, '*');
+    });
+  });
+
+  document.getElementById('clear').addEventListener('click', () => {
+    clearLog();
+    log('正在清理…');
+    parent.postMessage({ pluginMessage: { type: 'clear' } }, '*');
+  });
+
+  onmessage = (event) => {
+    const msg = event.data.pluginMessage;
+    if (!msg) return;
+    if (msg.type === 'log' || msg.type === 'progress') log(msg.text);
+    if (msg.type === 'done') { log(msg.text, 'ok'); setBusy(false); }
+    if (msg.type === 'error') { log(msg.text, 'err'); setBusy(false); }
+  };
+</script>
+</body>
+</html>

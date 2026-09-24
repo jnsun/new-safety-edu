@@ -1,0 +1,9 @@
+{
+  "name": "安全培训平台 · 视觉规范写入",
+  "id": "safety-edu-visual-system-writer",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": { "allowedDomains": ["none"] }
+}
