@@ -70,6 +70,14 @@ try {
   assert.equal((await fetch(`${baseUrl}/api/contracts/projects`)).status, 401, "合同列表必须要求登录");
   const safetyAccess = await body<{ canEnter: boolean }>(await request("/api/contracts/access", tokens.safety)); assert.equal(safetyAccess.data.canEnter, false);
   assert.equal((await request("/api/contracts/projects", tokens.safety)).status, 403, "安全管理员不得自动读取合同项目");
+  const existingEditorGrant = await prisma.contractAccessGrant.findFirstOrThrow({ where: { personId: editor.person.id, active: true, revokedAt: null } });
+  const duplicateAuditCountBefore = await prisma.auditLog.count({ where: { actorId: safetyAdmin.account.id, action: "contract.grant.create", objectType: "contract_access_grant", objectId: existingEditorGrant.id, result: "denied" } });
+  const duplicateGrant = await request("/api/contracts/grants", tokens.safety, { method: "POST", body: JSON.stringify({ personId: editor.person.id, role: "editor", canCreateProject: true, canEditProject: true, canManageContracts: true, canUploadAttachments: true, canChangeStage: true, reason: "BASELINE-TEST duplicate contract grant must be rejected" }) });
+  assert.equal(duplicateGrant.status, 409, "An already-authorized person cannot receive a second active contract grant");
+  assert.equal((await body<never>(duplicateGrant)).error?.code, "CONTRACT_GRANT_ALREADY_ACTIVE", "duplicate grant rejection must explain the conflict");
+  assert.equal(await prisma.contractAccessGrant.count({ where: { personId: editor.person.id, active: true, revokedAt: null } }), 1, "duplicate grant attempt must leave exactly one active grant");
+  assert.equal(await prisma.auditLog.count({ where: { actorId: safetyAdmin.account.id, action: "contract.grant.create", objectType: "contract_access_grant", objectId: existingEditorGrant.id, result: "denied" } }), duplicateAuditCountBefore + 1, "duplicate grant rejection must be audited");
+  const editorAccessAfterDuplicate = await body<{ canEnter: boolean }>(await request("/api/contracts/access", tokens.editor)); assert.equal(editorAccessAfterDuplicate.data.canEnter, true, "rejecting a duplicate grant must preserve the existing authorization");
   let response = await request("/api/contracts/projects", tokens.editor); assert.equal(response.status, 200); assert.deepEqual((await body<{ items: Array<{ id: string }>; total: number }>(response)).data.items, []);
   response = await request("/api/contracts/projects", tokens.reader); assert.equal(response.status, 200); assert.deepEqual((await body<{ items: Array<{ id: string }>; total: number }>(response)).data.items.map(({ id }) => id), [hiddenBid.id]);
   response = await request("/api/contracts/project-candidates", tokens.editor); assert.equal(response.status, 200); assert.equal((await body<Array<{ id: string }>>(response)).data.some(({ id }) => id === existingSafetyProject.id), true);

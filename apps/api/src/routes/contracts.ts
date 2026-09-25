@@ -313,7 +313,21 @@ export async function registerContractRoutes(app: FastifyInstance, deps: { authe
     const input = grantInput.parse(request.body); const { reason, ...grant } = input;
     const person = await prisma.person.findFirst({ where: { id: input.personId, status: "active", account: { status: "active" } }, select: { id: true, account: { select: { id: true } } } });
     if (!person?.account) throw httpError(409, "CONTRACT_GRANTEE_INVALID", "授权对象必须是已绑定的在职人员和有效账号");
-    const row = await prisma.contractAccessGrant.create({ data: { ...grant, accountId: person.account.id, grantedBy: principal.accountId, grantReason: reason } });
+    const duplicateGrant = await prisma.contractAccessGrant.findFirst({ where: { personId: person.id, active: true, revokedAt: null }, select: { id: true } });
+    if (duplicateGrant) {
+      await prisma.auditLog.create({ data: { actorId: principal.accountId, requestId: request.id, action: "contract.grant.create", objectType: "contract_access_grant", objectId: duplicateGrant.id, result: "denied", metadata: { personId: person.id, role: input.role, reason, code: "CONTRACT_GRANT_ALREADY_ACTIVE" } } });
+      throw httpError(409, "CONTRACT_GRANT_ALREADY_ACTIVE", "该人员已有有效的合同管理授权，请先撤销后重新授权");
+    }
+    let row;
+    try {
+      row = await prisma.contractAccessGrant.create({ data: { ...grant, accountId: person.account.id, grantedBy: principal.accountId, grantReason: reason } });
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
+      const concurrentGrant = await prisma.contractAccessGrant.findFirst({ where: { personId: person.id, active: true, revokedAt: null }, select: { id: true } });
+      if (!concurrentGrant) throw error;
+      await prisma.auditLog.create({ data: { actorId: principal.accountId, requestId: request.id, action: "contract.grant.create", objectType: "contract_access_grant", objectId: concurrentGrant.id, result: "denied", metadata: { personId: person.id, role: input.role, reason, code: "CONTRACT_GRANT_ALREADY_ACTIVE", concurrent: true } } });
+      throw httpError(409, "CONTRACT_GRANT_ALREADY_ACTIVE", "该人员已有有效的合同管理授权，请先撤销后重新授权");
+    }
     return reply.code(201).send({ data: row });
   });
 
