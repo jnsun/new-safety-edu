@@ -98,6 +98,10 @@
   .system-choice-card { padding: 20px; }
   .baseline-monthly-shell .monthly-report-page.is-baseline-mine { padding-inline: 24px; }
 }
+@media (max-width: 1600px) {
+  /* Keep the account controls visible in the baseline workspaces. */
+  :is(.baseline-monthly-shell, .baseline-finance-shell, .contract-shell) .topbar-actions > .ant-typography { display: none; }
+}
 @media (max-width: 900px) {
   .system-choice-grid { grid-template-columns: 1fr; }
   .system-choice-card { height: auto; min-height: 240px; }
