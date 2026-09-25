@@ -1,0 +1,36 @@
+/* F02 ledger baseline only; queries, server totals and permissions stay unchanged. */
+.receivables-shell.baseline-finance-shell .receivables-content { padding: 24px 32px 32px; }
+.receivables-shell.baseline-finance-shell .receivables-page-header { min-height: 70px; margin-bottom: 16px; }
+.receivables-shell.baseline-finance-shell .receivables-page-heading h2.ant-typography { font-size: 24px !important; line-height: 32px !important; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-filters { margin-bottom: 20px; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-filters .ant-card-body { padding: 12px 16px 8px !important; }
+.receivables-shell.baseline-finance-shell .receivables-filter-grid { grid-template-columns: minmax(210px, 1.4fr) repeat(3, minmax(135px, 1fr)) minmax(230px, auto); gap: 8px 12px; }
+.receivables-shell.baseline-finance-shell .receivables-filter-grid .ant-form-item { margin-bottom: 0; }
+.receivables-shell.baseline-finance-shell .receivables-filter-grid .ant-form-item-label > label { color: var(--baseline-secondary) !important; }
+.receivables-shell.baseline-finance-shell .receivables-filter-actions { align-self: end; justify-content: flex-end; flex-wrap: nowrap; gap: 6px; }
+.receivables-shell.baseline-finance-shell .receivables-filter-actions .ant-btn { height: 36px; padding-inline: 11px; font-size: 12px; }
+.receivables-shell.baseline-finance-shell .receivables-filter-summary { min-height: 30px; justify-content: flex-start; gap: 6px; padding-top: 8px; margin-top: 8px; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-surface { padding: 16px 18px 12px; background: #fff; border-radius: 10px; }
+.receivables-shell.baseline-finance-shell .receivables-table-toolbar { margin: 0 0 8px; padding: 0; }
+.receivables-shell.baseline-finance-shell .receivables-table-toolbar strong { font-size: 16px; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-totals { min-height: 58px; margin-bottom: 8px !important; padding: 5px 12px 15px !important; border: 0; border-radius: 8px; background: var(--baseline-canvas); }
+.receivables-shell.baseline-finance-shell .receivables-ledger-totals > div { padding-left: 12px; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-totals strong { font-size: 16px; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-totals small { bottom: 3px; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-table .ant-table-thead > tr > th { height: 40px; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-table .ant-table-tbody > tr > td { height: 44px; }
+.receivables-shell.baseline-finance-shell .receivables-ledger-table .ant-table-cell-align-right { font-variant-numeric: tabular-nums; }
+
+@media (max-width: 1366px) {
+  .receivables-shell.baseline-finance-shell .receivables-filter-grid { grid-template-columns: minmax(180px, 1.3fr) repeat(3, minmax(125px, 1fr)) minmax(220px, auto); gap: 8px; }
+}
+@media (max-width: 1100px) {
+  .receivables-shell.baseline-finance-shell .receivables-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .receivables-shell.baseline-finance-shell .receivables-filter-actions { justify-content: flex-start; }
+}
+@media (max-width: 600px) {
+  .receivables-shell.baseline-finance-shell .receivables-content { padding: 16px; }
+  .receivables-shell.baseline-finance-shell .receivables-filter-grid { grid-template-columns: 1fr; }
+  .receivables-shell.baseline-finance-shell .receivables-filter-actions { flex-wrap: wrap; }
+  .receivables-shell.baseline-finance-shell .receivables-ledger-surface { padding: 12px; }
+}

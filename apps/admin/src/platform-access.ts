@@ -2,7 +2,6 @@ export type PlatformConditionalModule = "receivables" | "incident";
 export type ReceivablesPortalMode = "enabled" | "recover" | "confirm" | "hidden";
 export type PlatformLanding =
   | { kind: "choose" }
-  | { kind: "redirect"; path: "/safety" | "/receivables" | "/receivables/departments" | "/contracts" | "/my-profile" }
   | { kind: "denied" };
 
 const safetyWebRoles = new Set(["company_admin", "org_leader", "org_admin", "field_reporter", "project_admin"]);
@@ -18,12 +17,7 @@ export function resolvePlatformLanding(input: {
   canViewSelf?: boolean;
 }): PlatformLanding {
   const canEnterReceivables = input.receivablesMode !== "hidden";
-  if ([input.canEnterSafety, canEnterReceivables, Boolean(input.canEnterContracts)].filter(Boolean).length > 1) return { kind: "choose" };
-  if (input.canEnterSafety) return { kind: "redirect", path: "/safety" };
-  if (input.receivablesMode === "confirm") return { kind: "redirect", path: "/receivables/departments" };
-  if (canEnterReceivables) return { kind: "redirect", path: "/receivables" };
-  if (input.canEnterContracts) return { kind: "redirect", path: "/contracts" };
-  if (input.canViewSelf) return { kind: "redirect", path: "/my-profile" };
+  if (input.canEnterSafety || canEnterReceivables || input.canEnterContracts || input.canViewSelf) return { kind: "choose" };
   return { kind: "denied" };
 }
 

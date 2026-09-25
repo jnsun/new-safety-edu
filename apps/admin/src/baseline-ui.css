@@ -1,0 +1,114 @@
+/* Five-page baseline only. Palette from Figma ZNyGaVfu208iwemCaHSwbu / 5:3;
+   S13 and F02 page details await their separate live frame links. */
+:is(.login-shell, .system-choice-shell, .baseline-monthly-shell, .baseline-finance-shell, .contract-shell) {
+  --baseline-primary: #0c6a5b;
+  --baseline-primary-hover: #09584c;
+  --baseline-soft: #e7f5f1;
+  --baseline-rail: #064b43;
+  --baseline-canvas: #f5f8f7;
+  --baseline-ink: #182b27;
+  --baseline-secondary: #60716d;
+  --baseline-border: #d8e3df;
+}
+
+/* Unified login. Preserve the existing QR, password and flip logic. */
+.login-shell { color: var(--baseline-ink); background: var(--baseline-canvas); }
+.login-brand-logo { width: 72px; height: 72px; object-fit: contain; border-radius: 12px; background: #fff; }
+.login-intro h1 { color: var(--baseline-ink); }
+.login-intro p, .login-footer { color: var(--baseline-secondary); }
+.login-card { border-color: var(--baseline-border); border-radius: 12px; box-shadow: 0 2px 10px rgba(6, 75, 67, .055); }
+.login-mode-tabs button { color: var(--baseline-secondary); }
+.login-mode-tabs button.active { color: var(--baseline-primary); }
+.login-mode-tabs button.active::after, .login-waiting-status span { background: var(--baseline-primary); }
+.login-waiting-status { color: var(--baseline-secondary); background: var(--baseline-canvas); }
+.login-card-shell { height: 590px; min-height: 590px; }
+.login-mode-panel { min-height: 0; }
+.login-face-password .login-password-panel .ant-form { flex: 0 0 auto; }
+.login-shell .ant-btn-primary { border-color: var(--baseline-primary); background: var(--baseline-primary); }
+.login-shell .ant-btn-primary:not(:disabled):hover { border-color: var(--baseline-primary-hover); background: var(--baseline-primary-hover); }
+
+/* Three equal system entries; disabled means no authority, not a hidden system. */
+.system-choice-shell { color: var(--baseline-ink); background: var(--baseline-canvas); }
+.system-choice-topbar { height: 76px; flex-basis: 76px; padding-inline: 48px; border-bottom-color: var(--baseline-border); }
+.system-choice-brand { display: flex; align-items: center; gap: 14px; }
+.system-choice-brand > img { width: 42px; height: 42px; flex: 0 0 42px; object-fit: contain; }
+.system-choice-brand > div { display: grid; gap: 3px; }
+.system-choice-brand strong { color: var(--baseline-ink); font-size: 18px; }
+.system-choice-brand span { color: var(--baseline-secondary); letter-spacing: 0; }
+.system-choice-main { padding: 64px 80px 44px; background: var(--baseline-canvas); }
+.system-choice-heading { width: min(1200px, 100%); text-align: left; }
+.system-choice-heading h1 { color: var(--baseline-ink); font-size: 32px; }
+.system-choice-heading p { color: var(--baseline-secondary); }
+.system-choice-grid { width: min(1200px, 100%); grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.system-choice-error { width: min(1200px, 100%); margin-top: 20px; }
+.system-choice-card { min-width: 0; height: 304px; padding: 28px; border-color: var(--baseline-border); border-radius: 12px; box-shadow: none; transition: border-color 160ms ease-out, transform 160ms ease-out; }
+.system-choice-card:not(.is-unavailable):hover { border-color: var(--baseline-primary); transform: translateY(-2px); }
+.system-choice-card.is-unavailable { background: #fbfcfb; }
+.system-choice-icon { width: 56px; height: 56px; color: var(--baseline-primary); border-radius: 10px; background: var(--baseline-soft); }
+.system-choice-role { color: var(--baseline-primary); background: var(--baseline-soft); }
+.system-choice-card.is-unavailable :is(.system-choice-icon, .system-choice-role) { color: var(--baseline-secondary); background: #eef2f0; }
+.system-choice-card h2 { margin-top: 18px; color: var(--baseline-ink); font-size: 20px; }
+.system-choice-card h2 + p, .system-choice-card ul { color: var(--baseline-secondary); }
+.system-choice-card ul { display: none; }
+.system-choice-card .ant-btn { border-color: var(--baseline-primary); color: var(--baseline-primary); }
+.system-choice-card .ant-btn:disabled { border-color: var(--baseline-border); color: var(--baseline-secondary); }
+.system-choice-user > div span { color: #267a42; }
+.system-choice-user i { background: #267a42; }
+.system-choice-note { width: min(1200px, 100%); color: var(--baseline-secondary); }
+.system-choice-footer { color: var(--baseline-primary); border-color: var(--baseline-border); }
+.system-choice-profile { align-self: flex-start; width: min(1200px, 100%); margin-top: 16px; padding: 0; text-align: left; }
+
+/* Scope shell changes to the three business baseline routes. */
+.baseline-monthly-shell > .ant-layout-sider, .baseline-finance-shell > .ant-layout-sider { background: var(--baseline-rail) !important; }
+.baseline-monthly-shell .brand, .baseline-finance-shell .brand { gap: 10px; }
+.company-brand-logo { width: 34px; height: 34px; flex: 0 0 34px; object-fit: contain; border-radius: 50%; background: #fff; }
+.baseline-monthly-shell .brand-copy :is(strong, small), .baseline-finance-shell .brand-copy :is(strong, small) { color: #fff; }
+.baseline-monthly-shell .ant-menu, .baseline-finance-shell .ant-menu { background: var(--baseline-rail); }
+.baseline-monthly-shell .ant-menu-item, .baseline-monthly-shell .ant-menu-submenu-title,
+.baseline-finance-shell .ant-menu-item, .baseline-finance-shell .ant-menu-submenu-title { color: #d0e4de; }
+.baseline-monthly-shell .ant-menu-item-selected, .baseline-finance-shell .ant-menu-item-selected { color: #fff !important; background: #0d7767 !important; }
+.baseline-monthly-shell .content, .baseline-finance-shell .content { background: var(--baseline-canvas); }
+.baseline-monthly-shell .topbar { height: 76px; border-bottom-color: var(--baseline-border); background: #fff; }
+.baseline-monthly-shell .monthly-report-page.is-baseline-mine .ant-card { border-color: var(--baseline-border); border-radius: 12px; }
+.baseline-monthly-shell .monthly-report-page.is-baseline-mine .ant-btn-primary,
+.baseline-finance-shell .ant-btn-primary { border-color: var(--baseline-primary); background: var(--baseline-primary); }
+.baseline-monthly-shell .monthly-report-page.is-baseline-mine .ant-btn-primary:not(:disabled):hover,
+.baseline-finance-shell .ant-btn-primary:not(:disabled):hover { border-color: var(--baseline-primary-hover); background: var(--baseline-primary-hover); }
+.baseline-finance-shell .topbar { height: 66px; background: #fff; }
+.baseline-finance-shell .receivables-ledger-filters { border: 1px solid var(--baseline-border); box-shadow: none; }
+.baseline-finance-shell .receivables-extra-filter { display: none; }
+.baseline-finance-shell .receivables-extra-filter.is-open { display: block; }
+.baseline-finance-shell .receivables-filter-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.baseline-finance-shell .receivables-filter-summary { display: flex; flex-wrap: wrap; gap: 6px; }
+.baseline-finance-shell .receivables-ledger-table .ant-table-thead > tr > th { height: 40px; padding: 7px 9px !important; color: var(--baseline-secondary); background: var(--baseline-soft); font-size: 12px; }
+.baseline-finance-shell .receivables-ledger-table .ant-table-tbody > tr > td { height: 44px; padding: 6px 9px !important; font-size: 12px; }
+.baseline-finance-shell .receivables-ledger-table .ant-table-cell-align-right,
+.baseline-finance-shell .receivables-ledger-totals strong { font-variant-numeric: tabular-nums; }
+.contract-shell .contract-ledger-page { max-width: 1440px; }
+.contract-shell .contract-ledger-page .contract-page-header { min-height: 76px; }
+.contract-shell .contract-ledger-page .contract-page-header h1 { font-size: 28px; }
+.contract-shell .contract-ledger-page .contract-page-header p { margin-top: 6px; font-size: 14px; }
+.contract-shell .contract-ledger-page .contract-filter-panel { box-shadow: none; }
+.contract-shell .contract-ledger-page .contract-ledger-card .ant-table-thead > tr > th { height: 42px; padding: 8px 12px !important; }
+.contract-shell .contract-ledger-page .contract-ledger-card .ant-table-tbody > tr > td { height: 50px; padding: 8px 12px !important; }
+
+@media (max-width: 1366px) {
+  .system-choice-main { padding-inline: 32px; }
+  .system-choice-grid { gap: 16px; }
+  .system-choice-card { padding: 20px; }
+  .baseline-monthly-shell .monthly-report-page.is-baseline-mine { padding-inline: 24px; }
+}
+@media (max-width: 900px) {
+  .system-choice-grid { grid-template-columns: 1fr; }
+  .system-choice-card { height: auto; min-height: 240px; }
+  .system-choice-main { padding: 36px 20px; }
+}
+@media (max-width: 640px) {
+  .login-brand-logo { width: 56px; height: 56px; }
+  .login-card-shell { width: min(420px, 100%); justify-self: stretch; }
+  .system-choice-brand > img { width: 34px; height: 34px; flex-basis: 34px; }
+  .baseline-monthly-shell .monthly-report-page.is-baseline-mine { padding: 18px 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-flip-inner, .system-choice-card { transition: none; }
+}

@@ -1421,6 +1421,8 @@ export function MonthlyReportsPage() {
   const [history, setHistory] = useState<MonthlyReport[]>([]);
   const [historyReportId, setHistoryReportId] = useState<string>();
   const [keyword, setKeyword] = useState("");
+  const [projectSearchDraft, setProjectSearchDraft] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [manageTab, setManageTab] = useState<"batches" | "no_projects">("batches");
   const [manageOrg, setManageOrg] = useState<string>();
@@ -1790,7 +1792,10 @@ export function MonthlyReportsPage() {
   const selectedOrganizationName = (config.data?.organizations ?? []).find((row) => row.id === noFieldOrganizationId)?.name ?? "当前经营实体";
   const selectedDraftProject = projects.data?.find((row) => row.id === selectedDraftProjectId);
   const projectItems = preflight.data?.items ?? [];
-  const visibleProjectItems = projectItems.filter((row) => projectFilter === "all" || (projectFilter === "todo" && !row.report && !voidedByProject.has(row.id)) || (projectFilter === "draft" && ["draft", "withdrawn"].includes(row.report?.status ?? "")) || (projectFilter === "submitted" && row.report?.status === "submitted") || (projectFilter === "voided" && !row.report && voidedByProject.has(row.id)));
+  const visibleProjectItems = projectItems.filter((row) => {
+    const matchesStatus = projectFilter === "all" || (projectFilter === "todo" && !row.report && !voidedByProject.has(row.id)) || (projectFilter === "draft" && ["draft", "withdrawn"].includes(row.report?.status ?? "")) || (projectFilter === "submitted" && row.report?.status === "submitted") || (projectFilter === "voided" && !row.report && voidedByProject.has(row.id));
+    return matchesStatus && (!projectSearch || `${row.name} ${row.code}`.toLocaleLowerCase().includes(projectSearch.toLocaleLowerCase()));
+  });
   const availableOrganizations = (config.data?.organizations ?? []).filter((org) => capabilities.data?.organizationIds.includes(org.id));
   const hasSingleReportingOrganization = availableOrganizations.length === 1;
   const singleReportingOrganizationId = hasSingleReportingOrganization ? availableOrganizations[0]!.id : undefined;
@@ -1870,48 +1875,28 @@ export function MonthlyReportsPage() {
     <>
       <section className="monthly-filter-card">
         <div className="monthly-filter-fields">
-          <label>报送月份<Input type="month" value={month} onChange={(event) => { setMonth(event.target.value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} /></label>
-          {hasSingleReportingOrganization ? <label>报送经营实体<Input value={selectedOrganizationName} disabled /></label> : <label>经营实体<Select value={noFieldOrganizationId} onChange={(value) => { setNoFieldOrg(value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} placeholder="请选择经营实体" options={availableOrganizations.map((org) => ({ value: org.id, label: org.name }))} /></label>}
+          <label>月份<Input type="month" value={month} onChange={(event) => { setMonth(event.target.value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} /></label>
+          <label>项目名称<Input value={projectSearchDraft} placeholder="项目名称或编号" onChange={(event) => setProjectSearchDraft(event.target.value)} onPressEnter={() => setProjectSearch(projectSearchDraft.trim())} /></label>
+          <label>填报状态<Select value={projectFilter} onChange={setProjectFilter} options={[{ value: "all", label: "全部" }, { value: "todo", label: "待更新" }, { value: "draft", label: "草稿" }, { value: "submitted", label: "已提交" }, { value: "voided", label: "已作废" }]} /></label>
+          {!hasSingleReportingOrganization && <label>经营实体<Select value={noFieldOrganizationId} onChange={(value) => { setNoFieldOrg(value); setProjectFilter("all"); setBatchOpen(false); setBatchResult(undefined); }} placeholder="请选择经营实体" options={availableOrganizations.map((org) => ({ value: org.id, label: org.name }))} /></label>}
         </div>
-        <Space wrap>
-          <Button
-            type="primary"
-            disabled={!noFieldOrganizationId}
-            onClick={() => {
-              newProjectForm.resetFields();
-              newProjectForm.setFieldsValue({ contractAmount: 0 });
-              setNewProjectOpen(true);
-            }}
-          >
-            新增报送项目
-          </Button>
-          <Button onClick={chooseNoProject}>本月无野外项目</Button>
-          <Button type="primary" onClick={() => setBatchOpen(true)} disabled={!noFieldOrganizationId}>核对整批提交</Button>
-        </Space>
+        <div className="monthly-filter-actions"><Button type="primary" onClick={() => setProjectSearch(projectSearchDraft.trim())}>查询</Button><Button onClick={() => { setProjectSearchDraft(""); setProjectSearch(""); setProjectFilter("all"); }}>重置</Button></div>
+        {hasSingleReportingOrganization && <Typography.Text className="monthly-scope-note" type="secondary">报送主体：{selectedOrganizationName}</Typography.Text>}
       </section>
       {summary.data?.period?.deadlineAt && <Alert className="monthly-deadline-alert" showIcon type="info" message={`本月报送截止：${summary.data.period.deadlineAt.slice(0, 10)}`} description={`${noFieldOrganizationId && preflight.data ? `还需处理 ${Math.max(0, preflight.data.expectedCount - preflight.data.completedCount)} 个项目。` : "选择经营实体后显示待处理数量。"} 已提交的月报需按授权流程修订，不会直接覆盖历史。`} />}
       {ownDepartment?.returnReason && <Alert className="monthly-deadline-alert" type="warning" showIcon message="公司已退回，请修改后重新整批提交" description={ownDepartment.returnReason} />}
-      <Card className="monthly-list-card" title="本月项目清单" extra={<Typography.Text type="secondary">上月现场数据仅供本月核对</Typography.Text>}>
+      <Card className="monthly-list-card" title="业务列表" extra={<Typography.Text type="secondary">上月现场数据仅供本月核对</Typography.Text>}>
         {!noFieldOrganizationId && <Alert style={{ marginBottom: 16 }} type="info" message="请选择经营实体" description="选择后将从服务端核对该实体本月应报项目。" />}
         {noFieldOrganizationId && preflight.isLoading && <Typography.Text type="secondary">正在核对项目清单…</Typography.Text>}
         {preflight.isError && <Alert style={{ marginBottom: 16 }} type="error" showIcon message="项目清单核对失败" description={<Button onClick={() => void preflight.refetch()}>重试</Button>} />}
         {(projects.isError || workbenchReports.isError) && <Alert style={{ marginBottom: 16 }} type="error" showIcon message="草稿资料加载失败，暂不能编辑" description={<Button onClick={() => { void projects.refetch(); void workbenchReports.refetch(); }}>重新加载</Button>} />}
         {preflight.data?.expectedCount === 0 && <Alert type="info" style={{ marginBottom: 16 }} message="当前经营实体本月没有在建或暂停项目" description="如有新增野外项目，请先点击“新增报送项目”建立正式项目主档，再填写本月月报；确认确无项目时，才使用“本月无野外项目”。" />}
-        <Space wrap className="monthly-status-tabs">
-          {([
-            ["all", `全部 ${projectItems.length}`],
-            ["todo", `待更新 ${projectItems.filter((row) => !row.report && !voidedByProject.has(row.id)).length}`],
-            ["draft", `草稿 ${projectItems.filter((row) => ["draft", "withdrawn"].includes(row.report?.status ?? "")).length}`],
-            ["submitted", `已提交 ${projectItems.filter((row) => row.report?.status === "submitted").length}`],
-            ["voided", `已作废 ${projectItems.filter((row) => !row.report && voidedByProject.has(row.id)).length}`],
-          ] as const).map(([key, label]) => <Button key={key} size="small" type={projectFilter === key ? "primary" : "text"} onClick={() => setProjectFilter(key)}>{label}</Button>)}
-        </Space>
-        <Table className="monthly-project-table" rowKey="id" loading={preflight.isLoading || projects.isLoading || workbenchReports.isLoading || voidedReports.isLoading} dataSource={visibleProjectItems} pagination={{ pageSize: 10, showSizeChanger: true }} scroll={{ x: 900 }}
+        <Table className="monthly-project-table" rowKey="id" loading={preflight.isLoading || projects.isLoading || workbenchReports.isLoading || voidedReports.isLoading} dataSource={visibleProjectItems} pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 个项目` }} scroll={{ x: 900 }}
           columns={[
-            { title: "项目 / 月份", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => <><strong>{row.name}</strong><br /><Typography.Text type="secondary">{month} · {selectedOrganizationName}</Typography.Text></> },
-            { title: "报送状态", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => <Tag color={!row.report ? voidedByProject.has(row.id) ? "red" : "orange" : row.report.status === "submitted" ? "blue" : row.report.status === "withdrawn" ? "gold" : "green"}>{!row.report ? voidedByProject.has(row.id) ? "已作废" : "待填报" : row.report.status === "submitted" ? "已提交" : row.report.status === "withdrawn" ? "已撤回" : "草稿"}</Tag> },
-            { title: "时效", render: () => summary.data?.period?.deadlineAt ? summary.data.period.deadlineAt.slice(0, 10) : "未设置截止时间" },
-            { title: "最近记录", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => row.report ? `已保存 · ${row.report.updatedAt.slice(0, 16).replace("T", " ")}` : voidedByProject.get(row.id)?.voidedAt?.slice(0, 16).replace("T", " ") ?? "尚未填写" },
+            { title: "项目名称", width: 250, render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => <><strong>{row.name}</strong><br /><Typography.Text type="secondary">{row.code} · {month}</Typography.Text></> },
+            { title: "项目类型", width: 145, render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => projects.data?.find((item) => item.id === row.id)?.projectType || "—" },
+            { title: "本月状态", width: 120, render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => <Tag color={!row.report ? voidedByProject.has(row.id) ? "red" : "orange" : row.report.status === "submitted" ? "blue" : row.report.status === "withdrawn" ? "gold" : "green"}>{!row.report ? voidedByProject.has(row.id) ? "已作废" : "待填报" : row.report.status === "submitted" ? "已提交" : row.report.status === "withdrawn" ? "已撤回" : "草稿"}</Tag> },
+            { title: "更新时间", width: 180, render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => row.report?.updatedAt.slice(0, 16).replace("T", " ") ?? voidedByProject.get(row.id)?.voidedAt?.slice(0, 16).replace("T", " ") ?? "—" },
             { title: "操作", render: (_: unknown, row: NonNullable<typeof preflight.data>["items"][number]) => {
               const project = projects.data?.find((item) => item.id === row.id);
               const report = reportByProject.get(row.id);
@@ -1920,7 +1905,7 @@ export function MonthlyReportsPage() {
               return <Space><Button type="link" disabled={row.report?.status === "submitted" ? !report : !canEdit} onClick={() => row.report?.status === "submitted" ? setDetail(report) : openForm(report, project)}>{!row.report ? voidedByProject.has(row.id) ? "重新填报" : "填写月报" : row.report.status === "withdrawn" ? "查看并重新提交" : row.report.status === "submitted" ? "查看月报" : "编辑草稿"}</Button>{report && row.report?.status !== "submitted" && <Button type="link" onClick={() => setDetail(report)}>详情</Button>}{!report && voidedByProject.has(row.id) && <Button type="link" onClick={() => setDetail(voidedByProject.get(row.id))}>作废记录</Button>}</Space>;
             } },
           ]} />
-        <div className="monthly-list-footer"><Typography.Text type="secondary">提交后即完成本月报送，公司发现问题时可退回修改。</Typography.Text><Button type="primary" disabled={!noFieldOrganizationId} onClick={() => setBatchOpen(true)}>整批提交前核对</Button></div>
+        <div className="monthly-list-footer"><Typography.Text type="secondary">提交后即完成本月报送，公司发现问题时可退回修改。</Typography.Text><Button onClick={chooseNoProject}>本月无野外项目</Button></div>
         {!!preflight.data?.reasons.length && <Alert style={{ marginTop: 16 }} type="warning" showIcon message="暂不能整批提交" description={preflight.data.reasons.join("；")} />}
       </Card>
       <Card title="历史报送记录" className="monthly-history-card">
@@ -2160,9 +2145,10 @@ export function MonthlyReportsPage() {
   const allowedView = view === "config" ? !!capabilities.data?.canConfigure : view === "manage" ? !!capabilities.data?.canReview : view === "mine" ? !!capabilities.data?.canSubmit : view === "completed";
   const pageTitles: Record<string, string> = { mine: "经营实体月报", manage: "公司月报查看", completed: "完工项目台账", config: "月报配置" };
   return (
-    <div className="admin-workspace monthly-report-page">
+    <div className={`admin-workspace monthly-report-page${view === "mine" ? " is-baseline-mine" : ""}`}>
       <div className="monthly-page-heading">
         <div><Typography.Text type="secondary">野外项目月报 / {pageTitles[view] ?? "月报"}</Typography.Text><Typography.Title level={3}>{history.length ? "月报历史对比" : detail ? "项目月报详情" : batchResult ? "整批报送已完成" : open ? editing ? "修订项目草稿" : voidedByProject.has(selectedDraftProjectId ?? "") ? "作废后重新填报" : "更新项目草稿" : batchOpen ? "经营实体整批提交核对" : reviewOrganizationId ? "公司查看经营实体批次" : pageTitles[view] ?? "野外项目月报"}</Typography.Title><Typography.Text type="secondary">{batchOpen ? "逐项核对项目草稿；草稿未齐时由服务端阻止提交" : open ? "核实上月带入数据，只保存本月实际变化" : reviewOrganizationId ? "公司直接查看报送，发现问题时退回" : view === "mine" ? "更新项目草稿，核对后由经营实体整批提交" : view === "manage" ? "查看各经营实体报送情况，发现问题时退回修改" : view === "config" ? "管理月份规则、报送范围、项目类型与字段" : "查看已完工项目的历史报送"}</Typography.Text></div>
+        {view === "mine" && !open && !batchOpen && !reviewOrganizationId && !batchResult && !detail && !history.length && capabilities.data?.canSubmit && <Space wrap className="monthly-page-actions"><Button disabled={!noFieldOrganizationId} onClick={() => setBatchOpen(true)}>整批核对</Button><Button type="primary" disabled={!noFieldOrganizationId} onClick={() => { newProjectForm.resetFields(); newProjectForm.setFieldsValue({ contractAmount: 0 }); setNewProjectOpen(true); }}>新建报送项目</Button></Space>}
         {view !== "mine" && capabilities.data?.canSubmit && <Button onClick={() => setView("mine")}>返回经营实体月报</Button>}
       </div>
       {!open && !batchOpen && !reviewOrganizationId && !batchResult && !detail && !history.length && (capabilities.isLoading ? <Card loading /> : capabilities.isError ? <Alert type="error" message="权限信息加载失败" description={<Button onClick={() => void capabilities.refetch()}>重试</Button>} /> : !allowedView ? <Alert type="warning" showIcon message="无权访问此月报页面" /> : view === "mine" ? own : view === "manage" ? manage : view === "completed" ? completedView : configuration)}

@@ -7,6 +7,7 @@ import zhCN from "antd/locale/zh_CN";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
+import "./baseline-ui.css";
 
 const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
 const router = createBrowserRouter([{ path: "*", element: <App /> }]);

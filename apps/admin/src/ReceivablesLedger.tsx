@@ -15,6 +15,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   Upload,
 } from "antd";
@@ -25,7 +26,7 @@ import {
   UpOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import type {
   TableColumnType,
   TableColumnsType,
@@ -60,6 +61,7 @@ import {
   type ReceivablesSort,
 } from "./receivables-types";
 import { ReceivablesPageHeader } from "./ReceivablesUi";
+import "./receivables-baseline.css";
 
 const columnLabels: Record<ReceivablesColumnId, string> = {
   financeDepartmentName: "财务归属部门",
@@ -313,6 +315,7 @@ export function ReceivablesLedger({
 }) {
   const queryClient = useQueryClient();
   const location = useLocation();
+  const navigate = useNavigate();
   const [form] = Form.useForm();
   const [state, setState] = useState<ListState>(() => ({
     page: 1,
@@ -324,6 +327,10 @@ export function ReceivablesLedger({
     ...receivablesLedgerInitialFilters(location.search),
   }));
   const [search, setSearch] = useState("");
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(() => {
+    const initial = receivablesLedgerInitialFilters(location.search);
+    return Boolean(initial.creditorUnit || initial.anomaly || initial.status !== "active");
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [columnModalOpen, setColumnModalOpen] = useState(false);
   const [operation, setOperation] = useState<DetailOperation>();
@@ -807,12 +814,9 @@ export function ReceivablesLedger({
       formatReceivablesMoney(value, preference.moneyDecimals),
   });
   const textCell = (value: string | null, lines: 1 | 2 = 1) => (
-    <span
-      className={`receivables-cell-${lines === 1 ? "one" : "two"}-line`}
-      title={value ?? undefined}
-    >
-      {plain(value)}
-    </span>
+    <Tooltip title={value || undefined}>
+      <span className={`receivables-cell-${lines === 1 ? "one" : "two"}-line`}>{plain(value)}</span>
+    </Tooltip>
   );
   const definitions: Record<
     ReceivablesColumnId,
@@ -1400,19 +1404,13 @@ export function ReceivablesLedger({
   return (
     <div className="receivables-page">
       <ReceivablesPageHeader
-        title="合同台账"
+        title="合同应收台账"
         description="一行一合同；筛选、排序和分页均由服务端执行。"
-        meta="默认显示未结合同"
         actions={
-          <Button
-            icon={<SettingOutlined />}
-            onClick={() => {
-              setDraftPreference(preference);
-              setColumnModalOpen(true);
-            }}
-          >
-            列设置
-          </Button>
+          <Space>
+            <Button icon={<SettingOutlined />} onClick={() => { setDraftPreference(preference); setColumnModalOpen(true); }}>列设置</Button>
+            {access.canCreateLedger && <Button type="primary" disabled={reference.isError} onClick={() => navigate("/receivables/data?tab=create")}>新增台账</Button>}
+          </Space>
         }
       />
       {reference.isError && (
@@ -1467,7 +1465,7 @@ export function ReceivablesLedger({
               }
             />
           </Form.Item>
-          <Form.Item label="记录状态">
+          <Form.Item className={`receivables-extra-filter${moreFiltersOpen ? " is-open" : ""}`} label="记录状态">
             <Select
               value={state.status}
               options={[
@@ -1497,7 +1495,7 @@ export function ReceivablesLedger({
               }
             />
           </Form.Item>
-          <Form.Item label="单位">
+          <Form.Item className={`receivables-extra-filter${moreFiltersOpen ? " is-open" : ""}`} label="单位">
             <Select
               allowClear
               value={state.creditorUnit ?? null}
@@ -1530,7 +1528,7 @@ export function ReceivablesLedger({
               }
             />
           </Form.Item>
-          <Form.Item label="待核对">
+          <Form.Item className={`receivables-extra-filter${moreFiltersOpen ? " is-open" : ""}`} label="待核对">
             <Select
               allowClear
               value={state.anomaly ?? null}
@@ -1544,11 +1542,9 @@ export function ReceivablesLedger({
               }
             />
           </Form.Item>
+          <div className="receivables-filter-actions"><Button type="primary" onClick={() => setState((current) => ({ ...current, page: 1, search: search.trim() || undefined }))}>查询</Button><Button onClick={resetFilters}>重置</Button><Button aria-expanded={moreFiltersOpen} onClick={() => setMoreFiltersOpen((open) => !open)}>{moreFiltersOpen ? "收起筛选" : "更多筛选"}</Button></div>
         </Form>
-        <div className="receivables-filter-summary" aria-live="polite">
-          <div><Typography.Text type="secondary">已生效筛选</Typography.Text>{activeFilterLabels.length ? activeFilterLabels.map((label) => <Tag key={label} closable={false}>{label}</Tag>) : <Tag>默认：有效且未结</Tag>}</div>
-          <Button size="small" disabled={!activeFilterLabels.length} onClick={resetFilters}>恢复默认筛选</Button>
-        </div>
+        {!!activeFilterLabels.length && <div className="receivables-filter-summary" aria-live="polite"><Typography.Text type="secondary">已生效筛选</Typography.Text>{activeFilterLabels.map((label) => <Tag key={label}>{label}</Tag>)}</div>}
       </Card>
       {ledgers.isError && (
         <Alert
@@ -1560,6 +1556,7 @@ export function ReceivablesLedger({
           action={<Button onClick={() => void ledgers.refetch()}>重试</Button>}
         />
       )}
+      <section className="receivables-ledger-surface">
       <div className="receivables-table-toolbar">
         <div>
           <strong>{currentLedgers?.total ?? 0}</strong>
@@ -1611,6 +1608,7 @@ export function ReceivablesLedger({
           onChange={onTableChange}
         />
       </div>
+      </section>
       <Modal
         rootClassName="receivables-column-settings-modal"
         title={

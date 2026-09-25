@@ -445,9 +445,9 @@ function Login() {
   return (
     <div className="login-shell">
       <section className="login-intro">
-        <span className="login-brand-icon"><SafetyOutlined /></span>
+        <img className="login-brand-logo" src="/company-logo.png" alt="公司标识" />
         <h1>山西省地球物理化学勘查院有限公司</h1>
-        <p>安全生产统一管理平台</p>
+        <p>企业数字化管理平台</p>
       </section>
       <div className={`login-card-shell${loginMode === "password" ? " is-flipped" : ""}`}>
         <div className="login-flip-inner">
@@ -469,7 +469,7 @@ function Login() {
             <Card className="login-card">
               <LoginModeTabs face="password" onChange={setLoginMode} />
               <section className="login-mode-panel login-password-panel" role="tabpanel" aria-label="账号密码登录">
-                {wechatErrorCode && <Alert style={{ width: "min(300px, 100%)", marginBottom: 16 }} type="warning" showIcon message="微信登录未完成" description={({ no_web_access: "当前微信未获 Web 管理后台权限；普通员工请使用培训小程序。", invalid_state: "登录状态已失效，请重新尝试扫码。", exchange_failed: "微信授权未完成，请重新尝试。", account_unavailable: "关联账号不可用，请联系管理员。", not_configured: "微信网站应用尚未配置。" } as Record<string, string>)[wechatErrorCode] ?? "请联系管理员核对登录配置。"} />}
+                {wechatErrorCode && <Alert style={{ width: "min(300px, 100%)", marginBottom: 16 }} type="warning" showIcon message="微信登录未完成" description={({ no_web_access: "当前微信尚未关联可用的人员档案或业务权限，请联系管理员核对。", invalid_state: "登录状态已失效，请重新尝试扫码。", exchange_failed: "微信授权未完成，请重新尝试。", account_unavailable: "关联账号不可用，请联系管理员。", not_configured: "微信网站应用尚未配置。" } as Record<string, string>)[wechatErrorCode] ?? "请联系管理员核对登录配置。"} />}
                 <Form layout="vertical" onFinish={submit}>
                   <Form.Item label="用户名" name="username" rules={[{ required: true }]}>
                     <Input autoComplete="username" />
@@ -2778,13 +2778,15 @@ function PlatformGateway({ principal }: { principal: Principal }) {
   const currentAccess = usableReceivablesAccess(access);
   if (access.isFetching || contractAccess.isFetching) return <div className="center">正在核对系统权限…</div>;
   const receivablesMode = currentAccess ? receivablesPortalMode(currentAccess) : "hidden";
+  const canUseReceivables = !access.isError && receivablesMode !== "hidden";
+  const canUseContracts = !contractAccess.isError && Boolean(contractAccess.data?.canEnter);
   const landing = resolvePlatformLanding({
     canEnterSafety: canEnterSafetySystem(principal.roles),
-    receivablesMode,
-    canEnterContracts: !contractAccess.isError && Boolean(contractAccess.data?.canEnter),
+    receivablesMode: canUseReceivables ? receivablesMode : "hidden",
+    canEnterContracts: canUseContracts,
     canViewSelf: Boolean(principal.personId),
   });
-  if (landing.kind === "redirect") return <Navigate to={landing.path} replace />;
+  if (landing.kind === "denied" && (access.isError || contractAccess.isError)) return <div className="system-access-denied"><Alert type="error" showIcon message="系统权限暂时无法核对" description="尚不能判断可访问范围，请重试。" action={<Button onClick={() => { void access.refetch(); void contractAccess.refetch(); }}>重试</Button>} /></div>;
   if (landing.kind === "denied") {
     return (
       <div className="system-access-denied">
@@ -2806,40 +2808,43 @@ function PlatformGateway({ principal }: { principal: Principal }) {
   return (
     <div className="system-choice-shell">
       <header className="system-choice-topbar">
-        <div className="system-choice-brand"><strong>山西省地球物理化学勘查院有限公司</strong><span>统一业务平台</span></div>
+        <div className="system-choice-brand"><img src="/company-logo.png" alt="公司标识" /><div><strong>山西省地球物理化学勘查院有限公司</strong><span>企业数字化管理平台</span></div></div>
         <div className="system-choice-user">
           <div><strong>{principal.displayName} · {principal.primaryOrganization?.name ?? "未设置部门"}</strong><span><i />已登录</span></div>
           <button type="button" onClick={() => navigate("/logout")}><LogoutOutlined />退出</button>
         </div>
       </header>
       <main className="system-choice-main">
-        <div className="system-choice-heading"><h1>请选择要进入的系统</h1><p>你拥有两个系统的访问权限，可在进入后通过右上角切换系统。</p></div>
+        <div className="system-choice-heading"><h1>系统中心</h1><p>三个业务系统并列运行；仅可进入已获授权的系统。</p></div>
+        {(access.isError || contractAccess.isError) && <Alert className="system-choice-error" type="error" showIcon message="部分系统权限暂时无法核对" description="未成功读取的系统入口暂不可用，并不代表没有权限。" action={<Button onClick={() => { void access.refetch(); void contractAccess.refetch(); }}>重新核对</Button>} />}
         <div className="system-choice-grid">
-          <section className="system-choice-card">
+          <section className={`system-choice-card${canEnterSafetySystem(principal.roles) ? "" : " is-unavailable"}`}>
             <div>
-              <div className="system-choice-card-head"><span className="system-choice-icon"><SafetyOutlined /></span><span className="system-choice-role">{principalRoleSummary(principal.roles, labels)}</span></div>
+              <div className="system-choice-card-head"><span className="system-choice-icon"><SafetyOutlined /></span><span className="system-choice-role">{canEnterSafetySystem(principal.roles) ? principalRoleSummary(principal.roles, labels) : "未授权"}</span></div>
               <h2>安全生产管理系统</h2><p>培训教育与日常安全业务</p>
               <ul><li>人员与组织、项目管理</li><li>培训教育、野外项目报送、资质证照</li></ul>
             </div>
-            <Button type="primary" block onClick={() => navigate("/safety")}>进入安全系统</Button>
+            <Button block disabled={!canEnterSafetySystem(principal.roles)} onClick={() => navigate("/safety")}>{canEnterSafetySystem(principal.roles) ? "进入安全生产管理" : "暂无访问权限"}</Button>
           </section>
-          <section className="system-choice-card">
+          <section className={`system-choice-card${canUseReceivables ? "" : " is-unavailable"}`}>
             <div>
-              <div className="system-choice-card-head"><span className="system-choice-icon"><FileDoneOutlined /></span><span className="system-choice-role">{financeRole}</span></div>
+              <div className="system-choice-card-head"><span className="system-choice-icon"><FileDoneOutlined /></span><span className="system-choice-role">{access.isError ? "暂不可用" : receivablesMode === "hidden" ? "未授权" : financeRole}</span></div>
               <h2>财务应收账款系统</h2><p>合同应收与回款管理</p>
               <ul><li>合同应收、开票与回款</li><li>催收台账、财务统计与报表</li></ul>
             </div>
-            <Button block onClick={() => navigate(financePath)}>{receivablesMode === "confirm" ? "完成首次启用" : "进入应收账款"}</Button>
+            <Button block disabled={!canUseReceivables} onClick={() => navigate(financePath)}>{access.isError ? "权限核对失败" : receivablesMode === "hidden" ? "暂无访问权限" : receivablesMode === "confirm" ? "完成首次启用" : "进入应收账款"}</Button>
           </section>
-          <section className="system-choice-card">
+          <section className={`system-choice-card${canUseContracts ? "" : " is-unavailable"}`}>
             <div>
-              <div className="system-choice-card-head"><span className="system-choice-icon"><AccountBookOutlined /></span><span className="system-choice-role">{contractAccess.isError ? "权限核对失败" : contractAccess.data?.canEnter ? "已授权" : "未授权"}</span></div>
-              <h2>项目与合同管理系统</h2><p>项目台账、主合同与分包合同</p>
+              <div className="system-choice-card-head"><span className="system-choice-icon"><AccountBookOutlined /></span><span className="system-choice-role">{contractAccess.isError ? "暂不可用" : !contractAccess.data?.canEnter ? "未授权" : contractAccess.data.role === "admin" ? "合同管理员" : contractAccess.data.role === "editor" ? "合同经办人" : "合同只读"}</span></div>
+              <h2>项目与合同管理系统</h2><p>投标、项目与合同基础资料</p>
+              <ul><li>项目台账、投标资料和状态历史</li><li>主合同、补充合同与分包合同</li></ul>
             </div>
-            <Button block disabled={!contractAccess.data?.canEnter} onClick={() => navigate("/contracts")}>进入项目与合同管理</Button>
+            <Button block disabled={!canUseContracts} onClick={() => navigate("/contracts")}>{contractAccess.isError ? "权限核对失败" : contractAccess.data?.canEnter ? "进入项目与合同管理" : "暂无访问权限"}</Button>
           </section>
         </div>
-        <p className="system-choice-note">各系统共用当前登录身份，业务权限分别管理。</p>
+        {principal.personId && <Button className="system-choice-profile" type="link" onClick={() => navigate("/my-profile")}>查看本人档案</Button>}
+        <p className="system-choice-note">统一登录、统一人员与组织；安全、财务、项目合同三套业务权限互不继承。</p>
       </main>
       <footer className="system-choice-footer"><span>© 山西省地球物理化学勘查院有限公司</span><span>系统选择</span></footer>
     </div>
@@ -2877,6 +2882,8 @@ function Shell({ principal }: { principal: Principal }) {
   const wechatWeb = useQuery({ queryKey: ["wechat-web-config"], queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config") });
   const inReceivables = location.pathname.startsWith("/receivables");
   const inContracts = location.pathname.startsWith("/contracts");
+  const financeBaseline = location.pathname === "/receivables/ledger";
+  const monthlyBaseline = location.pathname === "/monthly-reports/mine";
   const inMasterData = location.pathname.startsWith("/people") || location.pathname.startsWith("/organization") || location.pathname.startsWith("/projects");
   const companyAdmin = principal.roles.some((role) => role.role === "company_admin");
   const managementOverview = useQuery({ queryKey: ["management-overview", "master-data-nav"], queryFn: () => api<{ pendingRequests: number }>("/api/management/overview"), enabled: inMasterData });
@@ -2910,15 +2917,16 @@ function Shell({ principal }: { principal: Principal }) {
   if (!canEnterSafety && !inReceivables && !inContracts && !["/", "/logout"].includes(location.pathname)) return <Navigate to="/" replace />;
   return (
     <>
-      <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}${inContracts ? " contract-shell" : ""}${location.pathname.startsWith("/monthly-reports") ? " monthly-report-shell" : ""}`}>
+      <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}${inContracts ? " contract-shell" : ""}${location.pathname.startsWith("/monthly-reports") ? " monthly-report-shell" : ""}${financeBaseline ? " baseline-finance-shell" : ""}${monthlyBaseline ? " baseline-monthly-shell" : ""}`}>
         <Layout.Sider
           className={inReceivables ? "receivables-sider" : inContracts ? "contract-sider" : undefined}
-          width={inReceivables ? 200 : 224}
+          width={financeBaseline || monthlyBaseline || inContracts ? 248 : inReceivables ? 200 : 224}
           breakpoint="lg"
           collapsedWidth="0"
           theme="light"
         >
           <div className={`brand${inReceivables ? " receivables-brand" : ""}`}>
+            {(financeBaseline || monthlyBaseline) && <img className="company-brand-logo" src="/company-logo.png" alt="公司标识" />}
             {inReceivables ? <div className="brand-copy"><strong>财务应收</strong><small>账款管理</small></div> : inContracts ? <div className="brand-copy"><strong>项目与合同</strong><small>经营管理</small></div> : <div className="brand-copy"><strong>物化院 · 安全管理</strong><small>企业管理工作台</small></div>}
           </div>
           <Menu

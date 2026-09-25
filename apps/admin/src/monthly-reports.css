@@ -67,7 +67,39 @@
 .monthly-report-page .ant-table-thead > tr > th { background: #f8fafd; color: var(--monthly-muted); }
 .monthly-report-page .ant-tabs-ink-bar { background: var(--monthly-blue); }
 
+/* Only the经营实体月报 list uses this baseline density. */
+.app-shell.baseline-monthly-shell .content { background: var(--baseline-canvas); }
+.app-shell.baseline-monthly-shell .monthly-report-page.is-baseline-mine {
+  --monthly-ink: var(--baseline-ink);
+  --monthly-muted: var(--baseline-secondary);
+  --monthly-line: var(--baseline-border);
+  --monthly-blue: var(--baseline-primary);
+  max-width: 1280px;
+  padding: 32px 40px;
+  background: var(--baseline-canvas);
+}
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-page-heading { align-items: center; margin-bottom: 28px; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-page-heading .monthly-page-actions { margin: 0; padding: 0; border: 0; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px 16px; min-height: 106px; padding: 16px 24px; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-fields { display: grid; grid-template-columns: minmax(190px, 270px) repeat(2, minmax(145px, 190px)) minmax(145px, 1fr); gap: 16px; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-fields label,
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-fields label:nth-child(2) { min-width: 0; gap: 7px; font-size: 12px; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-fields :is(.ant-input, .ant-select-selector) { height: 40px; background: var(--baseline-canvas); border-radius: 8px; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-actions { display: flex; gap: 8px; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-scope-note { grid-column: 1 / -1; font-size: 12px; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-list-card .ant-card-head { min-height: 64px; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-list-card .ant-card-head-title { font-size: 18px; font-weight: 700; }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-project-table .ant-table-thead > tr > th { background: var(--baseline-soft); }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-project-table .ant-table-tbody > tr:nth-child(even) > td { background: var(--baseline-canvas); }
+.app-shell.baseline-monthly-shell .is-baseline-mine .monthly-project-table .ant-tag { border-radius: 6px; font-size: 12px; }
+
+@media (max-width: 1280px) {
+  .app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-card { grid-template-columns: 1fr; }
+  .app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 @media (max-width: 900px) {
+  .app-shell.baseline-monthly-shell .monthly-report-page.is-baseline-mine { padding: 24px; }
   .monthly-report-page { padding: 20px; }
   .monthly-report-page .monthly-filter-card { align-items: stretch; flex-direction: column; }
   .monthly-report-page .monthly-list-footer { align-items: flex-start; flex-direction: column; }
@@ -79,6 +111,9 @@
 }
 
 @media (max-width: 600px) {
+  .app-shell.baseline-monthly-shell .monthly-report-page.is-baseline-mine { padding: 16px; }
+  .app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-fields { grid-template-columns: 1fr; }
+  .app-shell.baseline-monthly-shell .is-baseline-mine .monthly-filter-actions { width: 100%; }
   .monthly-report-page { padding: 16px; }
   .monthly-report-page .monthly-page-heading { align-items: flex-start; flex-direction: column; }
   .monthly-report-page .monthly-filter-fields,

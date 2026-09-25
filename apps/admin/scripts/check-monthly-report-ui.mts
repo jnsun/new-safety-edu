@@ -18,7 +18,7 @@ assert.ok(page.includes('/api/monthly-reports/submissions/preflight?organization
 assert.ok(page.includes('latest.expectedCount !== preflight.data.expectedCount'), "changed project set must invalidate batch confirmation");
 assert.ok(page.includes('setNoProjectDialog(!noFieldOrganizationId ? "select"'), "no-project scope selection missing");
 assert.ok(page.includes('hasSingleReportingOrganization'), "single-entity reporter context missing");
-assert.ok(page.includes('报送经营实体'), "single-entity reporter must see a fixed organization");
+assert.ok(page.includes('报送主体：{selectedOrganizationName}'), "single-entity reporter must see a fixed organization");
 assert.ok(page.includes('projectTypeId: project?.projectType'), "new project type must carry into the monthly draft");
 assert.ok(page.includes('projectTypeOptions.map'), "new project type must use the approved taxonomy");
 assert.ok(page.includes('disabled={!preflight.data?.ready}'), "blocked batch must not submit");
