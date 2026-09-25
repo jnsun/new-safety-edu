@@ -12,6 +12,7 @@ import {
 } from "../project-reporting-core.js";
 import { canGovernMonthlyReporting, canSubmitMonthlyFacts, inheritedMonthlyDefaults, monthlyReminderDedupeKey, monthlyReminderEligible, monthlySubmissionReadiness, nextSubmissionStatus, reportingOrganizationIds, submittedMonthStatuses } from "../project-reporting-policy.js";
 import { writeCriticalAudit } from "../transaction-audit.js";
+import { isSafetyEligibleProject, safetyEligibleProjectWhere } from "../contract-project-eligibility.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 const id = z.string().uuid();
@@ -40,11 +41,12 @@ async function canWriteProject(request: FastifyRequest, projectId: string) {
   if (!canSubmitMonthlyFacts(request.principal!)) return false;
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    select: { responsibleOrganizationId: true, status: true },
+    select: { responsibleOrganizationId: true, status: true, contractBidStatus: true, contractStage: true, contractDataSource: true, mainContract: { select: { signedAt: true } } },
   });
   return (
     !!project &&
     project.status !== "ended" &&
+    isSafetyEligibleProject(project) &&
     reportOrganizationIds(request).includes(project.responsibleOrganizationId)
   );
 }
@@ -212,14 +214,15 @@ export async function registerProjectReportingRoutes(
       return {
         data: await prisma.project.findMany({
           where: {
-            ...(isCompanyAdmin(request.principal!)
-              ? {}
-              : {
-                  OR: [
-                    { responsibleOrganizationId: { in: orgIds } },
-                    { id: { in: projectIds } },
-                  ],
-                }),
+            AND: [
+              safetyEligibleProjectWhere,
+              ...(isCompanyAdmin(request.principal!)
+                ? []
+                : [{ OR: [
+                     { responsibleOrganizationId: { in: orgIds } },
+                     { id: { in: projectIds } },
+                  ] }]),
+            ],
           },
           select: {
             id: true,
@@ -753,7 +756,7 @@ export async function registerProjectReportingRoutes(
       const [organization, period, projects, reports, submission] = await Promise.all([
         prisma.organization.findFirst({ where: { id: query.organizationId, type: "business_entity", reportingEnabled: true }, select: { id: true } }),
         reportingPeriodFor(query.month),
-        prisma.project.findMany({ where: { responsibleOrganizationId: query.organizationId, status: { in: ["active", "paused"] } }, select: { id: true, name: true, code: true, status: true }, orderBy: { name: "asc" } }),
+        prisma.project.findMany({ where: { responsibleOrganizationId: query.organizationId, status: { in: ["active", "paused"] }, ...safetyEligibleProjectWhere }, select: { id: true, name: true, code: true, status: true }, orderBy: { name: "asc" } }),
         prisma.projectMonthlyReport.findMany({ where: { reportingOrganizationId: query.organizationId, reportMonth: date, status: { not: "voided" } }, select: { id: true, projectId: true, status: true, revision: true, updatedAt: true } }),
         prisma.departmentMonthStatus.findFirst({ where: { organizationId: query.organizationId, reportingYear: year!, reportingMonth: number!, active: true }, select: { id: true, status: true, reportType: true, returnReason: true } }),
       ]);
@@ -779,7 +782,7 @@ export async function registerProjectReportingRoutes(
         const [period, organization, projects, current] = await Promise.all([
           tx.reportingPeriod.findUnique({ where: { reportMonth: date } }),
           tx.organization.findFirst({ where: { id: body.organizationId, type: "business_entity", reportingEnabled: true }, select: { id: true } }),
-          tx.project.findMany({ where: { responsibleOrganizationId: body.organizationId, status: { in: ["active", "paused"] } }, select: { id: true } }),
+          tx.project.findMany({ where: { responsibleOrganizationId: body.organizationId, status: { in: ["active", "paused"] }, ...safetyEligibleProjectWhere }, select: { id: true } }),
           tx.departmentMonthStatus.findFirst({ where: { organizationId: body.organizationId, reportingYear: year!, reportingMonth: number!, active: true } }),
         ]);
         if (current && ["submitted", "confirmed", "locked"].includes(current.status)) {
@@ -911,7 +914,7 @@ export async function registerProjectReportingRoutes(
         const [period, organization, projectCount, current] = await Promise.all([
           tx.reportingPeriod.findUnique({ where: { reportMonth: date } }),
           tx.organization.findFirst({ where: { id: body.organizationId, type: "business_entity", reportingEnabled: true }, select: { id: true } }),
-          tx.project.count({ where: { responsibleOrganizationId: body.organizationId, status: { in: ["active", "paused"] } } }),
+          tx.project.count({ where: { responsibleOrganizationId: body.organizationId, status: { in: ["active", "paused"] }, ...safetyEligibleProjectWhere } }),
           tx.departmentMonthStatus.findFirst({ where: { organizationId: body.organizationId, reportingYear: year!, reportingMonth: number!, active: true } }),
         ]);
         if (current && ["submitted", "confirmed", "locked"].includes(current.status)) {

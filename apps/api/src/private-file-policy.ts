@@ -15,9 +15,17 @@ export type PrivateFileFacts = {
   requestAttachments: Array<{ accountId: string | null; personId: string | null; organizationId: string | null; projectId: string | null }>;
   receivableAttachments: Array<{ financeDepartmentId: string; status: "active" | "voided" }>;
   receivableImportBatches: Array<Record<string, never>>;
+  contractAttachments?: Array<{ readable: boolean }>;
 };
 
 export function canReadPrivateFile(reader: Reader, facts: PrivateFileFacts) {
+  if (facts.contractAttachments?.length) {
+    const linkedElsewhere = facts.photos.length || facts.signatures.length || facts.personCertificates.length
+      || facts.organizationQualifications.length || facts.monthlyReports.length || facts.coursewares.length
+      || facts.trainingAttachments.length || facts.requestAttachments.length || facts.receivableAttachments.length
+      || facts.receivableImportBatches.length;
+    return !linkedElsewhere && facts.contractAttachments.every(({ readable }) => readable);
+  }
   if (facts.receivableImportBatches.length) return !!reader.receivablesAccess?.canReadLedger && (reader.receivablesAccess.role === "owner" || reader.receivablesAccess.role === "admin");
   if (facts.receivableAttachments.length) {
     const access = reader.receivablesAccess;

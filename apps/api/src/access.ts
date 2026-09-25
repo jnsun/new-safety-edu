@@ -1,5 +1,6 @@
 import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
+import { isSafetyEligibleProject } from "./contract-project-eligibility.js";
 
 export const isCompanyAdmin = (principal: Principal) => principal.roles.some((r) => r.role === "company_admin");
 
@@ -24,9 +25,10 @@ export async function canAccessOrganization(principal: Principal, organizationId
 }
 
 export async function canAccessProject(principal: Principal, projectId: string): Promise<boolean> {
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { responsibleOrganizationId: true, contractBidStatus: true, contractStage: true, contractDataSource: true, mainContract: { select: { signedAt: true } } } });
+  if (!project || !isSafetyEligibleProject(project)) return false;
   if (isCompanyAdmin(principal) || projectScopeIds(principal).includes(projectId)) return true;
-  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { responsibleOrganizationId: true } });
-  return !!project && (await accessibleOrganizationIds(principal)).includes(project.responsibleOrganizationId);
+  return (await accessibleOrganizationIds(principal)).includes(project.responsibleOrganizationId);
 }
 
 export async function canAccessPerson(principal: Principal, personId: string): Promise<boolean> {

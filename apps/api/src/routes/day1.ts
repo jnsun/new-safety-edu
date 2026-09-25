@@ -28,6 +28,7 @@ import { prepareBulkPrimaryOrganizationAssignment } from "../person-bulk-organiz
 import { previewBulkPersonDisable } from "../person-bulk-lifecycle-policy.js";
 import { authMeProfile } from "../auth-me-profile.js";
 import { assertFirstReleaseWorkflowAllowed } from "../first-release-policy.js";
+import { isSafetyEligibleProject, safetyEligibleProjectWhere } from "../contract-project-eligibility.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 type Deps = { env: Env; authenticate: Guard; requireManager: Guard };
@@ -318,7 +319,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const orgIds = await accessibleOrganizationIds(principal);
     const scopedProjectIds = projectScopeIds(principal);
     return { data: await prisma.project.findMany({
-      where: isCompanyAdmin(principal) ? {} : { OR: [{ id: { in: scopedProjectIds } }, { responsibleOrganizationId: { in: orgIds } }] },
+      where: { AND: [safetyEligibleProjectWhere, ...(isCompanyAdmin(principal) ? [] : [{ OR: [{ id: { in: scopedProjectIds } }, { responsibleOrganizationId: { in: orgIds } }] }])] },
       include: { responsibleOrganization: { select: { id: true, name: true } }, _count: { select: { members: true } } },
       orderBy: { createdAt: "desc" }
     }) };
@@ -338,7 +339,8 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
   app.patch("/api/projects/:id/status", manager, async (request) => {
     const principal = principalOf(request);
     const { id } = idParam.parse(request.params);
-    const current = await prisma.project.findUniqueOrThrow({ where: { id } });
+    const current = await prisma.project.findUniqueOrThrow({ where: { id }, include: { mainContract: { select: { signedAt: true } } } });
+    if (!isSafetyEligibleProject(current)) forbidden("未签约投标项目只能在项目与合同管理系统维护");
     if (!isCompanyAdmin(principal) && !organizationScopeIds(principal).includes(current.responsibleOrganizationId)) {
       forbidden("只有公司管理员或项目责任经营实体负责人、管理员可以调整项目状态");
     }
@@ -549,7 +551,8 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
   });
 
   app.patch("/api/projects/:id", manager, async (request) => {
-    const principal = principalOf(request); const { id } = idParam.parse(request.params); const current = await prisma.project.findUniqueOrThrow({ where: { id } });
+    const principal = principalOf(request); const { id } = idParam.parse(request.params); const current = await prisma.project.findUniqueOrThrow({ where: { id }, include: { mainContract: { select: { signedAt: true } } } });
+    if (!isSafetyEligibleProject(current)) forbidden("未签约投标项目只能在项目与合同管理系统维护");
     if (!isCompanyAdmin(principal) && !organizationScopeIds(principal).includes(current.responsibleOrganizationId)) forbidden("只有公司管理员或项目责任经营实体负责人、管理员可以编辑项目主档");
     if (current.status === "ended") throw Object.assign(new Error("已结束项目为只读"), { statusCode: 409, code: "PROJECT_ENDED" });
     const input = projectCreateSchema.partial().omit({ responsibleOrganizationId: true }).parse(request.body);
@@ -805,7 +808,8 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     if (input.role === "company_admin") await verifySensitiveToken(request, deps.env);
     const scopeId = input.scopeId ?? null;
     const organization = input.scopeType === "organization" && scopeId ? await prisma.organization.findUniqueOrThrow({ where: { id: scopeId }, select: { type: true } }) : null;
-    const project = input.scopeType === "project" && scopeId ? await prisma.project.findUniqueOrThrow({ where: { id: scopeId }, select: { responsibleOrganizationId: true, status: true } }) : null;
+    const project = input.scopeType === "project" && scopeId ? await prisma.project.findUniqueOrThrow({ where: { id: scopeId }, select: { responsibleOrganizationId: true, status: true, contractBidStatus: true, contractStage: true, contractDataSource: true, mainContract: { select: { signedAt: true } } } }) : null;
+    if (project && !isSafetyEligibleProject(project)) forbidden("未签约投标项目不能授予安全项目角色");
     if (!canGrantScopedRole(principal, { role: input.role, scopeType: input.scopeType, scopeId, ...(organization ? { organizationType: organization.type } : {}), ...(project ? { projectResponsibleOrganizationId: project.responsibleOrganizationId } : {}) })) forbidden("无权授予该角色或范围");
     if (input.role === "field_reporter" && organization?.type !== "business_entity") throw Object.assign(new Error("野外项目报送人员只能设置在经营实体"), { statusCode: 409, code: "REPORTER_REQUIRES_BUSINESS_ENTITY" });
     const target = await prisma.person.findUniqueOrThrow({ where: { id: input.personId }, select: { status: true, type: true, account: { select: { id: true, status: true } }, organizations: { where: { active: true, primary: true }, take: 1, select: { organizationId: true, organization: { select: { type: true } } } } } });
@@ -852,7 +856,8 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
     const role = await prisma.roleAssignment.findUniqueOrThrow({ where: { id } });
     if (role.role === "company_admin") await verifySensitiveToken(request, deps.env);
     const organization = role.scopeType === "organization" && role.scopeId ? await prisma.organization.findUniqueOrThrow({ where: { id: role.scopeId }, select: { type: true } }) : null;
-    const project = role.scopeType === "project" && role.scopeId ? await prisma.project.findUniqueOrThrow({ where: { id: role.scopeId }, select: { responsibleOrganizationId: true } }) : null;
+    const project = role.scopeType === "project" && role.scopeId ? await prisma.project.findUniqueOrThrow({ where: { id: role.scopeId }, select: { responsibleOrganizationId: true, contractBidStatus: true, contractStage: true, contractDataSource: true, mainContract: { select: { signedAt: true } } } }) : null;
+    if (project && !isSafetyEligibleProject(project)) forbidden("未签约投标项目不能通过安全角色接口维护");
     if (!canGrantScopedRole(principal, { role: role.role, scopeType: role.scopeType, scopeId: role.scopeId, ...(organization ? { organizationType: organization.type } : {}), ...(project ? { projectResponsibleOrganizationId: project.responsibleOrganizationId } : {}) })) forbidden("无权取消该角色或范围");
     if (role.accountId === principal.accountId && role.role === "company_admin") throw Object.assign(new Error("不能撤销自己的公司管理员角色"), { statusCode: 409, code: "ROLE_SELF_REVOKE_FORBIDDEN" });
     await prisma.$transaction(async (tx) => {
@@ -917,7 +922,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
 
   app.post("/api/me/projects/:id/join-request", authenticated, async (request, reply) => {
     const principal = principalOf(request); if (!principal.personId) forbidden("账号尚未绑定人员档案"); const { id: projectId } = idParam.parse(request.params);
-    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId }, select: { status: true } }); if (project.status !== "active") throw Object.assign(new Error("项目当前不接受加入申请"), { statusCode: 409, code: "PROJECT_READ_ONLY" });
+    const project = await prisma.project.findUniqueOrThrow({ where: { id: projectId }, select: { status: true, contractBidStatus: true, contractStage: true, contractDataSource: true, mainContract: { select: { signedAt: true } } } }); if (project.status !== "active" || !isSafetyEligibleProject(project)) throw Object.assign(new Error("项目当前不接受加入申请"), { statusCode: 409, code: "PROJECT_READ_ONLY" });
     const person = await prisma.person.findUniqueOrThrow({ where: { id: principal.personId }, select: { type: true, status: true, organizations: { where: { active: true, primary: true }, take: 1, select: { organization: { select: { type: true } } } } } });
     if (person.status !== "active" || !canJoinProject(person.type, person.organizations[0]?.organization.type ?? null)) throw Object.assign(new Error("当前人员关系不符合项目加入条件"), { statusCode: 409, code: "PROJECT_MEMBER_INELIGIBLE" });
     const existing = await prisma.projectMember.findFirst({ where: { projectId, personId: principal.personId, status: { in: ["pending", "active", "approved"] } }, orderBy: { createdAt: "desc" } }); if (existing) return { data: existing };

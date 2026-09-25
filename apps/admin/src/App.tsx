@@ -66,6 +66,7 @@ import {
   QualificationsPage,
 } from "./SafetyManagementPages";
 import { ReceivablesPage, useReceivablesAccess } from "./ReceivablesPage";
+import { ContractManagementPage, useContractAccess } from "./ContractManagementPage";
 import { receivablesNavigation, receivablesPortalMode, usableReceivablesAccess, type ReceivablesAccess } from "./receivables-types";
 import { personMatchesSearch } from "./person-search";
 import { canEnterSafetySystem, resolvePlatformLanding } from "./platform-access";
@@ -296,6 +297,11 @@ const moduleMenuItems = (pathname: string, receivablesAccess?: ReceivablesAccess
               icon: <SafetyCertificateOutlined />,
             },
           ]
+        : pathname.startsWith("/contracts")
+          ? [
+              { key: "/", label: "返回统一平台", icon: <DashboardOutlined /> },
+              { key: "/contracts", label: "项目与合同台账", icon: <AccountBookOutlined /> },
+            ]
         : pathname.startsWith("/receivables")
           ? (() => {
               const navigation = receivablesAccess ? receivablesNavigation(receivablesAccess) : [];
@@ -2768,12 +2774,14 @@ function PlatformPortal() {
 function PlatformGateway({ principal }: { principal: Principal }) {
   const navigate = useNavigate();
   const access = useReceivablesAccess(principal.accountId);
+  const contractAccess = useContractAccess(principal.accountId);
   const currentAccess = usableReceivablesAccess(access);
-  if (access.isFetching) return <div className="center">正在核对系统权限…</div>;
+  if (access.isFetching || contractAccess.isFetching) return <div className="center">正在核对系统权限…</div>;
   const receivablesMode = currentAccess ? receivablesPortalMode(currentAccess) : "hidden";
   const landing = resolvePlatformLanding({
     canEnterSafety: canEnterSafetySystem(principal.roles),
     receivablesMode,
+    canEnterContracts: !contractAccess.isError && Boolean(contractAccess.data?.canEnter),
     canViewSelf: Boolean(principal.personId),
   });
   if (landing.kind === "redirect") return <Navigate to={landing.path} replace />;
@@ -2823,8 +2831,15 @@ function PlatformGateway({ principal }: { principal: Principal }) {
             </div>
             <Button block onClick={() => navigate(financePath)}>{receivablesMode === "confirm" ? "完成首次启用" : "进入应收账款"}</Button>
           </section>
+          <section className="system-choice-card">
+            <div>
+              <div className="system-choice-card-head"><span className="system-choice-icon"><AccountBookOutlined /></span><span className="system-choice-role">{contractAccess.isError ? "权限核对失败" : contractAccess.data?.canEnter ? "已授权" : "未授权"}</span></div>
+              <h2>项目与合同管理系统</h2><p>项目台账、主合同与分包合同</p>
+            </div>
+            <Button block disabled={!contractAccess.data?.canEnter} onClick={() => navigate("/contracts")}>进入项目与合同管理</Button>
+          </section>
         </div>
-        <p className="system-choice-note">两个系统共用当前登录身份，业务权限分别管理。</p>
+        <p className="system-choice-note">各系统共用当前登录身份，业务权限分别管理。</p>
       </main>
       <footer className="system-choice-footer"><span>© 山西省地球物理化学勘查院有限公司</span><span>系统选择</span></footer>
     </div>
@@ -2861,6 +2876,7 @@ function Shell({ principal }: { principal: Principal }) {
   const location = useLocation();
   const wechatWeb = useQuery({ queryKey: ["wechat-web-config"], queryFn: () => api<{ enabled: boolean }>("/api/auth/wechat-web/config") });
   const inReceivables = location.pathname.startsWith("/receivables");
+  const inContracts = location.pathname.startsWith("/contracts");
   const inMasterData = location.pathname.startsWith("/people") || location.pathname.startsWith("/organization") || location.pathname.startsWith("/projects");
   const companyAdmin = principal.roles.some((role) => role.role === "company_admin");
   const managementOverview = useQuery({ queryKey: ["management-overview", "master-data-nav"], queryFn: () => api<{ pendingRequests: number }>("/api/management/overview"), enabled: inMasterData });
@@ -2870,8 +2886,8 @@ function Shell({ principal }: { principal: Principal }) {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const selected = useMemo(
     () =>
-      location.pathname === "/" || location.pathname === "/safety" ? "/" : inMasterData ? masterDataSelectedKey(location.pathname) : inReceivables ? location.pathname.replace(/\/$/, "") || "/receivables" : location.pathname.startsWith("/monthly-reports") ? (location.pathname === "/monthly-reports" ? "/monthly-reports/mine" : location.pathname) : `/${location.pathname.split("/")[1]}`,
-    [inMasterData, inReceivables, location.pathname],
+      location.pathname === "/" || location.pathname === "/safety" ? "/" : inMasterData ? masterDataSelectedKey(location.pathname) : inReceivables ? location.pathname.replace(/\/$/, "") || "/receivables" : inContracts ? "/contracts" : location.pathname.startsWith("/monthly-reports") ? (location.pathname === "/monthly-reports" ? "/monthly-reports/mine" : location.pathname) : `/${location.pathname.split("/")[1]}`,
+    [inContracts, inMasterData, inReceivables, location.pathname],
   );
   const sidebarItems = useMemo(
     () => moduleMenuItems(location.pathname, currentReceivablesAccess, companyAdmin, managementOverview.data?.pendingRequests ?? 0),
@@ -2888,20 +2904,22 @@ function Shell({ principal }: { principal: Principal }) {
             ? "人员与组织管理"
           : inReceivables
             ? "应收账款管理"
+            : inContracts
+              ? "项目与合同管理"
             : "培训教育";
-  if (!canEnterSafety && !inReceivables && !["/", "/logout"].includes(location.pathname)) return <Navigate to="/" replace />;
+  if (!canEnterSafety && !inReceivables && !inContracts && !["/", "/logout"].includes(location.pathname)) return <Navigate to="/" replace />;
   return (
     <>
-      <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}${location.pathname.startsWith("/monthly-reports") ? " monthly-report-shell" : ""}`}>
+      <Layout className={`app-shell${inReceivables ? " receivables-shell" : ""}${inContracts ? " contract-shell" : ""}${location.pathname.startsWith("/monthly-reports") ? " monthly-report-shell" : ""}`}>
         <Layout.Sider
-          className={inReceivables ? "receivables-sider" : undefined}
+          className={inReceivables ? "receivables-sider" : inContracts ? "contract-sider" : undefined}
           width={inReceivables ? 200 : 224}
           breakpoint="lg"
           collapsedWidth="0"
           theme="light"
         >
           <div className={`brand${inReceivables ? " receivables-brand" : ""}`}>
-            {inReceivables ? <div className="brand-copy"><strong>财务应收</strong><small>账款管理</small></div> : <div className="brand-copy"><strong>物化院 · 安全管理</strong><small>企业管理工作台</small></div>}
+            {inReceivables ? <div className="brand-copy"><strong>财务应收</strong><small>账款管理</small></div> : inContracts ? <div className="brand-copy"><strong>项目与合同</strong><small>经营管理</small></div> : <div className="brand-copy"><strong>物化院 · 安全管理</strong><small>企业管理工作台</small></div>}
           </div>
           <Menu
             mode="inline"
@@ -2912,12 +2930,12 @@ function Shell({ principal }: { principal: Principal }) {
           />
         </Layout.Sider>
         <Layout>
-          <Layout.Header className="topbar">
-            {inReceivables ? (
+          <Layout.Header className={`topbar${inContracts ? " contract-topbar" : ""}`}>
+            {inReceivables || inContracts ? (
               <div className="receivables-topbar-left">
                 <Button type="link" onClick={() => navigate("/")}>← 返回主系统</Button>
                 <span aria-hidden="true" />
-                <strong>财务应收账款</strong>
+                <strong>{inReceivables ? "财务应收账款" : "项目与合同管理"}</strong>
               </div>
             ) : (
               <span className="topbar-title">{workspaceTitle}</span>
@@ -2938,7 +2956,7 @@ function Shell({ principal }: { principal: Principal }) {
               </Button>
             </Space>
           </Layout.Header>
-          <Layout.Content className={`content${inReceivables ? " receivables-content" : ""}`}>
+          <Layout.Content className={`content${inReceivables ? " receivables-content" : ""}${inContracts ? " contract-content" : ""}`}>
             <Routes>
               <Route path="/" element={<PlatformGateway principal={principal} />} />
               <Route path="/safety" element={<PlatformPortal />} />
@@ -2974,6 +2992,7 @@ function Shell({ principal }: { principal: Principal }) {
                 }
               />
               <Route path="/receivables/*" element={<ReceivablesPage accountId={principal.accountId} />} />
+              <Route path="/contracts/*" element={<ContractManagementPage accountId={principal.accountId} />} />
               <Route path="/logout" element={<LogoutRoute />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

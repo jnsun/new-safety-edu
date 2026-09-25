@@ -286,25 +286,59 @@ enum ReceivableExportStatus {
   expired
 }
 
+enum ContractGrantRole {
+  admin
+  editor
+  readonly
+}
+
+enum ContractBidStatus {
+  bidding
+  won
+  lost
+  abandoned
+}
+
+enum ContractProjectStage {
+  bid_preparation
+  contract_registration
+  field_work
+  indoor_sorting
+  report_drafting
+  submitted_review
+  accepted
+  warranty_payment
+  closed
+  terminated
+}
+
+enum ContractAttachmentOwnerType {
+  bid
+  project
+  main_contract
+  supplement
+  subcontract
+}
+
 model Account {
-  id                                     String                       @id @default(uuid()) @db.Uuid
-  username                               String?                      @unique @db.VarChar(80)
-  usernameNormalized                     String?                      @unique @map("username_normalized") @db.VarChar(80)
-  passwordHash                           String?                      @map("password_hash")
-  mustChangePassword                     Boolean                      @default(false) @map("must_change_password")
-  passwordLoginEnabled                   Boolean                      @default(false) @map("password_login_enabled")
-  status                                 AccountStatus                @default(active)
-  sessionVersion                         Int                          @default(0) @map("session_version")
-  lastLoginAt                            DateTime?                    @map("last_login_at")
-  failedLoginCount                       Int                          @default(0) @map("failed_login_count")
-  loginLockedUntil                       DateTime?                    @map("login_locked_until")
-  personId                               String?                      @unique @map("person_id") @db.Uuid
-  verifiedPhone                          String?                      @unique @map("verified_phone") @db.VarChar(20)
-  mergedIntoAccountId                    String?                      @map("merged_into_account_id") @db.Uuid
-  mergedAt                               DateTime?                    @map("merged_at")
-  person                                 Person?                      @relation(fields: [personId], references: [id])
-  mergedInto                             Account?                     @relation("AccountMerge", fields: [mergedIntoAccountId], references: [id])
-  mergedAccounts                         Account[]                    @relation("AccountMerge")
+  id                                     String                         @id @default(uuid()) @db.Uuid
+  username                               String?                        @unique @db.VarChar(80)
+  usernameNormalized                     String?                        @unique @map("username_normalized") @db.VarChar(80)
+  passwordHash                           String?                        @map("password_hash")
+  mustChangePassword                     Boolean                        @default(false) @map("must_change_password")
+  passwordLoginEnabled                   Boolean                        @default(false) @map("password_login_enabled")
+  status                                 AccountStatus                  @default(active)
+  sessionVersion                         Int                            @default(0) @map("session_version")
+  lastLoginAt                            DateTime?                      @map("last_login_at")
+  failedLoginCount                       Int                            @default(0) @map("failed_login_count")
+  loginLockedUntil                       DateTime?                      @map("login_locked_until")
+  personId                               String?                        @unique @map("person_id") @db.Uuid
+  verifiedPhone                          String?                        @unique @map("verified_phone") @db.VarChar(20)
+  mergedIntoAccountId                    String?                        @map("merged_into_account_id") @db.Uuid
+  mergedAt                               DateTime?                      @map("merged_at")
+  person                                 Person?                        @relation(fields: [personId], references: [id])
+  mergedInto                             Account?                       @relation("AccountMerge", fields: [mergedIntoAccountId], references: [id])
+  mergedAccounts                         Account[]                      @relation("AccountMerge")
   roles                                  RoleAssignment[]
   wechatBindings                         WechatBinding[]
   refreshSessions                        RefreshSession[]
@@ -312,30 +346,35 @@ model Account {
   preferences                            UserPreference[]
   sensitiveExportJobs                    SensitiveExportJob[]
   securityEvents                         AuthSecurityEvent[]
-  receivableGrants                       ReceivableAccessGrant[]      @relation("ReceivableGrantAccount")
-  receivableGrantsGiven                  ReceivableAccessGrant[]      @relation("ReceivableGrantGrantedBy")
-  receivableGrantsRevoked                ReceivableAccessGrant[]      @relation("ReceivableGrantRevokedBy")
-  receivableConfigurationsConfirmed      ReceivableSetting[]          @relation("ReceivableConfigurationConfirmer")
-  receivableDepartmentsDeactivated       ReceivableDepartment[]       @relation("ReceivableDepartmentDeactivatedBy")
-  receivableDictionaryOptionsDeactivated ReceivableDictionaryOption[] @relation("ReceivableDictionaryDeactivatedBy")
-  receivableLedgersCreated               ReceivableLedger[]           @relation("ReceivableLedgerCreatedBy")
-  receivableLedgersUpdated               ReceivableLedger[]           @relation("ReceivableLedgerUpdatedBy")
-  receivableLedgersVoided                ReceivableLedger[]           @relation("ReceivableLedgerVoidedBy")
-  receivableLedgerRevisions              ReceivableLedgerRevision[]   @relation("ReceivableLedgerRevisionChangedBy")
-  receivableInvoicesCreated              ReceivableInvoice[]          @relation("ReceivableInvoiceCreatedBy")
-  receivableInvoicesVoided               ReceivableInvoice[]          @relation("ReceivableInvoiceVoidedBy")
-  receivableReceiptsCreated              ReceivableReceipt[]          @relation("ReceivableReceiptCreatedBy")
-  receivableReceiptsVoided               ReceivableReceipt[]          @relation("ReceivableReceiptVoidedBy")
-  receivableAttachmentsUploaded          ReceivableAttachment[]       @relation("ReceivableAttachmentUploadedBy")
-  receivableAttachmentsVoided            ReceivableAttachment[]       @relation("ReceivableAttachmentVoidedBy")
-  receivableImportBatchesRequested       ReceivableImportBatch[]      @relation("ReceivableImportRequestedBy")
-  receivableImportBatchesApplied         ReceivableImportBatch[]      @relation("ReceivableImportAppliedBy")
-  receivableImportBatchesRolledBack      ReceivableImportBatch[]      @relation("ReceivableImportRolledBackBy")
+  receivableGrants                       ReceivableAccessGrant[]        @relation("ReceivableGrantAccount")
+  receivableGrantsGiven                  ReceivableAccessGrant[]        @relation("ReceivableGrantGrantedBy")
+  receivableGrantsRevoked                ReceivableAccessGrant[]        @relation("ReceivableGrantRevokedBy")
+  receivableConfigurationsConfirmed      ReceivableSetting[]            @relation("ReceivableConfigurationConfirmer")
+  receivableDepartmentsDeactivated       ReceivableDepartment[]         @relation("ReceivableDepartmentDeactivatedBy")
+  receivableDictionaryOptionsDeactivated ReceivableDictionaryOption[]   @relation("ReceivableDictionaryDeactivatedBy")
+  receivableLedgersCreated               ReceivableLedger[]             @relation("ReceivableLedgerCreatedBy")
+  receivableLedgersUpdated               ReceivableLedger[]             @relation("ReceivableLedgerUpdatedBy")
+  receivableLedgersVoided                ReceivableLedger[]             @relation("ReceivableLedgerVoidedBy")
+  receivableLedgerRevisions              ReceivableLedgerRevision[]     @relation("ReceivableLedgerRevisionChangedBy")
+  receivableInvoicesCreated              ReceivableInvoice[]            @relation("ReceivableInvoiceCreatedBy")
+  receivableInvoicesVoided               ReceivableInvoice[]            @relation("ReceivableInvoiceVoidedBy")
+  receivableReceiptsCreated              ReceivableReceipt[]            @relation("ReceivableReceiptCreatedBy")
+  receivableReceiptsVoided               ReceivableReceipt[]            @relation("ReceivableReceiptVoidedBy")
+  receivableAttachmentsUploaded          ReceivableAttachment[]         @relation("ReceivableAttachmentUploadedBy")
+  receivableAttachmentsVoided            ReceivableAttachment[]         @relation("ReceivableAttachmentVoidedBy")
+  receivableImportBatchesRequested       ReceivableImportBatch[]        @relation("ReceivableImportRequestedBy")
+  receivableImportBatchesApplied         ReceivableImportBatch[]        @relation("ReceivableImportAppliedBy")
+  receivableImportBatchesRolledBack      ReceivableImportBatch[]        @relation("ReceivableImportRolledBackBy")
   receivableExportJobs                   ReceivableExportJob[]
   coursewareImportSessions               CoursewareImportSession[]
-  challengePointLedgersVoided            ChallengePointLedger[]       @relation("ChallengePointLedgerVoidedBy")
-  createdAt                              DateTime                     @default(now()) @map("created_at")
-  updatedAt                              DateTime                     @updatedAt @map("updated_at")
+  challengePointLedgersVoided            ChallengePointLedger[]         @relation("ChallengePointLedgerVoidedBy")
+  contractGrants                         ContractAccessGrant[]          @relation("ContractGrantAccount")
+  contractGrantsGiven                    ContractAccessGrant[]          @relation("ContractGrantGrantedBy")
+  contractGrantsRevoked                  ContractAccessGrant[]          @relation("ContractGrantRevokedBy")
+  contractStatusChanges                  ContractProjectStatusHistory[] @relation("ContractStatusChangedBy")
+  contractAttachmentsUploaded            ContractAttachment[]           @relation("ContractAttachmentUploadedBy")
+  createdAt                              DateTime                       @default(now()) @map("created_at")
+  updatedAt                              DateTime                       @updatedAt @map("updated_at")
 
   @@index([mergedIntoAccountId])
   @@map("accounts")
@@ -388,8 +427,9 @@ model Person {
   coursewarePublishGrants CoursewarePublishGrant[]
   photoHistory            PersonPhotoHistory[]
   challengeAttempts       ChallengeAttempt[]
-  receivableGrants        ReceivableAccessGrant[]      @relation("ReceivableGrantPerson")
+  receivableGrants        ReceivableAccessGrant[]  @relation("ReceivableGrantPerson")
   challengePointLedgers   ChallengePointLedger[]
+  contractGrants          ContractAccessGrant[]    @relation("ContractGrantPerson")
   createdAt               DateTime                 @default(now()) @map("created_at")
   updatedAt               DateTime                 @updatedAt @map("updated_at")
 
@@ -475,6 +515,7 @@ model Organization {
   receivableSetting         ReceivableSetting?
   challengePointLedgers     ChallengePointLedger[]
   challengeMonthlySnapshots ChallengeMonthlyOrganizationSnapshot[]
+  contractSubcontracts      ContractSubcontract[]
   createdAt                 DateTime                               @default(now()) @map("created_at")
   updatedAt                 DateTime                               @updatedAt @map("updated_at")
 
@@ -525,24 +566,34 @@ model RoleAssignment {
 }
 
 model Project {
-  id                        String                 @id @default(uuid()) @db.Uuid
-  name                      String                 @db.VarChar(160)
-  code                      String                 @unique @db.VarChar(50)
-  responsibleOrganizationId String                 @map("responsible_organization_id") @db.Uuid
-  responsibleOrganization   Organization           @relation(fields: [responsibleOrganizationId], references: [id])
-  status                    ProjectStatus          @default(active)
-  projectType               String?                @map("project_type") @db.VarChar(120)
-  location                  String?                @db.VarChar(300)
-  contractAmount            Decimal?               @map("contract_amount") @db.Decimal(14, 2)
-  plannedStartAt            DateTime?              @map("planned_start_at") @db.Date
-  plannedEndAt              DateTime?              @map("planned_end_at") @db.Date
-  managerName               String?                @map("manager_name") @db.VarChar(80)
-  managerPhone              String?                @map("manager_phone") @db.VarChar(20)
+  id                        String                         @id @default(uuid()) @db.Uuid
+  name                      String                         @db.VarChar(160)
+  code                      String                         @unique @db.VarChar(50)
+  responsibleOrganizationId String                         @map("responsible_organization_id") @db.Uuid
+  responsibleOrganization   Organization                   @relation(fields: [responsibleOrganizationId], references: [id])
+  status                    ProjectStatus                  @default(active)
+  projectType               String?                        @map("project_type") @db.VarChar(120)
+  location                  String?                        @db.VarChar(300)
+  contractAmount            Decimal?                       @map("contract_amount") @db.Decimal(14, 2)
+  plannedStartAt            DateTime?                      @map("planned_start_at") @db.Date
+  plannedEndAt              DateTime?                      @map("planned_end_at") @db.Date
+  managerName               String?                        @map("manager_name") @db.VarChar(80)
+  managerPhone              String?                        @map("manager_phone") @db.VarChar(20)
+  contractBidStatus         ContractBidStatus?             @map("contract_bid_status")
+  contractStage             ContractProjectStage?          @map("contract_stage")
+  contractBusinessSector    String?                        @map("contract_business_sector") @db.VarChar(120)
+  contractRegisteredAt      DateTime?                      @map("contract_registered_at") @db.Date
+  contractDataSource        String?                        @map("contract_data_source") @db.VarChar(80)
+  mainContractId            String?                        @unique(map: "projects_main_contract_id_key") @map("main_contract_id") @db.Uuid
+  mainContract              ContractMainContract?          @relation(fields: [mainContractId], references: [id], onDelete: Restrict)
   members                   ProjectMember[]
   batches                   TrainingBatch[]
   monthlyReports            ProjectMonthlyReport[]
-  createdAt                 DateTime               @default(now()) @map("created_at")
-  updatedAt                 DateTime               @updatedAt @map("updated_at")
+  contractSubcontracts      ContractSubcontract[]
+  contractStatusHistory     ContractProjectStatusHistory[]
+  contractAttachments       ContractAttachment[]
+  createdAt                 DateTime                       @default(now()) @map("created_at")
+  updatedAt                 DateTime                       @updatedAt @map("updated_at")
 
   @@map("projects")
 }
@@ -570,6 +621,128 @@ model ProjectMember {
   @@map("project_members")
 }
 
+model ContractMainContract {
+  id               String               @id @default(uuid()) @db.Uuid
+  contractNo       String               @unique @map("contract_no") @db.VarChar(120)
+  rawContractNo    String?              @map("raw_contract_no") @db.VarChar(200)
+  partyA           String               @map("party_a") @db.VarChar(240)
+  amountYuan       Decimal?             @map("amount_yuan") @db.Decimal(18, 2)
+  annualAmountYuan Decimal?             @map("annual_amount_yuan") @db.Decimal(18, 2)
+  signedAt         DateTime?            @map("signed_at") @db.Date
+  handlerName      String?              @map("handler_name") @db.VarChar(80)
+  sourceNote       String?              @map("source_note") @db.VarChar(500)
+  project          Project?
+  supplements      ContractSupplement[]
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+
+  @@map("contract_main_contracts")
+}
+
+model ContractSupplement {
+  id              String               @id @default(uuid()) @db.Uuid
+  mainContractId  String               @map("main_contract_id") @db.Uuid
+  mainContract    ContractMainContract @relation(fields: [mainContractId], references: [id], onDelete: Restrict)
+  contractNo      String               @unique @map("contract_no") @db.VarChar(120)
+  amountDeltaYuan Decimal?             @map("amount_delta_yuan") @db.Decimal(18, 2)
+  signedAt        DateTime?            @map("signed_at") @db.Date
+  reason          String?              @db.VarChar(500)
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  @@index([mainContractId])
+  @@map("contract_supplements")
+}
+
+model ContractSubcontract {
+  id                   String       @id @default(uuid()) @db.Uuid
+  projectId            String       @map("project_id") @db.Uuid
+  project              Project      @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  contractNo           String       @unique @map("contract_no") @db.VarChar(120)
+  subcontractorName    String       @map("subcontractor_name") @db.VarChar(240)
+  amountYuan           Decimal?     @map("amount_yuan") @db.Decimal(18, 2)
+  scope                String?      @db.VarChar(1000)
+  signedAt             DateTime?    @map("signed_at") @db.Date
+  owningOrganizationId String       @map("owning_organization_id") @db.Uuid
+  owningOrganization   Organization @relation(fields: [owningOrganizationId], references: [id], onDelete: Restrict)
+  handlerName          String?      @map("handler_name") @db.VarChar(80)
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([owningOrganizationId])
+  @@map("contract_subcontracts")
+}
+
+model ContractProjectStatusHistory {
+  id           String                @id @default(uuid()) @db.Uuid
+  projectId    String                @map("project_id") @db.Uuid
+  project      Project               @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  fromStage    ContractProjectStage? @map("from_stage")
+  toStage      ContractProjectStage  @map("to_stage")
+  reason       String?               @db.VarChar(500)
+  changedBy    String                @map("changed_by") @db.Uuid
+  changedByRef Account               @relation("ContractStatusChangedBy", fields: [changedBy], references: [id], onDelete: Restrict)
+  createdAt    DateTime              @default(now()) @map("created_at")
+
+  @@index([projectId, createdAt])
+  @@map("contract_project_status_history")
+}
+
+model ContractAttachment {
+  id         String                      @id @default(uuid()) @db.Uuid
+  projectId  String                      @map("project_id") @db.Uuid
+  project    Project                     @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  fileId     String                      @map("file_id") @db.Uuid
+  file       PrivateFile                 @relation("ContractAttachmentFile", fields: [fileId], references: [id], onDelete: Restrict)
+  ownerType  ContractAttachmentOwnerType @map("owner_type")
+  ownerId    String?                     @map("owner_id") @db.Uuid
+  category   String?                     @db.VarChar(80)
+  note       String?                     @db.VarChar(500)
+  uploadedBy String                      @map("uploaded_by") @db.Uuid
+  uploader   Account                     @relation("ContractAttachmentUploadedBy", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  createdAt  DateTime                    @default(now()) @map("created_at")
+
+  @@index([projectId, createdAt])
+  @@index([fileId])
+  @@index([ownerType, ownerId])
+  @@map("contract_attachments")
+}
+
+model ContractAccessGrant {
+  id                   String            @id @default(uuid()) @db.Uuid
+  personId             String            @map("person_id") @db.Uuid
+  person               Person            @relation("ContractGrantPerson", fields: [personId], references: [id], onDelete: Restrict)
+  accountId            String?           @map("account_id") @db.Uuid
+  account              Account?          @relation("ContractGrantAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  role                 ContractGrantRole
+  canCreateProject     Boolean           @default(false) @map("can_create_project")
+  canEditProject       Boolean           @default(false) @map("can_edit_project")
+  canManageContracts   Boolean           @default(false) @map("can_manage_contracts")
+  canUploadAttachments Boolean           @default(false) @map("can_upload_attachments")
+  canChangeStage       Boolean           @default(false) @map("can_change_stage")
+  canExport            Boolean           @default(false) @map("can_export")
+  canViewAll           Boolean           @default(false) @map("can_view_all")
+  canManageAccess      Boolean           @default(false) @map("can_manage_access")
+  active               Boolean           @default(true)
+  revision             Int               @default(1)
+  grantedBy            String            @map("granted_by") @db.Uuid
+  grantor              Account           @relation("ContractGrantGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+  grantedAt            DateTime          @default(now()) @map("granted_at")
+  grantReason          String            @map("grant_reason") @db.VarChar(500)
+  revokedAt            DateTime?         @map("revoked_at")
+  revokedBy            String?           @map("revoked_by") @db.Uuid
+  revoker              Account?          @relation("ContractGrantRevokedBy", fields: [revokedBy], references: [id], onDelete: Restrict)
+  revokeReason         String?           @map("revoke_reason") @db.VarChar(500)
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
+
+  @@index([personId, active])
+  @@index([accountId, active])
+  @@index([role, active])
+  @@map("contract_access_grants")
+}
+
 model PrivateFile {
   id                         String                           @id @default(uuid()) @db.Uuid
   kind                       FileKind
@@ -592,6 +765,7 @@ model PrivateFile {
   receivableAttachments      ReceivableAttachment[]           @relation("ReceivableAttachmentFile")
   receivableImportBatches    ReceivableImportBatch[]          @relation("ReceivableImportOriginalFile")
   coursewareImportSources    CoursewareImportSession[]
+  contractAttachments        ContractAttachment[]             @relation("ContractAttachmentFile")
   createdAt                  DateTime                         @default(now()) @map("created_at")
   updatedAt                  DateTime                         @updatedAt @map("updated_at")
 
@@ -898,32 +1072,32 @@ model ReportField {
 }
 
 model DepartmentMonthStatus {
-  id              String       @id @default(uuid()) @db.Uuid
-  organizationId  String       @map("organization_id") @db.Uuid
-  organization    Organization @relation(fields: [organizationId], references: [id])
-  reportingYear   Int          @map("reporting_year")
-  reportingMonth  Int          @map("reporting_month")
-  noFieldProjects Boolean      @default(true) @map("no_field_projects")
-  reportType      DepartmentReportType       @default(projects) @map("report_type")
-  status          DepartmentSubmissionStatus @default(draft)
-  expectedProjectCount  Int    @default(0) @map("expected_project_count")
-  completedProjectCount Int    @default(0) @map("completed_project_count")
-  submittedAt     DateTime?    @map("submitted_at")
-  submittedBy     String?      @map("submitted_by") @db.Uuid
-  reviewedAt      DateTime?    @map("reviewed_at")
-  reviewedBy      String?      @map("reviewed_by") @db.Uuid
-  returnReason    String?      @map("return_reason") @db.VarChar(1000)
-  lockedAt        DateTime?    @map("locked_at")
-  lockedBy        String?      @map("locked_by") @db.Uuid
-  confirmedAt     DateTime?    @map("confirmed_at")
-  confirmedBy     String?      @map("confirmed_by") @db.Uuid
-  note            String?      @db.VarChar(1000)
-  active          Boolean      @default(true)
-  invalidatedAt   DateTime?    @map("invalidated_at")
-  invalidatedBy   String?      @map("invalidated_by") @db.Uuid
-  invalidReason   String?      @map("invalid_reason") @db.VarChar(500)
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
+  id                    String                     @id @default(uuid()) @db.Uuid
+  organizationId        String                     @map("organization_id") @db.Uuid
+  organization          Organization               @relation(fields: [organizationId], references: [id])
+  reportingYear         Int                        @map("reporting_year")
+  reportingMonth        Int                        @map("reporting_month")
+  noFieldProjects       Boolean                    @default(true) @map("no_field_projects")
+  reportType            DepartmentReportType       @default(projects) @map("report_type")
+  status                DepartmentSubmissionStatus @default(draft)
+  expectedProjectCount  Int                        @default(0) @map("expected_project_count")
+  completedProjectCount Int                        @default(0) @map("completed_project_count")
+  submittedAt           DateTime?                  @map("submitted_at")
+  submittedBy           String?                    @map("submitted_by") @db.Uuid
+  reviewedAt            DateTime?                  @map("reviewed_at")
+  reviewedBy            String?                    @map("reviewed_by") @db.Uuid
+  returnReason          String?                    @map("return_reason") @db.VarChar(1000)
+  lockedAt              DateTime?                  @map("locked_at")
+  lockedBy              String?                    @map("locked_by") @db.Uuid
+  confirmedAt           DateTime?                  @map("confirmed_at")
+  confirmedBy           String?                    @map("confirmed_by") @db.Uuid
+  note                  String?                    @db.VarChar(1000)
+  active                Boolean                    @default(true)
+  invalidatedAt         DateTime?                  @map("invalidated_at")
+  invalidatedBy         String?                    @map("invalidated_by") @db.Uuid
+  invalidReason         String?                    @map("invalid_reason") @db.VarChar(500)
+  createdAt             DateTime                   @default(now()) @map("created_at")
+  updatedAt             DateTime                   @updatedAt @map("updated_at")
 
   @@index([organizationId, reportingYear, reportingMonth, active], map: "department_month_statuses_organization_id_reporting_year_report")
   @@index([reportingYear, reportingMonth])
@@ -1278,30 +1452,30 @@ model ExamPaperItem {
 }
 
 model TrainingBatch {
-  id            String               @id @default(uuid()) @db.Uuid
-  businessKey   String               @unique @map("business_key") @db.VarChar(180)
-  name          String               @db.VarChar(180)
-  description   String?              @db.VarChar(1000)
-  type          TrainingType
-  source        BatchSource          @default(online)
-  templateId    String?              @map("template_id") @db.Uuid
-  template      TrainingTemplate?    @relation(fields: [templateId], references: [id])
-  projectId     String?              @map("project_id") @db.Uuid
-  project       Project?             @relation(fields: [projectId], references: [id])
-  paperId       String?              @map("paper_id") @db.Uuid
-  paper         ExamPaper?           @relation(fields: [paperId], references: [id])
-  dueAt         DateTime?            @map("due_at")
-  durationMin   Int                  @default(30) @map("duration_min")
-  passScore     Decimal              @default(80) @map("pass_score") @db.Decimal(6, 2)
-  maxAttempts   Int                  @default(3) @map("max_attempts")
-  offlineDetail Json?                @map("offline_detail")
-  paperSnapshot Json?                @map("paper_snapshot")
-  coursewareSnapshot Json            @default("[]") @map("courseware_snapshot")
-  dispatchFingerprint String?        @map("dispatch_fingerprint") @db.VarChar(64)
-  dispatchResult      Json            @default("{}") @map("dispatch_result")
-  assignments   TrainingAssignment[]
-  createdAt     DateTime             @default(now()) @map("created_at")
-  updatedAt     DateTime             @updatedAt @map("updated_at")
+  id                  String               @id @default(uuid()) @db.Uuid
+  businessKey         String               @unique @map("business_key") @db.VarChar(180)
+  name                String               @db.VarChar(180)
+  description         String?              @db.VarChar(1000)
+  type                TrainingType
+  source              BatchSource          @default(online)
+  templateId          String?              @map("template_id") @db.Uuid
+  template            TrainingTemplate?    @relation(fields: [templateId], references: [id])
+  projectId           String?              @map("project_id") @db.Uuid
+  project             Project?             @relation(fields: [projectId], references: [id])
+  paperId             String?              @map("paper_id") @db.Uuid
+  paper               ExamPaper?           @relation(fields: [paperId], references: [id])
+  dueAt               DateTime?            @map("due_at")
+  durationMin         Int                  @default(30) @map("duration_min")
+  passScore           Decimal              @default(80) @map("pass_score") @db.Decimal(6, 2)
+  maxAttempts         Int                  @default(3) @map("max_attempts")
+  offlineDetail       Json?                @map("offline_detail")
+  paperSnapshot       Json?                @map("paper_snapshot")
+  coursewareSnapshot  Json                 @default("[]") @map("courseware_snapshot")
+  dispatchFingerprint String?              @map("dispatch_fingerprint") @db.VarChar(64)
+  dispatchResult      Json                 @default("{}") @map("dispatch_result")
+  assignments         TrainingAssignment[]
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
 
   @@index([dispatchFingerprint])
   @@map("training_batches")

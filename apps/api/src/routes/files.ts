@@ -9,6 +9,7 @@ import { audit } from "../audit.js";
 import { forbidden } from "../access.js";
 import { sha256 } from "../crypto.js";
 import { readablePrivateFile } from "../private-file-access.js";
+import { resolveContractAccess } from "../contract-access.js";
 
 type Guard = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -16,7 +17,10 @@ export async function registerFileRoutes(app: FastifyInstance, deps: { env: Env;
   app.post("/api/files", { preHandler: deps.authenticate }, async (request, reply) => {
     const principal = request.principal!;
     const kind = z.object({ kind: z.enum(["photo", "signature", "courseware", "attachment"]) }).parse(request.query).kind;
-    if (!["photo", "signature"].includes(kind) && !principal.roles.some(({ role }) => ["company_admin", "org_leader", "org_admin", "project_admin"].includes(role))) forbidden("无权上传该类型文件");
+    if (!["photo", "signature"].includes(kind) && !principal.roles.some(({ role }) => ["company_admin", "org_leader", "org_admin", "project_admin"].includes(role))) {
+      const contractAccess = kind === "attachment" ? await resolveContractAccess(principal) : null;
+      if (!contractAccess?.canUploadAttachments) forbidden("无权上传该类型文件");
+    }
     const part = await request.file({ limits: { fileSize: kind === "courseware" ? 15 * 1024 * 1024 : 10 * 1024 * 1024, files: 1 } });
     if (!part) throw Object.assign(new Error("请选择文件"), { statusCode: 400, code: "FILE_REQUIRED" });
     if (kind === "photo" && !["image/jpeg", "image/png"].includes(part.mimetype)) throw Object.assign(new Error("照片只支持 JPEG/PNG"), { statusCode: 400, code: "INVALID_MIME" });

@@ -3,6 +3,7 @@ import type { Principal } from "./auth.js";
 import { prisma } from "./db.js";
 import { canReadPrivateFile, type PrivateFileFacts } from "./private-file-policy.js";
 import { resolveReceivablesAccess } from "./receivables-access.js";
+import { contractProjectWhere, resolveContractAccess } from "./contract-access.js";
 
 const organizationIds = (person: { organizations: Array<{ organizationId: string }> }) => person.organizations.map((row) => row.organizationId);
 const projectIds = (person: { projectMemberships: Array<{ projectId: string }> }) => person.projectMemberships.map((row) => row.projectId);
@@ -28,6 +29,7 @@ export async function readablePrivateFile(principal: Principal, id: string) {
     coursewareVersionAssets: { select: { coursewareVersion: { select: { courseware: { select: { scopeType: true, scopeId: true } }, progress: { select: { assignment: { select: { personId: true } } } } } } } },
     receivableAttachments: { select: { status: true, ledger: { select: { financeDepartmentId: true } } } },
     receivableImportBatches: { select: { id: true } },
+    contractAttachments: { select: { projectId: true } },
   } });
   if (!file) throw Object.assign(new Error("文件不存在"), { statusCode: 404, code: "NOT_FOUND" });
 
@@ -44,7 +46,7 @@ export async function readablePrivateFile(principal: Principal, id: string) {
   const attachedCertificates = file.certificateAttachments.flatMap((row) => row.personCertificate ? [{ personId: row.personCertificate.personId, organizationIds: organizationIds(row.personCertificate.person), projectIds: projectIds(row.personCertificate.person) }] : []);
   const facts: PrivateFileFacts = {
     uploadedBy: file.uploadedBy,
-    linked: !!(file.personPhotos.length || file.signatures.length || directCertificates.length || attachedCertificates.length || file.organizationQualifications.length || file.certificateAttachments.length || file.monthlyReportAttachments.length || file.versions.length || file.coursewareVersionAssets.length || trainingAttachments.length || requestAttachments.length || file.receivableAttachments.length || file.receivableImportBatches.length),
+    linked: !!(file.personPhotos.length || file.signatures.length || directCertificates.length || attachedCertificates.length || file.organizationQualifications.length || file.certificateAttachments.length || file.monthlyReportAttachments.length || file.versions.length || file.coursewareVersionAssets.length || trainingAttachments.length || requestAttachments.length || file.receivableAttachments.length || file.receivableImportBatches.length || file.contractAttachments.length),
     photos: file.personPhotos.map((row) => ({ personId: row.id, organizationIds: organizationIds(row), projectIds: projectIds(row) })),
     signatures: file.signatures.map((row) => ({ personId: row.personId, organizationIds: organizationIds(row.person), projectId: row.assignment.batch.projectId })),
     personCertificates: [...directCertificates, ...attachedCertificates],
@@ -58,7 +60,16 @@ export async function readablePrivateFile(principal: Principal, id: string) {
     requestAttachments,
     receivableAttachments: file.receivableAttachments.map(({ status, ledger }) => ({ financeDepartmentId: ledger.financeDepartmentId, status })),
     receivableImportBatches: file.receivableImportBatches.map(() => ({})),
+    contractAttachments: [],
   };
+  if (file.contractAttachments.length) {
+    const contractAccess = await resolveContractAccess(principal);
+    const requestedIds = [...new Set(file.contractAttachments.map(({ projectId }) => projectId))];
+    const readableIds = contractAccess.canEnter
+      ? new Set((await prisma.project.findMany({ where: { id: { in: requestedIds }, ...contractProjectWhere(contractAccess) }, select: { id: true } })).map(({ id }) => id))
+      : new Set<string>();
+    facts.contractAttachments = file.contractAttachments.map(({ projectId }) => ({ readable: readableIds.has(projectId) }));
+  }
   const receivablesAccess = facts.receivableAttachments.length || facts.receivableImportBatches.length ? await resolveReceivablesAccess(principal) : undefined;
   if (!canReadPrivateFile({ ...principal, ...(receivablesAccess ? { receivablesAccess } : {}) }, facts)) throw Object.assign(new Error("无权读取该私有文件"), { statusCode: 403, code: "SCOPE_FORBIDDEN" });
   return { storageKey: file.storageKey, originalName: file.originalName, mimeType: file.mimeType, size: file.size, sha256: file.sha256 };

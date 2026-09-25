@@ -24,6 +24,7 @@ import { registerQualificationRoutes } from "./routes/qualifications.js";
 import { registerProjectReportingRoutes } from "./routes/project-reporting.js";
 import { registerSensitiveExportRoutes } from "./routes/sensitive-exports.js";
 import { registerReceivablesRoutes } from "./routes/receivables.js";
+import { registerContractRoutes } from "./routes/contracts.js";
 import { cleanupExpiredSensitiveExports } from "./sensitive-export.js";
 import { cleanupExpiredReceivablesExports, processPendingReceivablesExports } from "./receivables-export.js";
 import { assertCsrfRequest } from "./csrf.js";
@@ -71,6 +72,7 @@ await registerQualificationRoutes(app, { env, authenticate: guards.authenticate 
 await registerProjectReportingRoutes(app, { authenticate: guards.authenticate });
 await registerSensitiveExportRoutes(app, { env, ...guards });
 await registerReceivablesRoutes(app, { authenticate: guards.authenticate, enableAccessSmokeRoute: env.NODE_ENV === "test" && process.env.RECEIVABLES_ACCESS_SMOKE === "1" });
+await registerContractRoutes(app, { authenticate: guards.authenticate });
 await registerPhoneAuthRoutes(app, { env, authenticate: guards.authenticate });
 await registerWechatWebAuthRoutes(app, { env, authenticate: guards.authenticate, requireManager: guards.requireManager });
 

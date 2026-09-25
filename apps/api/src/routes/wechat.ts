@@ -17,6 +17,7 @@ import { sendPhoneVerificationCode, verifiedPhoneCode } from "./phone-auth.js";
 import { autoDispatchInTransaction } from "./day2.js";
 import { setCsrfCookie } from "../csrf.js";
 import { getWechatPhoneNumber } from "../wechat-api.js";
+import { isSafetyEligibleProject, safetyEligibleProjectWhere } from "../contract-project-eligibility.js";
 import { issueWechatPhoneVerificationToken, verifyWechatPhoneVerificationToken, issueWechatSmsVerificationToken, verifyWechatSmsVerificationToken } from "../wechat-phone-verification.js";
 import { decideWebLoginDestination, safetyWebRoleNames } from "../web-login-access.js";
 import { resolveReceivablesAccess } from "../receivables-access.js";
@@ -249,7 +250,7 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
     }).parse(request.body);
     const accountId = request.principal!.accountId;
     const [project, contractorOrganization] = await Promise.all([
-      prisma.project.findFirst({ where: { id: input.projectId, status: "active", responsibleOrganization: { type: "business_entity" } }, select: { responsibleOrganizationId: true } }),
+      prisma.project.findFirst({ where: { id: input.projectId, status: "active", responsibleOrganization: { type: "business_entity" }, ...safetyEligibleProjectWhere }, select: { responsibleOrganizationId: true } }),
       input.organizationId ? prisma.organization.findUnique({ where: { id: input.organizationId }, select: { type: true } }) : null
     ]);
     if (!project) throw Object.assign(new Error("所选项目不存在或不可申请"), { statusCode: 400, code: "INVALID_PROJECT" });
@@ -389,10 +390,10 @@ export async function registerWechatRoutes(app: FastifyInstance, deps: { env: En
         prisma.person.findFirst({ where: { phone: payload.phone, status: "active" }, select: { id: true } }),
         payload.contractorOrganizationId ?? payload.organizationId ? prisma.organization.findUnique({ where: { id: (payload.contractorOrganizationId ?? payload.organizationId)! }, select: { type: true } }) : null,
         prisma.privateFile.findUnique({ where: { id: payload.photoFileId }, select: { id: true, kind: true, uploadedBy: true } }),
-        prisma.project.findUnique({ where: { id: change.projectId }, select: { status: true, responsibleOrganizationId: true, responsibleOrganization: { select: { type: true } } } })
+        prisma.project.findUnique({ where: { id: change.projectId }, select: { status: true, responsibleOrganizationId: true, contractStage: true, contractDataSource: true, contractBidStatus: true, mainContract: { select: { signedAt: true } }, responsibleOrganization: { select: { type: true } } } })
       ]);
       if (duplicate) throw Object.assign(new Error("手机号已有在用档案，请改为绑定申请"), { statusCode: 409, code: "PHONE_EXISTS" });
-      if (!project || project.status !== "active" || project.responsibleOrganization.type !== "business_entity" || (payload.responsibleOrganizationId && payload.responsibleOrganizationId !== project.responsibleOrganizationId) || (payload.type === "contractor" && contractorOrganization?.type !== "contractor")) {
+      if (!project || project.status !== "active" || !isSafetyEligibleProject(project) || project.responsibleOrganization.type !== "business_entity" || (payload.responsibleOrganizationId && payload.responsibleOrganizationId !== project.responsibleOrganizationId) || (payload.type === "contractor" && contractorOrganization?.type !== "contractor")) {
         throw Object.assign(new Error("申请的组织、照片或项目已不可用"), { statusCode: 409, code: "REGISTRATION_CONTEXT_INVALID" });
       }
       try {
