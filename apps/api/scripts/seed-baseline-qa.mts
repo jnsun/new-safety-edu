@@ -1,7 +1,12 @@
+import { isIP } from "node:net";
 import argon2 from "argon2";
 import { assertPasswordAllowed } from "../src/auth-security.js";
-import { grantRole } from "../src/identity.js";
+import { resolveContractAccess } from "../src/contract-access.js";
+import { grantRole, revokeRole } from "../src/identity.js";
+import { resolveReceivablesAccess } from "../src/receivables-access.js";
+import { canSubmitMonthlyFacts, reportingOrganizationIds } from "../src/project-reporting-policy.js";
 import { prisma } from "../src/db.js";
+import { hasSafetyWebRole } from "../src/web-login-access.js";
 
 const identities = [
   "QA_ALL_ACCESS",
@@ -30,6 +35,13 @@ function assertTestEnvironment() {
   }
 }
 
+function isPrivateDatabaseAddress(value: string | null): boolean {
+  const address = value?.split("/", 1)[0];
+  if (!address || isIP(address) !== 4) return false;
+  const [a, b] = address.split(".").map(Number);
+  return a === 10 || (a === 172 && b! >= 16 && b! <= 31) || (a === 192 && b === 168);
+}
+
 async function readInput(): Promise<FixtureInput> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
@@ -54,11 +66,15 @@ async function upsertIdentity(identity: Identity, password: string) {
   const existingAccount = await prisma.account.findUnique({ where: { usernameNormalized: username }, select: { id: true, personId: true } });
   if (existingAccount && existingAccount.personId !== person.id) throw new Error(`QA username collision: ${identity}`);
   if (person.account && person.account.id !== existingAccount?.id) throw new Error(`QA account association collision: ${identity}`);
+  const fixtureMarker = existingAccount ? await prisma.userPreference.findUnique({ where: { accountId_key: { accountId: existingAccount.id, key: "baseline-qa-fixture" } }, select: { value: true } }) : null;
+  if (fixtureMarker && (fixtureMarker.value as { fixture?: string; identity?: string }).fixture !== "baseline-qa-fixture-v1") throw new Error(`QA identity ownership marker collision: ${identity}`);
+  if (fixtureMarker && (fixtureMarker.value as { identity?: string }).identity !== identity) throw new Error(`QA identity marker mismatch: ${identity}`);
   assertPasswordAllowed(password, { username, phone, name });
   const passwordHash = await argon2.hash(password);
   const account = existingAccount
     ? await prisma.account.update({ where: { id: existingAccount.id }, data: { username, passwordHash, passwordLoginEnabled: true, mustChangePassword: false, status: "active", failedLoginCount: 0, loginLockedUntil: null, sessionVersion: { increment: 1 } } })
     : await prisma.account.create({ data: { username, usernameNormalized: username, passwordHash, passwordLoginEnabled: true, mustChangePassword: false, status: "active", personId: person.id } });
+  await prisma.userPreference.upsert({ where: { accountId_key: { accountId: account.id, key: "baseline-qa-fixture" } }, create: { accountId: account.id, key: "baseline-qa-fixture", value: { fixture: "baseline-qa-fixture-v1", identity } }, update: { value: { fixture: "baseline-qa-fixture-v1", identity } } });
   return { personId: person.id, accountId: account.id };
 }
 
@@ -76,8 +92,20 @@ async function ensureMembership(personId: string, organizationId: string) {
   await prisma.organizationMembership.create({ data: { personId, organizationId, active: true, primary: true } });
 }
 
-async function ensureRole(personId: string, actorId: string, role: "company_admin" | "field_reporter", scopeId: string | null) {
+async function ensureRole(personId: string, actorId: string, role: "company_admin" | "field_reporter" | "org_admin", scopeId: string | null) {
   await prisma.$transaction((tx) => grantRole(tx, { personId, role, scopeType: scopeId ? "organization" : "company", scopeId, actorId, reason: "BASELINE QA fixture" }));
+}
+
+type FixtureRole = { role: "company_admin" | "field_reporter" | "org_admin"; scopeId: string | null };
+async function reconcileIdentityRoles(personId: string, actorId: string, expected: FixtureRole[]) {
+  const current = await prisma.roleAssignment.findMany({ where: { personId, OR: [{ active: true }, { activationPending: true }] }, select: { id: true, role: true, scopeType: true, scopeId: true } });
+  for (const assignment of current) {
+    const isExpected = expected.some(({ role, scopeId }) => assignment.role === role && assignment.scopeType === (scopeId ? "organization" : "company") && assignment.scopeId === scopeId);
+    if (!isExpected) {
+      await prisma.$transaction((tx) => revokeRole(tx, { roleId: assignment.id, actorId, reason: "BASELINE QA fixture role reconciliation" }));
+    }
+  }
+  for (const role of expected) await ensureRole(personId, actorId, role.role, role.scopeId);
 }
 
 async function ensureContractGrant(input: { personId: string; accountId: string; actorId: string; role: "admin" | "editor"; organizationScoped: boolean }) {
@@ -103,12 +131,34 @@ async function ensureContractGrant(input: { personId: string; accountId: string;
   else await prisma.contractAccessGrant.create({ data: grant });
 }
 
-async function ensureReceivableGrant(input: { personId: string; accountId: string; actorId: string }) {
+async function ensureQaFinanceDepartment() {
+  const name = "BASELINE-TEST-RECEIVABLES";
+  const code = "QA-BASELINE-TEST";
+  const [byName, byCode] = await Promise.all([
+    prisma.receivableDepartment.findUnique({ where: { name } }),
+    prisma.receivableDepartment.findUnique({ where: { code } }),
+  ]);
+  if (byName && byCode && byName.id !== byCode.id) throw new Error("QA finance department ownership collision");
+  const existing = byName ?? byCode;
+  if (existing && (existing.name !== name || existing.code !== code)) throw new Error("QA finance department marker collision");
+  return existing
+    ? prisma.receivableDepartment.update({ where: { id: existing.id }, data: { active: true, showReceivables: true } })
+    : prisma.receivableDepartment.create({ data: { name, code, active: true, showReceivables: true } });
+}
+
+async function ensureReceivableGrant(input: { personId: string; accountId: string; actorId: string; financeDepartmentId: string; role: "admin" | "readonly" }) {
   const current = await prisma.receivableAccessGrant.findMany({ where: { personId: input.personId, active: true, revokedAt: null }, select: { id: true } });
   if (current.length > 1) throw new Error("QA receivable grant is ambiguous");
-  const grant = { personId: input.personId, accountId: input.accountId, role: "admin" as const, active: true, grantedBy: input.actorId };
-  if (current[0]) await prisma.receivableAccessGrant.update({ where: { id: current[0].id }, data: { ...grant, revision: { increment: 1 }, revokedAt: null, revokedBy: null, revokeReason: null } });
-  else await prisma.receivableAccessGrant.create({ data: grant });
+  const grant = { personId: input.personId, accountId: input.accountId, role: input.role, active: true, grantedBy: input.actorId };
+  const saved = current[0]
+    ? await prisma.receivableAccessGrant.update({ where: { id: current[0].id }, data: { ...grant, revision: { increment: 1 }, revokedAt: null, revokedBy: null, revokeReason: null } })
+    : await prisma.receivableAccessGrant.create({ data: grant });
+  await prisma.receivableGrantDepartment.deleteMany({ where: { grantId: saved.id, financeDepartmentId: { not: input.financeDepartmentId } } });
+  await prisma.receivableGrantDepartment.upsert({
+    where: { grantId_financeDepartmentId: { grantId: saved.id, financeDepartmentId: input.financeDepartmentId } },
+    create: { grantId: saved.id, financeDepartmentId: input.financeDepartmentId, canRead: true, canWrite: false },
+    update: { canRead: true, canWrite: false },
+  });
 }
 
 async function upsertTestProject(input: { code: string; name: string; organizationId: string; stage: "bid_preparation" | "field_work"; bidStatus: "bidding" | "won"; mainContractNo?: string; actorId: string }) {
@@ -133,8 +183,9 @@ async function seedFinanceRows(departmentId: string, createdBy: string) {
   for (let index = 1; index <= 25; index += 1) {
     const suffix = String(index).padStart(3, "0");
     const contractNo = `BASELINE-TEST-F02-${suffix}`;
-    const existing = await prisma.receivableLedger.findUnique({ where: { contractNoNormalized: contractNo }, select: { id: true, contractNo: true } });
+    const existing = await prisma.receivableLedger.findUnique({ where: { contractNoNormalized: contractNo }, select: { id: true, contractNo: true, projectName: true, customerName: true } });
     if (existing && existing.contractNo !== contractNo) throw new Error(`QA finance marker collision: ${contractNo}`);
+    if (existing && (!existing.projectName?.startsWith("BASELINE-TEST-F02-PROJECT-") || !existing.customerName?.startsWith("QA-TEST-CUSTOMER-"))) throw new Error(`QA finance ownership collision: ${contractNo}`);
     const data = { financeDepartmentId: departmentId, contractNo, contractNoNormalized: contractNo, projectName: `BASELINE-TEST-F02-PROJECT-${suffix}`, customerName: `QA-TEST-CUSTOMER-${suffix}`, creditorUnit: `QA-TEST-UNIT-${suffix}`, workNature: "BASELINE-TEST", contractAmount: String(100000 + index * 1000), finalAmount: String(100000 + index * 1000), createdBy };
     if (existing) await prisma.receivableLedger.update({ where: { id: existing.id }, data });
     else { await prisma.receivableLedger.create({ data }); created += 1; }
@@ -144,11 +195,14 @@ async function seedFinanceRows(departmentId: string, createdBy: string) {
 
 async function main() {
   assertTestEnvironment();
+  const databaseIdentity = await prisma.$queryRaw<Array<{ database: string; address: string | null }>>`SELECT current_database() AS database, inet_server_addr()::text AS address`;
+  if (databaseIdentity[0]?.database !== "safety_training_test" || !isPrivateDatabaseAddress(databaseIdentity[0]?.address ?? null)) {
+    throw new Error("Connected PostgreSQL identity is not the isolated safety_training_test service; no fixture writes performed");
+  }
   const { passwords } = await readInput();
   const existingAdmin = await prisma.roleAssignment.findFirst({ where: { role: "company_admin", scopeType: "company", active: true, account: { status: "active" } }, select: { accountId: true } });
   const financeSetting = await prisma.receivableSetting.findUnique({ where: { id: 1 }, select: { financeOrganizationId: true, configurationConfirmedAt: true } });
-  const financeDepartments = await prisma.receivableDepartment.findMany({ where: { active: true }, orderBy: { sortOrder: "asc" }, select: { id: true } });
-  if (!existingAdmin?.accountId || !financeSetting?.financeOrganizationId || !financeSetting.configurationConfirmedAt || !financeDepartments.length) {
+  if (!existingAdmin?.accountId || !financeSetting?.financeOrganizationId || !financeSetting.configurationConfirmedAt) {
     throw new Error("Existing test financial configuration or company administrator is unavailable; no fixture writes performed");
   }
 
@@ -160,12 +214,17 @@ async function main() {
   await ensureMembership(accounts.QA_MONTHLY_REPORT.personId, entityA.id);
   await ensureMembership(accounts.QA_SAFETY_ONLY.personId, entityA.id);
   await ensureMembership(accounts.QA_CONTRACT_SCOPED.personId, entityA.id);
-  await ensureRole(accounts.QA_ALL_ACCESS.personId, existingAdmin.accountId, "company_admin", null);
-  await ensureRole(accounts.QA_MONTHLY_REPORT.personId, existingAdmin.accountId, "field_reporter", entityA.id);
-  await ensureRole(accounts.QA_SAFETY_ONLY.personId, existingAdmin.accountId, "field_reporter", entityA.id);
+  await reconcileIdentityRoles(accounts.QA_ALL_ACCESS.personId, existingAdmin.accountId, [{ role: "company_admin", scopeId: null }, { role: "field_reporter", scopeId: entityA.id }]);
+  await reconcileIdentityRoles(accounts.QA_MONTHLY_REPORT.personId, existingAdmin.accountId, [{ role: "field_reporter", scopeId: entityA.id }]);
+  await reconcileIdentityRoles(accounts.QA_RECEIVABLE.personId, existingAdmin.accountId, []);
+  await reconcileIdentityRoles(accounts.QA_CONTRACT_GLOBAL.personId, existingAdmin.accountId, []);
+  await reconcileIdentityRoles(accounts.QA_CONTRACT_SCOPED.personId, existingAdmin.accountId, []);
+  await reconcileIdentityRoles(accounts.QA_SAFETY_ONLY.personId, existingAdmin.accountId, [{ role: "org_admin", scopeId: entityA.id }]);
+  await reconcileIdentityRoles(accounts.QA_NO_ACCESS.personId, existingAdmin.accountId, []);
 
-  await ensureReceivableGrant({ ...accounts.QA_ALL_ACCESS, actorId: existingAdmin.accountId });
-  await ensureReceivableGrant({ ...accounts.QA_RECEIVABLE, actorId: existingAdmin.accountId });
+  const financeDepartment = await ensureQaFinanceDepartment();
+  await ensureReceivableGrant({ ...accounts.QA_ALL_ACCESS, actorId: existingAdmin.accountId, financeDepartmentId: financeDepartment.id, role: "admin" });
+  await ensureReceivableGrant({ ...accounts.QA_RECEIVABLE, actorId: existingAdmin.accountId, financeDepartmentId: financeDepartment.id, role: "readonly" });
   await ensureContractGrant({ ...accounts.QA_ALL_ACCESS, actorId: existingAdmin.accountId, role: "admin", organizationScoped: false });
   await ensureContractGrant({ ...accounts.QA_CONTRACT_GLOBAL, actorId: existingAdmin.accountId, role: "admin", organizationScoped: false });
   await ensureContractGrant({ ...accounts.QA_CONTRACT_SCOPED, actorId: existingAdmin.accountId, role: "editor", organizationScoped: true });
@@ -173,19 +232,36 @@ async function main() {
   await upsertTestProject({ code: "BASELINE-TEST-PROJECT-A", name: "BASELINE-TEST-PROJECT-A", organizationId: entityA.id, stage: "field_work", bidStatus: "won", mainContractNo: "BASELINE-TEST-CONTRACT-A-001", actorId: existingAdmin.accountId });
   await upsertTestProject({ code: "BASELINE-TEST-PROJECT-B", name: "BASELINE-TEST-PROJECT-B", organizationId: entityB.id, stage: "field_work", bidStatus: "won", mainContractNo: "BASELINE-TEST-CONTRACT-B-001", actorId: existingAdmin.accountId });
   await upsertTestProject({ code: "BASELINE-TEST-UNSIGNED-GATE", name: "BASELINE-TEST-UNSIGNED-GATE", organizationId: entityA.id, stage: "bid_preparation", bidStatus: "bidding", actorId: existingAdmin.accountId });
-  const addedFinanceRows = await seedFinanceRows(financeDepartments[0]!.id, accounts.QA_RECEIVABLE.accountId);
+  const addedFinanceRows = await seedFinanceRows(financeDepartment.id, accounts.QA_RECEIVABLE.accountId);
   const openPeriods = await prisma.reportingPeriod.count({ where: { status: { in: ["open", "review"] } } });
 
+  const expected = {
+    QA_ALL_ACCESS: { safety: true, finance: true, contracts: true, monthly: true },
+    QA_MONTHLY_REPORT: { safety: true, finance: false, contracts: false, monthly: true },
+    QA_RECEIVABLE: { safety: false, finance: true, contracts: false, monthly: false },
+    QA_CONTRACT_GLOBAL: { safety: false, finance: false, contracts: true, monthly: false },
+    QA_CONTRACT_SCOPED: { safety: false, finance: false, contracts: true, monthly: false },
+    QA_SAFETY_ONLY: { safety: true, finance: false, contracts: false, monthly: false },
+    QA_NO_ACCESS: { safety: false, finance: false, contracts: false, monthly: false },
+  } satisfies Record<Identity, { safety: boolean; finance: boolean; contracts: boolean; monthly: boolean }>;
   const matrix = await Promise.all(identities.map(async (identity) => {
     const personId = accounts[identity].personId;
-    const [roles, financeGrants, contractGrants] = await Promise.all([
-      prisma.roleAssignment.findMany({ where: { personId, active: true }, select: { role: true, scopeType: true } }),
-      prisma.receivableAccessGrant.count({ where: { personId, active: true, revokedAt: null } }),
-      prisma.contractAccessGrant.count({ where: { personId, active: true, revokedAt: null } }),
+    const [account, roles] = await Promise.all([
+      prisma.account.findUniqueOrThrow({ where: { id: accounts[identity].accountId }, select: { status: true } }),
+      prisma.roleAssignment.findMany({ where: { personId, active: true, activationPending: false }, select: { role: true, scopeType: true, scopeId: true } }),
     ]);
-    return { identity, safety: roles.some((row) => row.role === "company_admin" || row.role === "field_reporter"), finance: financeGrants > 0, contracts: contractGrants > 0 };
+    const [finance, contracts] = await Promise.all([
+      resolveReceivablesAccess({ accountId: accounts[identity].accountId, roles }, prisma),
+      resolveContractAccess({ accountId: accounts[identity].accountId }, prisma),
+    ]);
+    const actual = { safety: account.status === "active" && hasSafetyWebRole(roles), finance: finance.canEnter, contracts: contracts.canEnter, monthly: account.status === "active" && canSubmitMonthlyFacts({ roles }) };
+    if (identity === "QA_MONTHLY_REPORT") assert.deepEqual(reportingOrganizationIds({ roles }), [entityA.id], "Monthly report identity must be limited to its assigned QA entity");
+    if (identity === "QA_CONTRACT_SCOPED") assert.deepEqual(contracts.organizationIds, [entityA.id], "Scoped contract identity must be limited to Entity A");
+    assert.deepEqual(actual, expected[identity], `Authorization resolver mismatch for ${identity}`);
+    if (identity === "QA_RECEIVABLE") assert.equal(finance.canWriteLedger, false, "QA_RECEIVABLE must remain read-only");
+    return { identity, ...actual };
   }));
-  console.log(JSON.stringify({ fixture: "BASELINE_QA_READY", testOnly: true, idempotent: true, identities: identities.map((identity) => `${identity} ready`), matrix, qaFinanceRowsAdded: addedFinanceRows, writableReportingPeriods: openPeriods }));
+  console.log(JSON.stringify({ fixture: "BASELINE_QA_READY", testOnly: true, idempotent: true, identities: identities.map((identity) => `${identity} ready`), matrix, qaFinanceRowsAdded: addedFinanceRows, financeDepartment: "BASELINE-TEST-RECEIVABLES", writableReportingPeriods: openPeriods }));
 }
 
 main().catch(() => {
