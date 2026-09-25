@@ -247,10 +247,19 @@ async function main() {
   const matrix: Array<{ identity: Identity; safety: boolean; finance: boolean; contracts: boolean; monthly: boolean }> = [];
   for (const identity of identities) {
     const personId = accounts[identity].personId;
-    const [account, roles] = await Promise.all([
+    const [account, roleRows] = await Promise.all([
       prisma.account.findUniqueOrThrow({ where: { id: accounts[identity].accountId }, select: { status: true } }),
       prisma.roleAssignment.findMany({ where: { personId, active: true, activationPending: false }, select: { role: true, scopeType: true, scopeId: true } }),
     ]);
+    const organizationIds = roleRows.filter((role) => role.scopeType === "organization" && role.scopeId).map((role) => role.scopeId!);
+    const organizations = organizationIds.length
+      ? await prisma.organization.findMany({ where: { id: { in: organizationIds } }, select: { id: true, type: true } })
+      : [];
+    const organizationTypes = new Map(organizations.map((organization) => [organization.id, organization.type]));
+    const roles = roleRows.map((role) => {
+      const organizationType = role.scopeType === "organization" && role.scopeId ? organizationTypes.get(role.scopeId) : undefined;
+      return organizationType ? { ...role, organizationType } : role;
+    });
     const [finance, contracts] = await Promise.all([
       resolveReceivablesAccess({ accountId: accounts[identity].accountId, roles }, prisma),
       resolveContractAccess({ accountId: accounts[identity].accountId }, prisma),
