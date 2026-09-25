@@ -57,6 +57,7 @@
     "check:context-closure": "tsx scripts/check-context-closure.mts",
     "retention": "tsx scripts/run-retention.mts",
     "admin:recovery": "tsx scripts/admin-recovery.mts",
+    "seed:baseline-qa": "tsx scripts/seed-baseline-qa.mts",
     "files:cleanup-orphans": "tsx scripts/cleanup-orphan-files.mts",
     "audit:replay": "tsx scripts/replay-audit-fallback.mts",
     "capacity:check": "tsx scripts/check-capacity.mts",
