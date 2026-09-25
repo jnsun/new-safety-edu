@@ -42,12 +42,15 @@ export function monthlySubmissionReadiness(input: {
   projects: Array<{ reportStatus?: string | undefined }>;
 }) {
   const completedCount = input.projects.filter((project) => !!project.reportStatus).length;
-  const submittableCount = input.projects.filter((project) => project.reportStatus === "draft" || project.reportStatus === "withdrawn").length;
+  const missingReportCount = input.projects.filter((project) => !project.reportStatus).length;
+  const unsupportedStatusCount = input.projects.filter((project) => !!project.reportStatus && !["draft", "withdrawn", "submitted"].includes(project.reportStatus)).length;
   const reasons = [
     ...(!input.organizationEnabled ? ["该经营实体未启用月报"] : []),
     ...(!["open", "review"].includes(input.periodStatus) ? ["该月份尚未开放或已经锁定"] : []),
     ...(input.submissionStatus && !["draft", "rejected"].includes(input.submissionStatus) ? ["该经营实体本月报送已提交，不能重复提交"] : []),
-    ...(input.projects.length > submittableCount ? ["仍有项目未保存可提交的月报草稿"] : []),
+    ...(missingReportCount > 0 ? ["仍有项目未保存可提交的月报草稿"] : []),
+    ...(unsupportedStatusCount > 0 ? ["存在不能整批提交的项目月报状态，请联系管理员核查"] : []),
+    ...(input.projects.some((project) => project.reportStatus === "submitted") && (!input.submissionStatus || ["draft", "rejected"].includes(input.submissionStatus)) ? ["项目月报已提交但整批状态不匹配，请联系管理员核查"] : []),
   ];
   return { expectedCount: input.projects.length, completedCount, ready: reasons.length === 0, reasons };
 }

@@ -22,6 +22,8 @@ assert.equal(monthlySubmissionReadiness({ organizationEnabled: true, periodStatu
 assert.equal(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "locked", projects: [] }).ready, false);
 assert.equal(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", submissionStatus: "submitted", projects: [{ reportStatus: "submitted" }] }).ready, false);
 assert.equal(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", submissionStatus: "submitted", projects: [{ reportStatus: "submitted" }] }).completedCount, 1);
+assert.deepEqual(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", submissionStatus: "submitted", projects: [{ reportStatus: "submitted" }] }).reasons, ["该经营实体本月报送已提交，不能重复提交"]);
+assert.deepEqual(monthlySubmissionReadiness({ organizationEnabled: true, periodStatus: "open", submissionStatus: "draft", projects: [{ reportStatus: "submitted" }] }).reasons, ["项目月报已提交但整批状态不匹配，请联系管理员核查"]);
 assert.equal(nextSubmissionStatus("draft", "submit"), "submitted");
 assert.equal(nextSubmissionStatus("rejected", "submit"), "submitted");
 assert.throws(() => nextSubmissionStatus("submitted", "confirm" as never), /状态不允许/);
