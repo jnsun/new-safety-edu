@@ -1405,6 +1405,7 @@ export function MonthlyReportsPage() {
   const [form] = Form.useForm();
   const [newProjectForm] = Form.useForm();
   const selectedDraftProjectId = Form.useWatch("projectId", form);
+  const hasSafetyHazards = Form.useWatch("safetyHazards", form);
   const [typeForm] = Form.useForm();
   const [typeEditForm] = Form.useForm();
   const [fieldForm] = Form.useForm();
@@ -2422,7 +2423,7 @@ export function MonthlyReportsPage() {
                 <Checkbox>是</Checkbox>
               </Form.Item>
             </Col>
-            {Form.useWatch("safetyHazards", form) && (
+            {hasSafetyHazards && (
               <Col span={24}>
                 <Form.Item
                   name="safetyHazardDetail"

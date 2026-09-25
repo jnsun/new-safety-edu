@@ -25,5 +25,7 @@ assert.ok(page.includes('disabled={!preflight.data?.ready}'), "blocked batch mus
 assert.ok(page.includes('setBatchResult(result)'), "success state must use server result");
 assert.ok(page.includes('readSnapshotField(previousSnapshot'), "history revision comparison missing");
 assert.ok(!page.includes('action: "confirm"'), "company review must not require per-batch confirmation");
+assert.match(page, /const hasSafetyHazards = Form\.useWatch\("safetyHazards", form\);/, "conditional form rendering must watch safetyHazards unconditionally at component top level");
+assert.ok(!page.includes('{Form.useWatch("safetyHazards", form)'), "do not invoke React hooks conditionally in the draft form tree");
 
 console.log("MONTHLY_REPORT_UI_STATIC_OK (route/state/source checks only; not browser E2E)");
