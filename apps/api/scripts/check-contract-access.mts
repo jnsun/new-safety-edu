@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { decideContractAccess, contractProjectWhere, selectSingleContractGrant } from "../src/contract-access.js";
+import { assertContractProjectWritable, decideContractAccess, contractProjectWhere, selectSingleContractGrant } from "../src/contract-access.js";
 import { canReadPrivateFile, type PrivateFileFacts } from "../src/private-file-policy.js";
 import { contractStageTransitions, quoteContractCsvCell } from "../src/routes/contracts.js";
 import { isSafetyEligibleProject, safetyEligibleProjectWhere } from "../src/contract-project-eligibility.js";
@@ -11,6 +11,23 @@ assert.equal(scoped.canEnter, true);
 assert.deepEqual(scoped.organizationIds, ["org-a", "org-b"]);
 assert.equal(scoped.canManageContracts, true);
 assert.deepEqual(contractProjectWhere(scoped), { contractStage: { not: null }, OR: [{ responsibleOrganizationId: { in: ["org-a", "org-b"] } }, { contractSubcontracts: { some: { owningOrganizationId: { in: ["org-a", "org-b"] } } } }] });
+
+let writeVisibilityQuery: unknown;
+await assert.rejects(
+  () => assertContractProjectWritable(scoped, "project-outside-scope", {
+    project: { findFirst: async (query: unknown) => { writeVisibilityQuery = query; return null; } },
+  } as never),
+  (error: unknown) => (error as { statusCode?: number; code?: string }).statusCode === 404
+    && (error as { code?: string }).code === "CONTRACT_PROJECT_NOT_FOUND",
+  "out-of-scope project writes must conceal whether the project exists",
+);
+assert.deepEqual(writeVisibilityQuery, {
+  where: { id: "project-outside-scope", contractStage: { not: null }, responsibleOrganizationId: { in: ["org-a", "org-b"] } },
+  select: { id: true },
+}, "write visibility must preserve the original responsible-organization scope and not broaden to subcontract visibility");
+await assertContractProjectWritable(scoped, "project-in-scope", {
+  project: { findFirst: async () => ({ id: "project-in-scope" }) },
+} as never);
 
 const safetyAdminWithoutContractGrant = decideContractAccess({ accountActive: true, personActive: true, grant: null, organizationIds: ["org-a"] });
 assert.equal(safetyAdminWithoutContractGrant.canEnter, false);
@@ -42,6 +59,8 @@ assert.equal(canReadPrivateFile({ accountId: "reader", personId: "person", roles
 assert.equal(canReadPrivateFile({ accountId: "reader", personId: "person", roles: [], receivablesAccess: { role: "readonly", canReadLedger: false, canViewAll: false, readDepartmentIds: [] } }, { ...emptyFacts, contractAttachments: [{ readable: true }], receivableAttachments: [{ financeDepartmentId: "finance", status: "active" }] }), false, "合同关联不能绕过财务文件保护");
 
 const schema = await readFile(new URL("../../../prisma/schema.prisma", import.meta.url), "utf8");
+const routes = await readFile(new URL("../src/routes/contracts.ts", import.meta.url), "utf8");
+assert.ok((routes.match(/assertContractProjectWritable\(access, projectId\)/g) ?? []).length >= 6, "all project and contract mutation routes must retain the scoped, non-disclosing write guard");
 assert.match(schema, /mainContractId\s+String\?/);
 assert.match(schema, /mainContractId\s+String\?[^\n]*@unique/, "一份主合同必须只能关联一个项目");
 assert.match(schema, /project\s+Project\?/);

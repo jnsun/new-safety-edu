@@ -140,9 +140,13 @@ export async function assertContractProjectVisible(access: ContractAccess, proje
   if (!found) throw Object.assign(new Error("项目不存在或无权访问"), { statusCode: 404, code: "CONTRACT_PROJECT_NOT_FOUND" });
 }
 
-export async function assertContractProjectWritable(access: ContractAccess, projectId: string): Promise<void> {
+export async function assertContractProjectWritable(
+  access: ContractAccess,
+  projectId: string,
+  db: Pick<Prisma.TransactionClient, "project"> = prisma,
+): Promise<void> {
   requireContractAccess(access, "enter");
-  const found = await prisma.project.findFirst({
+  const found = await db.project.findFirst({
     where: {
       id: projectId,
       contractStage: { not: null },
@@ -150,5 +154,5 @@ export async function assertContractProjectWritable(access: ContractAccess, proj
     },
     select: { id: true },
   });
-  if (!found) throw Object.assign(new Error("项目不属于可编辑的责任经营实体"), { statusCode: 403, code: "CONTRACT_PROJECT_WRITE_FORBIDDEN" });
+  if (!found) throw Object.assign(new Error("项目不存在或无权访问"), { statusCode: 404, code: "CONTRACT_PROJECT_NOT_FOUND" });
 }
