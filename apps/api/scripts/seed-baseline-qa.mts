@@ -244,7 +244,8 @@ async function main() {
     QA_SAFETY_ONLY: { safety: true, finance: false, contracts: false, monthly: false },
     QA_NO_ACCESS: { safety: false, finance: false, contracts: false, monthly: false },
   } satisfies Record<Identity, { safety: boolean; finance: boolean; contracts: boolean; monthly: boolean }>;
-  const matrix = await Promise.all(identities.map(async (identity) => {
+  const matrix: Array<{ identity: Identity; safety: boolean; finance: boolean; contracts: boolean; monthly: boolean }> = [];
+  for (const identity of identities) {
     const personId = accounts[identity].personId;
     const [account, roles] = await Promise.all([
       prisma.account.findUniqueOrThrow({ where: { id: accounts[identity].accountId }, select: { status: true } }),
@@ -259,8 +260,8 @@ async function main() {
     if (identity === "QA_CONTRACT_SCOPED") assert.deepEqual(contracts.organizationIds, [entityA.id], "Scoped contract identity must be limited to Entity A");
     assert.deepEqual(actual, expected[identity], `Authorization resolver mismatch for ${identity}`);
     if (identity === "QA_RECEIVABLE") assert.equal(finance.canWriteLedger, false, "QA_RECEIVABLE must remain read-only");
-    return { identity, ...actual };
-  }));
+    matrix.push({ identity, ...actual });
+  }
   console.log(JSON.stringify({ fixture: "BASELINE_QA_READY", testOnly: true, idempotent: true, identities: identities.map((identity) => `${identity} ready`), matrix, qaFinanceRowsAdded: addedFinanceRows, financeDepartment: "BASELINE-TEST-RECEIVABLES", writableReportingPeriods: openPeriods }));
 }
 
