@@ -93,6 +93,7 @@ try {
     assert.deepEqual((await body<{ items: Array<{ id: string }> }>(response)).data.items, [], "项目编号或 ID 不能绕过组织范围");
   }
   assert.equal((await request(`/api/contracts/projects/${created.id}`, tokens.reader)).status, 404, "其他经营实体不得读取项目详情");
+  assert.equal((await request(`/api/contracts/projects/${hiddenBid.id}`, tokens.editor, { method: "PATCH", body: JSON.stringify({ location: "must-not-write" }) })).status, 404, "完全越出授权范围的写请求不得泄露项目存在性");
   assert.equal((await request(`/api/contracts/projects/${hiddenBid.id}/main-contract`, tokens.editorB, { method: "PUT", body: JSON.stringify({ contractNo: `${marker}-HIDDEN-MAIN`, partyA: `${marker}-HIDDEN-CUSTOMER`, amountYuan: "50000.00" }) })).status, 200);
   for (const term of [`${marker}-HIDDEN-MAIN`, `${marker}-HIDDEN-CUSTOMER`]) {
     response = await request(`/api/contracts/projects?q=${encodeURIComponent(term)}`, tokens.editor);
