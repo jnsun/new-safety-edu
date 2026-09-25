@@ -33,6 +33,10 @@ try {
   assert.ok(adminLogin.cookie);
   const adminCookie = adminLogin.cookie!;
 
+  const selfGrant = await request("/api/roles", adminCookie, { method: "POST", body: JSON.stringify({ personId: adminPerson.id, role: "org_admin", scopeType: "organization", scopeId: department.id, reason: "不能向本人授予组织管理角色" }) });
+  assert.equal(selfGrant.status, 409);
+  assert.equal((await selfGrant.json() as { error?: { code?: string } }).error?.code, "ROLE_SELF_GRANT_FORBIDDEN");
+
   const grant = await request("/api/roles", adminCookie, { method: "POST", body: JSON.stringify({ personId: pendingPerson.id, role: "org_admin", scopeType: "organization", scopeId: department.id, reason: "验证待账号激活授权" }) });
   assert.equal(grant.status, 201);
   const role = (await grant.json() as { data: { id: string; active: boolean; activationPending: boolean; accountId: string | null } }).data;

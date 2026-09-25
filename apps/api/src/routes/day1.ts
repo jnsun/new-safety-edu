@@ -805,6 +805,7 @@ export async function registerDay1Routes(app: FastifyInstance, deps: Deps) {
   app.post("/api/roles", manager, async (request, reply) => {
     const principal = principalOf(request);
     const input = roleAssignmentCreateSchema.parse(request.body);
+    if (principal.personId === input.personId) throw Object.assign(new Error("不能给自己授予管理角色"), { statusCode: 409, code: "ROLE_SELF_GRANT_FORBIDDEN" });
     if (input.role === "company_admin") await verifySensitiveToken(request, deps.env);
     const scopeId = input.scopeId ?? null;
     const organization = input.scopeType === "organization" && scopeId ? await prisma.organization.findUniqueOrThrow({ where: { id: scopeId }, select: { type: true } }) : null;
